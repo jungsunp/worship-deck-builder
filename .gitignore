@@ -13,7 +13,7 @@ data/
 *.mp4
 *.mov
 # (allow design assets that are intentionally tracked: see git add -f, or whitelist below)
-!src/npc_deck/render/templates/**/*.png
+!src/worship_deck/render/templates/**/*.png
 
 # ---- Secrets ----
 .env
