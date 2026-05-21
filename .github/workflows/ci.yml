@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+      - name: Install Playwright browser
+        run: python -m playwright install --with-deps chromium
+      - name: Lint
+        run: ruff check src tests
+      - name: Test (skips Mac/Keynote-only)
+        run: pytest -m "not local_only" -q
+
+# NOTE: GitHub runners have no Keynote and no GUI, so AppleScript/Keynote tests
+# (marked `local_only`) cannot run here. Run those on the Mac, or later wire the
+# always-on Mac as a self-hosted runner if CI for the build step is wanted.

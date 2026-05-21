@@ -22,6 +22,9 @@ data/
 *.key.json
 credentials*.json
 
+# ---- Logs ----
+logs/
+
 # ---- Python ----
 __pycache__/
 *.py[cod]
@@ -36,3 +39,7 @@ venv/
 .DS_Store
 .vscode/
 .idea/
+
+# ---- Allow synthetic test fixtures (anonymized only — never real church data) ----
+!tests/fixtures/
+!tests/fixtures/**
