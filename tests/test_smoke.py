@@ -1,5 +1,5 @@
-import npc_deck
+import worship_deck
 
 
 def test_package_imports():
-    assert npc_deck.__version__
+    assert worship_deck.__version__

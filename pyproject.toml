@@ -1,7 +1,7 @@
 [project]
-name = "npc-worship-deck"
+name = "worship-deck-builder"
 version = "0.1.0"
-description = "Automates the weekly Keynote worship deck for Northfield Presbyterian Church"
+description = "Automates the weekly Keynote worship deck for a Sunday worship service"
 requires-python = ">=3.11"
 dependencies = [
     "pdfplumber",      # bulletin PDF parsing
@@ -23,7 +23,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/npc_deck"]
+packages = ["src/worship_deck"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

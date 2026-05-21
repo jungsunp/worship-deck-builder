@@ -21,21 +21,21 @@ LOG_DIR = Path(os.environ.get("LOG_DIR", "logs"))
 
 def configure_logging(level: int = logging.INFO) -> logging.Logger:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    logger = logging.getLogger("npc_deck")
+    logger = logging.getLogger("worship_deck")
     if logger.handlers:
         return logger
     logger.setLevel(level)
     fmt = logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
     console = logging.StreamHandler()
     console.setFormatter(fmt)
-    fileh = RotatingFileHandler(LOG_DIR / "npc_deck.log", maxBytes=1_000_000, backupCount=5)
+    fileh = RotatingFileHandler(LOG_DIR / "worship_deck.log", maxBytes=1_000_000, backupCount=5)
     fileh.setFormatter(fmt)
     logger.addHandler(console)
     logger.addHandler(fileh)
     return logger
 
 
-def notify(message: str, title: str = "NPC Worship Deck") -> None:
+def notify(message: str, title: str = "Worship Deck") -> None:
     """Push a phone notification via ntfy.sh if NTFY_TOPIC is set; otherwise no-op."""
     topic = os.environ.get("NTFY_TOPIC")
     if not topic:

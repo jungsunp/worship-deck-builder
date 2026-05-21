@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 
-app = FastAPI(title="NPC Worship Deck")
+app = FastAPI(title="Worship Deck")
 
 
 @app.get("/health")

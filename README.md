@@ -1,7 +1,7 @@
-# NPC Worship Deck Builder
+# Worship Deck Builder
 
-Automates the weekly update of the Keynote deck used in the Sunday 11am 2부 worship
-service at Northfield Presbyterian Church (노스필드 장로교회).
+Automates the weekly update of the Keynote deck used in a Korean church's Sunday 11am 2부
+worship service.
 
 Each week the deck is rebuilt from a template using:
 - the weekly **bulletin PDF** (worship order, announcements, Bible references, sermon title),
@@ -63,4 +63,4 @@ change weekly and where their content comes from.
 ## Privacy
 
 This handles **church members' data** — offering amounts, names, and private chat messages.
-`data/` is git-ignored and **nothing under it is ever committed**. The GitHub repo is private.
+`data/` is git-ignored and **nothing under it is ever committed** — no real church data (offering amounts, names, or private messages) lives in this repository.
