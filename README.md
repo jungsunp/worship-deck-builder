@@ -1,7 +1,7 @@
 # Worship Deck Builder
 
-Automates the weekly update of the Keynote deck used in a Korean church's Sunday 11am 2부
-worship service.
+Automates the weekly update of the Keynote deck used in a Korean church's Sunday worship
+service. The same deck is shared across all services (e.g. 9am and 11am).
 
 Each week the deck is rebuilt from a template using:
 - the weekly **bulletin PDF** (worship order, announcements, Bible references, sermon title),

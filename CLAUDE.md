@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-Builds a weekly Keynote worship deck for a Korean church's Sunday 2부 service from a bulletin PDF + lyric sheet images. **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. An iPhone reaches the FastAPI web app over Tailscale to review and trigger builds.
+Builds a weekly Keynote worship deck for a Korean church's Sunday worship services from a bulletin PDF + lyric sheet images. The same deck is shared across all services (e.g. 9am and 11am). **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. An iPhone reaches the FastAPI web app over Tailscale to review and trigger builds.
 
 ## Commands
 
