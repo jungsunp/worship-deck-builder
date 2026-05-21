@@ -1,0 +1,76 @@
+# Slide map for the 2부 worship deck.
+#
+# The deck is REGENERATED FRESH from a template each week. Slide numbers below are
+# anchors in last week's reference deck (주일 2부 -2026년5월17일.key, 170 slides) and
+# describe section structure — sections like worship-song lyrics and announcements
+# EXPAND based on how much content there is that week.
+#
+# render: how the slide is produced.
+#   rendered_image  = data + a background template -> PNG -> placed in Keynote
+#   existing_image  = an image slide that already exists; just placed in order
+#   manual          = inserted by a human in the review step
+
+sections:
+  intro_date:
+    slides: [1, 2]
+    changes: service date
+    source: bulletin.date
+    render: rendered_image
+
+  worship_songs:            # 찬양
+    slides: [7, 45]         # range; expands per song
+    structure: "per song: 1 title slide + N lyric slides (<= 2 lines each)"
+    title_source: bulletin.worship_order
+    lyrics_source: band_sheet_images   # shared in Kakao; transcribed by Claude vision
+    render: rendered_image
+
+  call_to_worship:          # 예배의 부름
+    slides:
+      reference: 47
+      verse_text: 48
+    source: bulletin.worship_order   # reference only
+    bible_versions: [개역한글, ESV]    # verse text fetched from Bible source
+    render: rendered_image
+
+  confession_song:          # 고백의 찬양
+    slides: []
+    automate: false
+    note: "does not change weekly; ignore for now"
+
+  choir_song:               # 찬양 (성가대)
+    slides:
+      title: [77, 78]
+      lyrics: [79, 95]
+    title_source: bulletin.worship_order
+    lyrics_source: choir_image
+    render: rendered_image
+
+  offering_hymn:            # 봉헌
+    slides: [97, 106]
+    title_source: bulletin.worship_order
+    note: "always a 찬송가 hymn"
+    lyrics_source: hymn_library   # existing image slides from church desktop -> local storage
+    render: existing_image
+
+  announcements:            # 교회소식
+    slides: [117, 121]      # one announcement item per slide; expands
+    source: bulletin.announcements
+    render: rendered_image
+
+  sermon:                   # 말씀
+    slides:
+      reference: 127
+      verse_text: [129, 132]
+      title: 134
+    source: bulletin.sermon
+    bible_versions: [개역한글, ESV]
+    render: rendered_image
+    special_slides:
+      note: "pastor frequently requests ad-hoc slides (messages/images/videos/lyrics)"
+      render: manual
+
+  ending_date:
+    slides: [167, 168]
+    changes: service date
+    source: bulletin.date
+    render: rendered_image

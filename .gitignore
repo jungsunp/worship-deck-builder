@@ -1,0 +1,38 @@
+# ---- Church data: NEVER commit (offering amounts, member names, private messages) ----
+data/
+*.key
+*.numbers
+*.pages
+
+# Weekly source material that may contain member data
+*.pdf
+*.jpg
+*.jpeg
+*.png
+*.heic
+*.mp4
+*.mov
+# (allow design assets that are intentionally tracked: see git add -f, or whitelist below)
+!src/npc_deck/render/templates/**/*.png
+
+# ---- Secrets ----
+.env
+.env.*
+!.env.example
+*.key.json
+credentials*.json
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ---- macOS / editor ----
+.DS_Store
+.vscode/
+.idea/
