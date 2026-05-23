@@ -32,10 +32,13 @@ All core modules are currently stubs (`raise NotImplementedError`). Implement in
 ## Constraints
 
 - `data/` is git-ignored. **Never commit it** — real bulletins contain member names and offering amounts.
-- `tests/fixtures/` must use synthetic data only. CI runs against these.
+- `tests/fixtures/` contains sanitized real bulletin data (member names/amounts scrubbed). Never commit unsanitized files. Regenerate with `python scripts/make_fixtures.py` (macOS only).
+- `data/real-bulletin.pdf` and `data/real-sheet.png` — drop real files here for local testing. `TEMPLATE_KEY` env var points to the master Keynote template.
 - `templates/master.key` is git-ignored (large, church media). Place locally, never commit.
 - `local_only` marker gates any test needing macOS + Keynote; CI runs on Ubuntu and skips them.
 - Required env vars: `ANTHROPIC_API_KEY` (lyric transcription), `ESV_API_KEY` (api.esv.org, free non-commercial).
+- Generating pdfplumber-readable Korean PDFs requires Playwright (`page.pdf()`); `fpdf2` with TTC fonts produces PDFs with 0 extractable chars.
+- pdfplumber emits `Could not get FontBBox` log noise on Playwright-generated PDFs — suppress with `logging.disable(logging.WARNING)` around `pdfplumber.open()`.
 
 ## Coding guidelines
 
