@@ -7,6 +7,8 @@ The bulletin layout is stable week to week, so text extraction is reliable.
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
 
 
@@ -22,4 +24,16 @@ class ServiceData:
 
 def parse(pdf_path: str) -> ServiceData:
     """Parse a bulletin PDF into ServiceData. (pdfplumber)"""
-    raise NotImplementedError
+    import pdfplumber
+
+    logging.disable(logging.WARNING)
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            text = "".join(p.extract_text() or "" for p in pdf.pages)
+    finally:
+        logging.disable(logging.NOTSET)
+
+    date_match = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
+    date = re.sub(r"\s+", " ", date_match.group()) if date_match else ""
+
+    return ServiceData(date=date)
