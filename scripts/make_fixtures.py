@@ -61,11 +61,10 @@ def _bulletin_html() -> str:
     color: #111;
   }}
   .page {{
-    width: 210mm;
-    min-height: 297mm;
-    padding: 12mm 10mm;
-    page-break-after: always;
+    width: 356mm;
+    padding: 8mm 10mm;
   }}
+  .page-break {{ page-break-after: always; }}
   h1 {{ font-size: 14px; text-align: center; margin-bottom: 6px; }}
   h2 {{ font-size: 12px; margin: 6px 0 3px; border-bottom: 1px solid #555; }}
   h3 {{ font-size: 11px; margin: 4px 0 2px; }}
@@ -213,6 +212,8 @@ def _bulletin_html() -> str:
 </div><!-- .page -->
 
 
+<div class="page-break"></div>
+
 <!-- ════ PAGE 2 ════ -->
 <div class="page">
   <div class="cols">
@@ -357,7 +358,8 @@ def make_bulletin_pdf(out: Path) -> None:
         page = browser.new_page()
         page.set_content(html, wait_until="domcontentloaded")
         pdf_bytes = page.pdf(
-            format="A4",
+            width="14in",
+            height="8.5in",
             margin={"top": "8mm", "bottom": "8mm", "left": "8mm", "right": "8mm"},
             print_background=True,
         )
