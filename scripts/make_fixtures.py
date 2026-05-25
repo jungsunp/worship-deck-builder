@@ -77,6 +77,7 @@ def _bulletin_html() -> str:
   td:first-child {{ white-space: nowrap; }}
   p {{ margin: 2px 0; line-height: 1.4; }}
   .small {{ font-size: 9.5px; color: #444; }}
+  .date-display {{ font-size: 18px; font-weight: bold; margin: 2px 0 6px; }}
   .indent {{ padding-left: 8px; }}
   hr {{ border: none; border-top: 1px solid #aaa; margin: 4px 0; }}
   .box {{ border: 1px solid #aaa; padding: 4px 6px; margin: 4px 0; font-size: 10px; }}
@@ -221,7 +222,6 @@ def _bulletin_html() -> str:
     <!-- Column 1: 예배 및 모임 안내 -->
     <div class="col">
       <h2>예배 및 모임 안내</h2>
-      <p class="small">31권 20호 &nbsp; 2026년 5월 17일</p>
 
       <h3>주일 장년 예배</h3>
       <table>
@@ -304,10 +304,8 @@ def _bulletin_html() -> str:
         <p>미디어사역팀 모집 문의: OOO 집사</p>
         <p>주차안내 봉사자 문의: OOO 집사</p>
       </div>
-    </div>
 
-    <!-- Column 3: 사역 조직표 -->
-    <div class="col">
+      <hr>
       <h2>사역 조직표 / 팀사역 운영단</h2>
       <table class="small">
         <tr><td>예배 1팀</td><td>예배 준비팀 (OOO 권사)</td></tr>
@@ -339,6 +337,12 @@ def _bulletin_html() -> str:
         <tr><td>500</td><td>사도</td><td>사도학교</td></tr>
         <tr><td>600</td><td>중보기도</td><td>중보기도학교 / 구역 관리팀</td></tr>
       </table>
+    </div>
+
+    <!-- Column 3: 날짜 -->
+    <div class="col">
+      <p class="small">31권 20호</p>
+      <p class="date-display">2026년 5월 17일</p>
     </div>
 
   </div><!-- .cols -->
