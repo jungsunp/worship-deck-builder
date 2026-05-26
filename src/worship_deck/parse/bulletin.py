@@ -43,16 +43,18 @@ class ServiceData:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _split_content(content: str) -> tuple[str, str]:
-    """Split a worship order row's right-column text into (song, leader).
+    """Split a worship order row's right-column text into (title, leader).
 
+    'title' is the display title for that element (song title, sermon title,
+    creed name, etc.) — empty when the row has no displayable title.
     Parenthesized Bible refs like (눅 22:14-24) are stripped so they don't
-    contaminate the song title (those refs are surfaced by issue #7).
-    Inline refs at the start ("시 133:1-3 …") mean there is no song.
+    contaminate the title (those refs are surfaced by issue #7).
+    Inline refs at the start ("시 133:1-3 …") mean there is no title.
     """
     # 1. Strip parenthesized Bible refs
     content = re.sub(r"\s+", " ", _PAREN_REF_RE.sub("", content)).strip()
 
-    # 2. Inline ref at start → no song; remainder is leader
+    # 2. Inline ref at start → no title; remainder is leader
     if _INLINE_REF_RE.match(content):
         rest = _INLINE_REF_RE.sub("", content).strip()
         return "", rest
@@ -107,9 +109,31 @@ def _parse_worship_order(page) -> list[dict]:
         if not part_raw or part_raw.startswith("(*"):
             continue  # skip empty rows and the (*표는…) footnote
         part = part_raw.rstrip("*").strip()
-        song, leader = _split_content(content)
-        result.append({"part": part, "song": song, "leader": leader})
+        title, leader = _split_content(content)
+        result.append({"part": part, "title": title, "leader": leader})
     return result
+
+
+def _parse_announcements(page) -> list[str]:
+    """Extract numbered announcement titles from the middle column of page 1.
+
+    Each announcement is an <h3> in the HTML source rendered as "N. Title text".
+    The middle column sits at x0 339–724; the right column (기도제목) starts at
+    x0 ~724 so there is no overlap.  Only lines matching r'^\\d+\\.' are titles.
+    """
+    mid_words = [w for w in page.extract_words() if 339 <= w["x0"] < 724]
+
+    rows: dict[int, list[str]] = {}
+    for w in mid_words:
+        rows.setdefault(round(w["top"]), []).append(w["text"])
+
+    announcements = []
+    for top in sorted(rows):
+        line = " ".join(rows[top])
+        m = re.match(r"^\d+\.\s+(.+)", line)
+        if m:
+            announcements.append(m.group(1).strip())
+    return announcements
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -123,10 +147,11 @@ def parse(pdf_path: str) -> ServiceData:
         with pdfplumber.open(pdf_path) as pdf:
             text = "".join(p.extract_text() or "" for p in pdf.pages)
             worship_order = _parse_worship_order(pdf.pages[0])
+            announcements = _parse_announcements(pdf.pages[0])
     finally:
         logging.disable(logging.NOTSET)
 
     date_match = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
     date = re.sub(r"\s+", " ", date_match.group()) if date_match else ""
 
-    return ServiceData(date=date, worship_order=worship_order)
+    return ServiceData(date=date, worship_order=worship_order, announcements=announcements)
