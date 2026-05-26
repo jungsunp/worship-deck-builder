@@ -53,3 +53,4 @@ Implementation status: `parse` (date extraction done, worship order TODO), `bibl
 - **Minimum code.** No unrequested features, abstractions, or configurability. If 200 lines could be 50, rewrite it.
 - **Surgical edits.** Change only what the request requires. Don't touch adjacent code; note (don't delete) unrelated dead code.
 - **Verify goals.** For multi-step tasks, define a check for each step and confirm it passes before moving on.
+- **Never commit, push, or open PRs without explicit instruction.** After implementing changes, stop and let the user review locally first. Wait for "ship it", "commit", "/ship", or similar before any git operation.

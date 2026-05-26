@@ -10,6 +10,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from worship_deck.bible.esv import fetch_esv
+from worship_deck.bible.kkrv import fetch_korean
+from worship_deck.bible.ref import parse_ref
+
 
 @dataclass
 class Passage:
@@ -20,4 +24,9 @@ class Passage:
 
 def lookup(reference: str) -> Passage:
     """Resolve a Korean-style reference to 개역한글 + ESV text."""
-    raise NotImplementedError
+    ref = parse_ref(reference)
+    return Passage(
+        reference=reference,
+        korean=fetch_korean(ref),
+        english=fetch_esv(ref),
+    )

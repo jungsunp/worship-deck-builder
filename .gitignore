@@ -1,5 +1,7 @@
 # ---- Church data: NEVER commit (offering amounts, member names, private messages) ----
 data/
+!src/worship_deck/bible/data/
+!src/worship_deck/bible/data/**
 *.key
 *.numbers
 *.pages
