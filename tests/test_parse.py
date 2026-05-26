@@ -22,12 +22,24 @@ def test_parse_worship_order_has_all_parts() -> None:
         assert expected in parts
 
 
-def test_parse_worship_order_songs() -> None:
+def test_parse_worship_order_titles() -> None:
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
-    songs = [item["song"] for item in result.worship_order]
-    assert "마라나타" in songs                      # first worship song
-    assert "이를 행하여 나를기념하라" in songs      # sermon title
-    assert "피난처 있으니 (찬 70장)" in songs       # offering hymn
+    titles = [item["title"] for item in result.worship_order]
+    assert "마라나타" in titles                      # first worship song
+    assert "이를 행하여 나를기념하라" in titles      # sermon title
+    assert "피난처 있으니 (찬 70장)" in titles       # offering hymn
+
+
+def test_parse_announcements_count() -> None:
+    result = parse(str(FIXTURES / "sample_bulletin.pdf"))
+    assert len(result.announcements) == 6
+
+
+def test_parse_announcements_titles() -> None:
+    result = parse(str(FIXTURES / "sample_bulletin.pdf"))
+    assert result.announcements[0] == "2026년도 24 나무 소그룹"
+    assert result.announcements[1] == "교육부 오픈하우스 안내"
+    assert result.announcements[5] == "미디어 사역팀 팀원 모집"
 
 
 def test_parse_worship_order_leaders() -> None:
