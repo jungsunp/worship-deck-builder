@@ -21,7 +21,9 @@ sections:
     slides: [7, 45]         # range; expands per song
     structure: "per song: 1 title slide + N lyric slides (<= 2 lines each)"
     title_source: bulletin.worship_order
-    lyrics_source: band_sheet_images   # shared in Kakao; transcribed by Claude vision
+    lyrics_source: band_sheet_images   # shared in Kakao; often a multi-song medley.
+    # Claude vision reads lyrics + red arrangement marks (V/C/B sections, ×N repeats,
+    # X-out skips, → segues between songs); operator confirms order/skips in review.
     render: rendered_image
 
   call_to_worship:          # 예배의 부름
@@ -41,15 +43,17 @@ sections:
     slides:
       title: [77, 78]
       lyrics: [79, 95]
-    title_source: bulletin.worship_order
-    lyrics_source: choir_image
+    title_source: choir_text   # title is the first line of the pasted text
+    lyrics_source: choir_text   # raw text pasted in the review app (title + composer
+    # line + lyric lines with real line breaks); not an image. No vision needed.
     render: rendered_image
 
   offering_hymn:            # 봉헌
     slides: [97, 106]
-    title_source: bulletin.worship_order
+    title_source: bulletin.worship_order   # 찬송가 number / title / verses
     note: "always a 찬송가 hymn"
-    lyrics_source: hymn_library   # existing image slides from church desktop -> local storage
+    lyrics_source: online_download   # download a 찬송가 PPT per song (cwy0675.tistory.com /
+    # godpeople.or.kr), convert slides -> PNG. No local hymn directory.
     render: existing_image
 
   announcements:            # 교회소식

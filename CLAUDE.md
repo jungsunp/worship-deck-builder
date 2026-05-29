@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-Builds a weekly Keynote worship deck for a Korean church's Sunday worship services from a bulletin PDF + lyric sheet images. The same deck is shared across all services (e.g. 9am and 11am). **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. An iPhone reaches the FastAPI web app over Tailscale to review and trigger builds.
+Builds a weekly Keynote worship deck for a Korean church's Sunday worship services. The same deck is shared across all services (e.g. 9am and 11am). **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. An iPhone reaches the FastAPI web app over Tailscale to review and trigger builds.
+
+Per-section content sources (see `config/slide_map.yaml`):
+- **Worship songs (찬양):** band **lead sheet** images shared via Kakao — often a multi-song medley with red arrangement marks (`V/C/B` sections, `×N` repeats, X-out skips, `→` segues). Claude vision reads both lyrics and the arrangement.
+- **Choir (성가대):** lyrics arrive as **raw text** (title + composer line + lyric lines), pasted into the review app — not an image.
+- **Offering hymn (봉헌):** a 찬송가 hymn identified in the **bulletin** by number/title/verses; slides are **downloaded online** as a PowerPoint per song (not stored locally), converted to images, and placed as-is.
 
 ## Commands
 
@@ -24,7 +29,7 @@ uvicorn worship_deck.web.app:app --host 127.0.0.1 --port 8787 --reload
 
 `pipeline.py` orchestrates six steps: bulletin PDF parse → Claude vision lyric transcription → Bible verse lookup → **human review in web app** → Playwright HTML→PNG render → AppleScript Keynote build → `data/drafts/draft-YYYY-MM-DD.key`.
 
-**Key design:** all congregation slides are flattened text-on-background PNGs (not native Keynote text boxes), so one renderer covers every slide type. Hymn slides (`offering_hymn`) are the only exception — pre-existing images placed as-is.
+**Key design:** all congregation slides are flattened text-on-background PNGs (not native Keynote text boxes), so one renderer covers every slide type. Offering-hymn slides (`offering_hymn`) are the only exception — downloaded online as a 찬송가 PowerPoint, converted to images, and placed as-is.
 
 `obs.py` wraps the pipeline with rotating-file logging (`logs/`), a per-run JSONL record (`logs/runs.jsonl`), and optional phone push notifications via ntfy.sh (`NTFY_TOPIC`). All are git-ignored.
 
@@ -39,7 +44,7 @@ Implementation status: `parse` (date extraction done, worship order TODO), `bibl
 - `data/real-bulletin.pdf` and `data/real-sheet.png` — drop real files here for local testing. `TEMPLATE_KEY` env var points to the master Keynote template.
 - `templates/master.key` is git-ignored (large, church media). Place locally, never commit.
 - `local_only` marker gates any test needing macOS + Keynote or live API calls; CI runs on Ubuntu and skips them. Add `if not os.environ.get("KEY"): pytest.skip(...)` inside the test body too — the marker alone doesn't skip when running without `-m "not local_only"`.
-- Required env vars: `ANTHROPIC_API_KEY` (lyric transcription), `ANTHROPIC_MODEL` (default `claude-opus-4-7`), `ESV_API_KEY` (api.esv.org, free non-commercial), `INBOX_DIR` (drop zone for bulletin PDF + sheet images), `TEMPLATE_KEY` (path to master `.key` template), `HYMN_LIBRARY_DIR` (pre-existing hymn slide images). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable).
+- Required env vars: `ANTHROPIC_API_KEY` (lyric transcription), `ANTHROPIC_MODEL` (default `claude-opus-4-7`), `ESV_API_KEY` (api.esv.org, free non-commercial), `INBOX_DIR` (drop zone for bulletin PDF + sheet images), `TEMPLATE_KEY` (path to master `.key` template). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable). 봉헌 hymn slides are fetched online per song — there is no local hymn directory.
 - Generating pdfplumber-readable Korean PDFs requires Playwright (`page.pdf()`); `fpdf2` with TTC fonts produces PDFs with 0 extractable chars.
 - pdfplumber emits `Could not get FontBBox` log noise on Playwright-generated PDFs — suppress with `logging.disable(logging.WARNING)` around `pdfplumber.open()`.
 - Real bulletins are **US Legal landscape** (14"×8.5" = 1008×612 pts). `sample_bulletin.pdf` matches this format; do not change the paper size.
