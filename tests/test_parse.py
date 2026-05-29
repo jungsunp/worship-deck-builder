@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from worship_deck.parse import parse
-from worship_deck.parse.bulletin import _split_content
+from worship_deck.parse.bulletin import _parse_offering_hymn, _split_content
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -31,6 +31,13 @@ def test_parse_worship_order_titles() -> None:
     assert "마라나타" in titles                      # first worship song
     assert "이를 행하여 나를기념하라" in titles      # sermon title
     assert "피난처 있으니 (찬 70장)" in titles       # offering hymn
+
+
+def test_parse_offering_hymn_from_sample_bulletin() -> None:
+    result = parse(str(FIXTURES / "sample_bulletin.pdf"))
+    assert result.offering_hymn_number == "70"
+    assert result.offering_hymn_title == "피난처 있으니"
+    assert result.offering_hymn_verses == []  # not in bulletin → all verses
 
 
 def test_parse_announcements_count() -> None:
@@ -81,6 +88,23 @@ def test_parse_bible_refs_and_sermon_title() -> None:
 )
 def test_split_content_branches(content: str, expected: tuple[str, str, str]) -> None:
     assert _split_content(content) == expected
+
+
+@pytest.mark.parametrize(
+    ("title", "expected"),
+    [
+        # Sample-bulletin shape: title first, number in parens with 장
+        ("피난처 있으니 (찬 70장)", ("70", "피난처 있으니")),
+        # Alternate shape: 찬N. prefix, then title
+        ("찬220. 사랑하는 주님 앞에", ("220", "사랑하는 주님 앞에")),
+        # No hymn number → number blank, title preserved
+        ("주님 곁으로", ("", "주님 곁으로")),
+        # Empty content
+        ("", ("", "")),
+    ],
+)
+def test_parse_offering_hymn_branches(title: str, expected: tuple) -> None:
+    assert _parse_offering_hymn(title) == expected
 
 
 def test_parse_worship_order_leaders() -> None:

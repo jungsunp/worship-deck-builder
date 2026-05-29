@@ -25,6 +25,9 @@ _INLINE_REF_RE = re.compile(r"^(?:" + _BOOK_PAT + r")\s+\d[\d:,\-]*")
 _TITLE_SUFFIXES = {"목사", "전도사", "집사", "장로", "권사", "사모"}
 _LEADER_TOKENS = {"다함께", "성가대"}
 
+# 봉헌 hymn number (찬220, 찬 70장) in the row title
+_HYMN_NUM_RE = re.compile(r"찬\s*(\d+)\s*장?")
+
 # Worship order table x-coordinate boundaries (absolute page pts, 14" × 8.5" bulletin)
 _X_SPLIT = 105   # left of this → part name cell; right → content cell
 _X_RIGHT = 323   # right edge of the left column
@@ -38,6 +41,10 @@ class ServiceData:
     call_to_worship_ref: str = ""
     sermon_title: str = ""
     sermon_ref: str = ""
+    offering_hymn_number: str = ""
+    offering_hymn_title: str = ""
+    # Not in the bulletin; set in the review app. Empty = sing all verses.
+    offering_hymn_verses: list[int] = field(default_factory=list)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -72,6 +79,23 @@ def _split_content(content: str) -> tuple[str, str, str]:
     if len(tokens) >= 2 and tokens[-1] in _TITLE_SUFFIXES:
         return " ".join(tokens[:-2]).strip(), " ".join(tokens[-2:]), ref
     return content, "", ref
+
+
+def _parse_offering_hymn(title: str) -> tuple[str, str]:
+    """Split a 봉헌 row title into (hymn number, hymn title).
+
+    Handles both bulletin shapes:
+      "피난처 있으니 (찬 70장)"     → ("70", "피난처 있으니")
+      "찬220. 사랑하는 주님 앞에"   → ("220", "사랑하는 주님 앞에")
+    The bulletin never carries a verse selection — that is an internal team
+    detail entered (optionally) in the review app; absent it, all verses sing.
+    """
+    num = _HYMN_NUM_RE.search(title)
+    number = num.group(1) if num else ""
+
+    rest = title[: num.start()] + title[num.end() :] if num else title
+    rest = re.sub(r"\s+", " ", re.sub(r"[()]", " ", rest)).strip(" .·,")
+    return number, rest
 
 
 def _parse_worship_order(page) -> list[dict]:
@@ -163,6 +187,7 @@ def parse(pdf_path: str) -> ServiceData:
 
     call = _row("예배의 부름")
     sermon = _row("말 씀")
+    hymn_no, hymn_title = _parse_offering_hymn(_row("봉 헌").get("title", ""))
 
     return ServiceData(
         date=date,
@@ -171,4 +196,6 @@ def parse(pdf_path: str) -> ServiceData:
         call_to_worship_ref=call.get("ref", ""),
         sermon_title=sermon.get("title", ""),
         sermon_ref=sermon.get("ref", ""),
+        offering_hymn_number=hymn_no,
+        offering_hymn_title=hymn_title,
     )
