@@ -42,32 +42,36 @@ class ServiceData:
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _split_content(content: str) -> tuple[str, str]:
-    """Split a worship order row's right-column text into (title, leader).
+def _split_content(content: str) -> tuple[str, str, str]:
+    """Split a worship order row's right-column text into (title, leader, ref).
 
     'title' is the display title for that element (song title, sermon title,
     creed name, etc.) — empty when the row has no displayable title.
-    Parenthesized Bible refs like (눅 22:14-24) are stripped so they don't
-    contaminate the title (those refs are surfaced by issue #7).
-    Inline refs at the start ("시 133:1-3 …") mean there is no title.
+    'ref' is the bare Bible reference (e.g. "눅 22:14-24") found in the row,
+    or "" when there is none.  Parenthesized refs like (눅 22:14-24) and inline
+    refs at the start ("시 133:1-3 …") are both pulled out so they don't
+    contaminate the title.  An inline ref at the start means there is no title.
     """
-    # 1. Strip parenthesized Bible refs
+    # 1. Strip parenthesized Bible refs, capturing the ref text
+    paren = _PAREN_REF_RE.search(content)
+    ref = paren.group().strip("() ") if paren else ""
     content = re.sub(r"\s+", " ", _PAREN_REF_RE.sub("", content)).strip()
 
     # 2. Inline ref at start → no title; remainder is leader
-    if _INLINE_REF_RE.match(content):
+    inline = _INLINE_REF_RE.match(content)
+    if inline:
         rest = _INLINE_REF_RE.sub("", content).strip()
-        return "", rest
+        return "", rest, inline.group()
 
     # 3. Peel off leader from the end
     tokens = content.split()
     if not tokens:
-        return "", ""
+        return "", "", ref
     if tokens[-1] in _LEADER_TOKENS:
-        return " ".join(tokens[:-1]).strip(), tokens[-1]
+        return " ".join(tokens[:-1]).strip(), tokens[-1], ref
     if len(tokens) >= 2 and tokens[-1] in _TITLE_SUFFIXES:
-        return " ".join(tokens[:-2]).strip(), " ".join(tokens[-2:])
-    return content, ""
+        return " ".join(tokens[:-2]).strip(), " ".join(tokens[-2:]), ref
+    return content, "", ref
 
 
 def _parse_worship_order(page) -> list[dict]:
@@ -109,8 +113,8 @@ def _parse_worship_order(page) -> list[dict]:
         if not part_raw or part_raw.startswith("(*"):
             continue  # skip empty rows and the (*표는…) footnote
         part = part_raw.rstrip("*").strip()
-        title, leader = _split_content(content)
-        result.append({"part": part, "title": title, "leader": leader})
+        title, leader, ref = _split_content(content)
+        result.append({"part": part, "title": title, "leader": leader, "ref": ref})
     return result
 
 
@@ -154,4 +158,17 @@ def parse(pdf_path: str) -> ServiceData:
     date_match = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
     date = re.sub(r"\s+", " ", date_match.group()) if date_match else ""
 
-    return ServiceData(date=date, worship_order=worship_order, announcements=announcements)
+    def _row(part: str) -> dict:
+        return next((r for r in worship_order if r["part"] == part), {})
+
+    call = _row("예배의 부름")
+    sermon = _row("말 씀")
+
+    return ServiceData(
+        date=date,
+        worship_order=worship_order,
+        announcements=announcements,
+        call_to_worship_ref=call.get("ref", ""),
+        sermon_title=sermon.get("title", ""),
+        sermon_ref=sermon.get("ref", ""),
+    )
