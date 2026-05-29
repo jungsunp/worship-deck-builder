@@ -4,9 +4,12 @@ Automates the weekly update of the Keynote deck used in a Korean church's Sunday
 service. The same deck is shared across all services (e.g. 9am and 11am).
 
 Each week the deck is rebuilt from a template using:
-- the weekly **bulletin PDF** (worship order, announcements, Bible references, sermon title),
-- **worship-band & choir lyric sheets** (images/PDFs),
-- **hymn (찬송가) lyric slides** already produced by the church,
+- the weekly **bulletin PDF** (worship order, announcements, Bible references, sermon title,
+  and the 봉헌 offering-hymn 찬송가 number/title/verses),
+- **worship-band lead sheets** (images shared via Kakao) — often a multi-song medley with
+  red arrangement marks (section order, ×N repeats, X-out skips, → segues),
+- **성가대 choir lyrics** as raw text (pasted into the review app),
+- **봉헌 (offering) hymn slides** downloaded online as a 찬송가 PowerPoint per song,
 - occasional **last-minute text updates**.
 
 The tool produces a **draft deck for human review** — it never auto-publishes.
@@ -28,14 +31,17 @@ To run while away, the Mac must stay awake (scheduled wake / Tailscale wake-on-L
 ```
 KakaoTalk ──(v1: you save files)──► iCloud inbox ──► [ MAC WORKER ]
                                                          │
-   bulletin.pdf ─► parse/bulletin.py ─► worship order, announcements, refs, title
-   band/choir sheets ─► lyrics/transcribe.py (Claude vision) ─► ordered lyric lines
+   bulletin.pdf ─► parse/bulletin.py ─► worship order, announcements, refs, title,
+                                       봉헌 hymn (찬 number/title/verses)
+   band lead sheets ─► lyrics/transcribe.py (Claude vision) ─► lyric lines + arrangement
+   choir lyrics (raw text) ─► strip title/composer ─► chunk into ≤2-line slides
+   봉헌 hymn ─► download 찬송가 PPT online ─► slides → PNG
    Bible refs ─► bible/verses.py ─► 개역한글 + ESV verse text
                                                          │
                           render/render.py  (data + bg template ─► PNG)
                                                          │
                           keynote/build.py  (AppleScript: fresh deck from template,
-                                             place rendered PNGs + hymn images)
+                                             place rendered PNGs + downloaded hymn slides)
                                                          │
                                             data/drafts/draft-YYYY-MM-DD.key  + PDF preview
                                                          │
@@ -45,7 +51,8 @@ KakaoTalk ──(v1: you save files)──► iCloud inbox ──► [ MAC WORKE
 Key insight: the congregation-facing slides (intro/ending date, Bible verses, worship
 lyrics, announcements) are **flattened text-on-background images**, not native text boxes.
 So one **slide renderer** (data + per-type background template → PNG) covers all of them.
-Hymn slides are the exception — they already exist as images and are just placed in order.
+봉헌 (offering) hymn slides are the exception — they are downloaded online as a 찬송가
+PowerPoint per song, converted to images, and placed as-is.
 
 ## Slide map
 
