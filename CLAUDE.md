@@ -23,6 +23,7 @@ pytest -m "not local_only"   # CI-safe; no Mac/Keynote needed
 pytest -m local_only          # Mac + Keynote required
 set -a && source .env && set +a  # load .env vars before pytest (live tests need API keys)
 uvicorn worship_deck.web.app:app --host 127.0.0.1 --port 8787 --reload
+uvicorn worship_deck.web.app:app --host 0.0.0.0 --port 8787  # LAN/phone access: same Wi-Fi, hit http://<mac-lan-ip>:8787/ (needs macOS firewall "Allow"). Off-network access is via Tailscale (#28).
 ```
 
 ## Architecture
