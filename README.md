@@ -35,13 +35,12 @@ KakaoTalk ──(v1: you save files)──► iCloud inbox ──► [ MAC WORKE
                                        봉헌 hymn (찬 number/title/verses)
    band lead sheets ─► lyrics/transcribe.py (Claude vision) ─► lyric lines + arrangement
    choir lyrics (raw text) ─► strip title/composer ─► chunk into ≤2-line slides
-   봉헌 hymn ─► download 찬송가 PPT online ─► slides → PNG
+   봉헌 hymn ─► download 찬송가 PPT online ─► slides → images
    Bible refs ─► bible/verses.py ─► 개역한글 + ESV verse text
                                                          │
-                          render/render.py  (data + bg template ─► PNG)
-                                                         │
-                          keynote/build.py  (AppleScript: fresh deck from template,
-                                             place rendered PNGs + downloaded hymn slides)
+                          keynote/build.py  (AppleScript: from the template deck,
+                                             duplicate section slides + set native text;
+                                             place hymn images + lead-sheet/media slides)
                                                          │
                                             data/drafts/draft-YYYY-MM-DD.key  + PDF preview
                                                          │
@@ -49,10 +48,11 @@ KakaoTalk ──(v1: you save files)──► iCloud inbox ──► [ MAC WORKE
 ```
 
 Key insight: the congregation-facing slides (intro/ending date, Bible verses, worship
-lyrics, announcements) are **flattened text-on-background images**, not native text boxes.
-So one **slide renderer** (data + per-type background template → PNG) covers all of them.
-봉헌 (offering) hymn slides are the exception — they are downloaded online as a 찬송가
-PowerPoint per song, converted to images, and placed as-is.
+lyrics, announcements) are **native Keynote text boxes**, so the builder edits their text
+in place — setting text runs and duplicating slides as sections expand — rather than
+rendering images. The only image slides are 봉헌 (offering) hymn pages (downloaded online
+as a 찬송가 PowerPoint per song, converted to images), band lead sheets, and media; these
+are placed as-is.
 
 ## Slide map
 

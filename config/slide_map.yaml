@@ -5,9 +5,12 @@
 # describe section structure — sections like worship-song lyrics and announcements
 # EXPAND based on how much content there is that week.
 #
-# render: how the slide is produced.
-#   rendered_image  = data + a background template -> PNG -> placed in Keynote
-#   existing_image  = an image slide that already exists; just placed in order
+# render: how the slide is produced. The church builds slides as NATIVE Keynote text
+# boxes (not flattened images), so the builder edits text in place.
+#   native_text     = set the slide's native text runs; duplicate the slide per item
+#                     for sections that expand (lyrics, announcements)
+#   existing_image  = an image slide placed as-is (downloaded hymn pages, lead sheets,
+#                     media) — the only non-text slides
 #   manual          = inserted by a human in the review step
 
 sections:
@@ -15,7 +18,7 @@ sections:
     slides: [1, 2]
     changes: service date
     source: bulletin.date
-    render: rendered_image
+    render: native_text
 
   worship_songs:            # 찬양
     slides: [7, 45]         # range; expands per song
@@ -24,7 +27,7 @@ sections:
     lyrics_source: band_sheet_images   # shared in Kakao; often a multi-song medley.
     # Claude vision reads lyrics + red arrangement marks (V/C/B sections, ×N repeats,
     # X-out skips, → segues between songs); operator confirms order/skips in review.
-    render: rendered_image
+    render: native_text
 
   call_to_worship:          # 예배의 부름
     slides:
@@ -32,7 +35,7 @@ sections:
       verse_text: 48
     source: bulletin.worship_order   # reference only
     bible_versions: [개역한글, ESV]    # verse text fetched from Bible source
-    render: rendered_image
+    render: native_text
 
   confession_song:          # 고백의 찬양
     slides: []
@@ -46,7 +49,7 @@ sections:
     title_source: choir_text   # title is the first line of the pasted text
     lyrics_source: choir_text   # raw text pasted in the review app (title + composer
     # line + lyric lines with real line breaks); not an image. No vision needed.
-    render: rendered_image
+    render: native_text
 
   offering_hymn:            # 봉헌
     slides: [97, 106]
@@ -59,7 +62,7 @@ sections:
   announcements:            # 교회소식
     slides: [117, 121]      # one announcement item per slide; expands
     source: bulletin.announcements
-    render: rendered_image
+    render: native_text
 
   sermon:                   # 말씀
     slides:
@@ -68,7 +71,7 @@ sections:
       title: 134
     source: bulletin.sermon
     bible_versions: [개역한글, ESV]
-    render: rendered_image
+    render: native_text
     special_slides:
       note: "pastor frequently requests ad-hoc slides (messages/images/videos/lyrics)"
       render: manual
@@ -77,4 +80,6 @@ sections:
     slides: [167, 168]
     changes: service date
     source: bulletin.date
-    render: rendered_image
+    # Static wording differs from intro (예배를 마칩니다 / closing line) but the same
+    # date / sermon-title swap applies. Two slides: 1부 and 2부.
+    render: native_text

@@ -8,15 +8,15 @@ dependencies = [
     "anthropic",       # lyric transcription from sheet images
     "httpx",           # ESV API + general HTTP
     "pyyaml",          # slide_map.yaml
-    "jinja2",          # HTML slide templates
-    "playwright",      # render HTML templates -> PNG
     "fastapi",         # mobile review/trigger web app
     "uvicorn",         # ASGI server
     "python-multipart",# file uploads in the web app
 ]
 
 [project.optional-dependencies]
-dev = ["pytest", "ruff", "Pillow"]
+# playwright + Pillow are only used by scripts/make_fixtures.py to generate the
+# pdfplumber-readable sample-bulletin fixture PDF — not by the runtime pipeline.
+dev = ["pytest", "ruff", "Pillow", "playwright"]
 
 [build-system]
 requires = ["hatchling"]
