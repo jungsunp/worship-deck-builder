@@ -17,8 +17,9 @@ def run(service_date: str, inbox_dir: str) -> str:
       2. lyrics.transcribe    -> ordered lyric lines from band/choir sheet images
       3. bible.verses         -> 개역한글 + ESV text for each reference
       4. (review in web app)  -> human confirms song order & line breaks
-      5. render.render        -> PNG per slide from data + background templates
-      6. keynote.build        -> fresh deck from template, place PNGs + downloaded hymn slides
+      5. keynote.build        -> from the template deck, duplicate section slides to fit
+                                 the week's content and set each slide's native text;
+                                 place downloaded hymn images + lead-sheet/media slides
     """
     logger = obs.configure_logging()
     with obs.run_record(service_date):

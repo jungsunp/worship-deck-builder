@@ -15,7 +15,7 @@ Per-section content sources (see `config/slide_map.yaml`):
 
 ```bash
 pip install -e ".[dev]"
-python -m playwright install chromium  # HTML→PNG rendering
+python -m playwright install chromium  # only for scripts/make_fixtures.py (sample-bulletin PDF)
 cp .env.example .env
 
 ruff check src tests
@@ -27,15 +27,15 @@ uvicorn worship_deck.web.app:app --host 127.0.0.1 --port 8787 --reload
 
 ## Architecture
 
-`pipeline.py` orchestrates six steps: bulletin PDF parse → Claude vision lyric transcription → Bible verse lookup → **human review in web app** → Playwright HTML→PNG render → AppleScript Keynote build → `data/drafts/draft-YYYY-MM-DD.key`.
+`pipeline.py` orchestrates five steps: bulletin PDF parse → Claude vision lyric transcription → Bible verse lookup → **human review in web app** → AppleScript Keynote build (duplicate section slides + set native text) → `data/drafts/draft-YYYY-MM-DD.key`.
 
-**Key design:** all congregation slides are flattened text-on-background PNGs (not native Keynote text boxes), so one renderer covers every slide type. Offering-hymn slides (`offering_hymn`) are the only exception — downloaded online as a 찬송가 PowerPoint, converted to images, and placed as-is.
+**Key design:** the church builds slides as **native Keynote text boxes**, so the builder edits them in place rather than rendering images. Starting from the template deck (`templates/master.key`, a real recent deck), the AppleScript build step sets each slide's text runs and duplicates section slides to fit the week's content (lyrics/announcements expand). The **only image slides** are offering-hymn pages (downloaded online as a 찬송가 PowerPoint, converted to images), band lead sheets, and media (e.g. countdown video) — placed as-is. There is no HTML/PNG rendering step.
 
 `obs.py` wraps the pipeline with rotating-file logging (`logs/`), a per-run JSONL record (`logs/runs.jsonl`), and optional phone push notifications via ntfy.sh (`NTFY_TOPIC`). All are git-ignored.
 
 Section structure, content sources, and render modes are declared in `config/slide_map.yaml`.
 
-Implementation status: `parse` (date extraction done, worship order TODO), `bible` (Korean ref parsing + ESV fetch done, verse assembly TODO), `lyrics`/`render`/`keynote` are stubs. Implement remaining work in order: `parse` → `bible` → `lyrics` → `render` → `keynote`.
+Implementation status: `parse` (date extraction done, worship order TODO), `bible` (Korean ref parsing + ESV fetch done, verse assembly TODO), `lyrics`/`keynote` are stubs. `keynote.build` drives Keynote via AppleScript to duplicate slides and set native text. Implement remaining work in order: `parse` → `bible` → `lyrics` → `keynote`.
 
 ## Constraints
 
@@ -44,7 +44,7 @@ Implementation status: `parse` (date extraction done, worship order TODO), `bibl
 - `data/real-bulletin.pdf` and `data/real-sheet.png` — drop real files here for local testing. `TEMPLATE_KEY` env var points to the master Keynote template.
 - `templates/master.key` is git-ignored (large, church media). Place locally, never commit.
 - `local_only` marker gates any test needing macOS + Keynote or live API calls; CI runs on Ubuntu and skips them. Add `if not os.environ.get("KEY"): pytest.skip(...)` inside the test body too — the marker alone doesn't skip when running without `-m "not local_only"`.
-- Required env vars: `ANTHROPIC_API_KEY` (lyric transcription), `ANTHROPIC_MODEL` (default `claude-opus-4-7`), `ESV_API_KEY` (api.esv.org, free non-commercial), `INBOX_DIR` (drop zone for bulletin PDF + sheet images), `TEMPLATE_KEY` (path to master `.key` template). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable). 봉헌 hymn slides are fetched online per song — there is no local hymn directory.
+- Required env vars: `ANTHROPIC_API_KEY` (lyric transcription), `ANTHROPIC_MODEL` (default `claude-opus-4-8`), `ESV_API_KEY` (api.esv.org, free non-commercial), `INBOX_DIR` (drop zone for bulletin PDF + sheet images), `TEMPLATE_KEY` (path to master `.key` template). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable). 봉헌 hymn slides are fetched online per song — there is no local hymn directory.
 - Generating pdfplumber-readable Korean PDFs requires Playwright (`page.pdf()`); `fpdf2` with TTC fonts produces PDFs with 0 extractable chars.
 - pdfplumber emits `Could not get FontBBox` log noise on Playwright-generated PDFs — suppress with `logging.disable(logging.WARNING)` around `pdfplumber.open()`.
 - Real bulletins are **US Legal landscape** (14"×8.5" = 1008×612 pts). `sample_bulletin.pdf` matches this format; do not change the paper size.
