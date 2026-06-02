@@ -30,6 +30,7 @@ from pathlib import Path
 class Song:
     title: str
     lines: list[str] = field(default_factory=list)  # ordered, de-fragmented lyric lines
+    composer: str = ""  # composer/arranger credit line, shown on the title slide (choir)
 
 
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
