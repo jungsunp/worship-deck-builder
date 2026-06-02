@@ -12,6 +12,27 @@ import subprocess
 from pathlib import Path
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
+_DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
+
+
+def _run_osascript(script: Path, *args: str) -> str:
+    """Run an AppleScript file via osascript, returning its stdout.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the script fails.
+    """
+    try:
+        result = subprocess.run(
+            ["osascript", str(script), *args],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except FileNotFoundError as e:  # `osascript` only exists on macOS
+        raise RuntimeError("`osascript` not found — Keynote automation needs macOS.") from e
+    if result.returncode != 0:
+        raise RuntimeError(f"Keynote script {script.name} failed: {result.stderr.strip()}")
+    return result.stdout
 
 
 def save_draft(template_key: str, out_key: str) -> str:
@@ -27,18 +48,23 @@ def save_draft(template_key: str, out_key: str) -> str:
     template = str(Path(template_key).expanduser())
     out = str(Path(out_key).expanduser())
     Path(out).parent.mkdir(parents=True, exist_ok=True)
-    try:
-        result = subprocess.run(
-            ["osascript", str(_SAVE_DRAFT), template, out],
-            capture_output=True,
-            text=True,
-            timeout=120,
-        )
-    except FileNotFoundError as e:  # `osascript` only exists on macOS
-        raise RuntimeError("`osascript` not found — Keynote automation needs macOS.") from e
-    if result.returncode != 0:
-        raise RuntimeError(f"Keynote save failed: {result.stderr.strip()}")
+    _run_osascript(_SAVE_DRAFT, template, out)
     return out_key
+
+
+def duplicate_slide(key_path: str, slide_index: int, count: int) -> int:
+    """Duplicate the 1-based slide at slide_index `count` times, in place.
+
+    The second Keynote primitive (#21): expands a one-slide section template into the
+    week's lyric/announcement slides (#15/#16 then fill each copy's native text). Copies
+    land contiguously after the source slide. Returns the resulting total slide count.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_DUPLICATE_SLIDE, key, str(slide_index), str(count))
+    return int(out.strip())
 
 
 def build(template_key: str, slides: list[dict], out_key: str) -> str:
