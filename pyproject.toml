@@ -5,8 +5,7 @@ description = "Automates the weekly Keynote worship deck for a Sunday worship se
 requires-python = ">=3.11"
 dependencies = [
     "pdfplumber",      # bulletin PDF parsing
-    "anthropic",       # lyric transcription from sheet images
-    "httpx",           # ESV API + general HTTP
+    "httpx",           # ESV API + local Ollama (lyric reassembly) + general HTTP
     "pyyaml",          # slide_map.yaml
     "fastapi",         # mobile review/trigger web app
     "uvicorn",         # ASGI server
