@@ -168,6 +168,25 @@ def transcribe(image_path: str) -> list[Song]:
     return _reassemble(fragments)
 
 
-def chunk(lines: list[str], max_lines: int = 2) -> list[str]:
-    """Group lyric lines into <= max_lines per slide."""
-    raise NotImplementedError
+def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:
+    """Group lyric lines into slides of at most ``max_lines`` lines.
+
+    A blank/whitespace-only line forces a slide break (stanza boundary) and is not
+    emitted as content. Returns a list of slides, each a list of 1..max_lines
+    non-empty lines; an empty or all-blank input returns ``[]``.
+    """
+    slides: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        if not line.strip():  # stanza break
+            if current:
+                slides.append(current)
+                current = []
+            continue
+        current.append(line)
+        if len(current) == max_lines:
+            slides.append(current)
+            current = []
+    if current:
+        slides.append(current)
+    return slides

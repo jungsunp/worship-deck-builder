@@ -149,6 +149,48 @@ def test_transcribe_pipes_vision_through_filter_and_reassembly(
 
 
 # ---------------------------------------------------------------------------
+# chunk — pure grouping into <= max_lines slides
+# ---------------------------------------------------------------------------
+
+def test_chunk_empty_and_all_blank() -> None:
+    assert T.chunk([]) == []
+    assert T.chunk(["", "   ", "\t"]) == []
+
+
+def test_chunk_single_line() -> None:
+    assert T.chunk(["나는 예배하네"]) == [["나는 예배하네"]]
+
+
+def test_chunk_exactly_max_lines_is_one_slide() -> None:
+    assert T.chunk(["a", "b"]) == [["a", "b"]]
+
+
+def test_chunk_groups_by_count_default_two() -> None:
+    assert T.chunk(["a", "b", "c"]) == [["a", "b"], ["c"]]
+
+
+def test_chunk_blank_line_forces_break() -> None:
+    assert T.chunk(["a", "", "b"]) == [["a"], ["b"]]
+
+
+def test_chunk_stanza_longer_than_max_splits_within_stanza() -> None:
+    # A 3-line stanza still splits by count; the blank only ends the prior stanza.
+    assert T.chunk(["a", "b", "c", "", "d"]) == [["a", "b"], ["c"], ["d"]]
+
+
+def test_chunk_collapses_leading_trailing_and_repeated_blanks() -> None:
+    assert T.chunk(["", "", "a", "b", "", "", "c", "", ""]) == [["a", "b"], ["c"]]
+
+
+def test_chunk_whitespace_only_line_is_a_break() -> None:
+    assert T.chunk(["a", "   ", "b"]) == [["a"], ["b"]]
+
+
+def test_chunk_custom_max_lines() -> None:
+    assert T.chunk(["a", "b", "c", "d"], max_lines=3) == [["a", "b", "c"], ["d"]]
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Vision + Ollama; skipped without the toolchain/sheets
 # ---------------------------------------------------------------------------
 
