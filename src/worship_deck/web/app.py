@@ -7,7 +7,6 @@ a PDF preview of the draft. This is the human-in-the-loop checkpoint.
 
 from __future__ import annotations
 
-import os
 import shutil
 from pathlib import Path
 
@@ -16,10 +15,10 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="Worship Deck")
 
-
-def _inbox_dir() -> Path:
-    """Where uploaded bulletin/sheet files land. Read per-request so tests can override."""
-    return Path(os.environ.get("INBOX_DIR", "")).expanduser()
+# Uploaded bulletin/sheet files land here — a fixed local dir under the git-ignored
+# data/ tree (no env var: files arrive via the upload form, not an iCloud drop-folder).
+# Tests monkeypatch this to a tmp dir.
+INBOX_DIR = Path("data/inbox")
 
 
 _INDEX_HTML = """<!doctype html>
@@ -59,7 +58,7 @@ def index() -> str:
 
 @app.post("/upload", response_class=HTMLResponse)
 def upload(files: list[UploadFile] = File(...)) -> str:
-    dest = _inbox_dir()
+    dest = INBOX_DIR
     dest.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
     for f in files:

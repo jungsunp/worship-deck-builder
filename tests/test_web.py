@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+from worship_deck.web import app as app_module
 from worship_deck.web.app import app
 
 client = TestClient(app)
@@ -24,7 +25,7 @@ def test_index_serves_upload_form() -> None:
 
 
 def test_upload_lands_in_inbox(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("INBOX_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     resp = client.post("/upload", files={"files": ("bulletin.pdf", b"%PDF-data", "application/pdf")})
     assert resp.status_code == 200
     saved = tmp_path / "bulletin.pdf"
@@ -32,7 +33,7 @@ def test_upload_lands_in_inbox(tmp_path, monkeypatch) -> None:
 
 
 def test_upload_multiple_files(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("INBOX_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     resp = client.post(
         "/upload",
         files=[
@@ -46,7 +47,7 @@ def test_upload_multiple_files(tmp_path, monkeypatch) -> None:
 
 
 def test_upload_sanitizes_filename(tmp_path, monkeypatch) -> None:
-    monkeypatch.setenv("INBOX_DIR", str(tmp_path))
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     resp = client.post("/upload", files={"files": ("../evil.pdf", b"x", "application/pdf")})
     assert resp.status_code == 200
     assert (tmp_path / "evil.pdf").read_bytes() == b"x"
