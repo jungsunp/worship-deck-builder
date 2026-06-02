@@ -13,6 +13,7 @@ from pathlib import Path
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
+_SET_DATE_SLIDES = Path(__file__).parent / "applescript" / "set_date_slides.applescript"
 
 
 def _run_osascript(script: Path, *args: str) -> str:
@@ -64,6 +65,23 @@ def duplicate_slide(key_path: str, slide_index: int, count: int) -> int:
     """
     key = str(Path(key_path).expanduser())
     out = _run_osascript(_DUPLICATE_SLIDE, key, str(slide_index), str(count))
+    return int(out.strip())
+
+
+def set_date_slides(key_path: str, date: str, title: str, ref: str) -> int:
+    """Set the weekly date / sermon title / verse ref on the deck's date slides, in place.
+
+    Detects date slides generically (any on-canvas text item bearing 년/월); off-canvas
+    leftover items are ignored. Intro slides get date + title + ref (title and ref are the
+    two paragraphs of one text item); ending slides keep their closing wording and take only
+    the new date. `ref` includes brackets, e.g. "[창 1:1-5]"; `date` is pre-formatted Korean,
+    e.g. "2026년 6월 7일". Returns the number of date slides updated.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_SET_DATE_SLIDES, key, date, title, ref)
     return int(out.strip())
 
 

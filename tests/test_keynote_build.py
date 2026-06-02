@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from worship_deck.keynote import build as B
-from worship_deck.keynote.build import duplicate_slide, save_draft
+from worship_deck.keynote.build import duplicate_slide, save_draft, set_date_slides
 
 # ---------------------------------------------------------------------------
 # save_draft — mocked osascript (CI-safe, no Mac)
@@ -87,8 +87,65 @@ def test_duplicate_slide_passes_args_and_returns_count(
 
 
 # ---------------------------------------------------------------------------
+# set_date_slides — mocked osascript (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_date_slides_passes_args_and_returns_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="4\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    n = set_date_slides("draft.key", "2026년 6월 7일", "테스트 제목", "[테스트 1:1]")
+
+    assert n == 4  # number of date slides updated
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_DATE_SLIDES),
+        "draft.key",
+        "2026년 6월 7일",
+        "테스트 제목",
+        "[테스트 1:1]",
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Keynote; skipped without a Mac + TEMPLATE_KEY
 # ---------------------------------------------------------------------------
+
+
+def _on_canvas_text(key_path: str, slide_index: int) -> str:
+    """Read the concatenated on-canvas text-item contents of one slide (Mac-only helper)."""
+    script = (
+        'on run argv\n'
+        'tell application "Keynote"\n'
+        "  activate\n"
+        "  set d to open (POSIX file (item 1 of argv))\n"
+        "  set s to slide ((item 2 of argv) as integer) of d\n"
+        '  set out to ""\n'
+        "  repeat with t in (text items of s)\n"
+        "    set p to position of t\n"
+        "    if (item 1 of p) is not 0 or (item 2 of p) is not 0 then\n"
+        '      set out to out & ((object text of t) as text) & linefeed\n'
+        "    end if\n"
+        "  end repeat\n"
+        "  close d saving no\n"
+        "  return out\n"
+        "end tell\n"
+        "end run\n"
+    )
+    return subprocess.run(
+        ["osascript", "-e", script, key_path, str(slide_index)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
 
 
 @pytest.mark.local_only
@@ -107,3 +164,24 @@ def test_duplicate_slide_live_adds_exactly_n(real_template_key: Path, tmp_path: 
     c1 = duplicate_slide(str(draft), 1, 3)
     c2 = duplicate_slide(str(draft), 1, 2)
     assert c2 - c1 == 2  # second call added exactly 2 (self-contained, no fixed baseline)
+
+
+@pytest.mark.local_only
+def test_set_date_slides_live_swaps_text_and_keeps_static(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Sets date/title/ref on the 4 date slides; static closing wording stays intact."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    n = set_date_slides(str(draft), "2026년 6월 7일", "테스트 제목", "[테스트 1:1]")
+    assert n == 4  # two intro + two ending date slides
+
+    intro = _on_canvas_text(str(draft), 1)  # intro 1부
+    assert "2026년 6월 7일" in intro
+    assert "테스트 제목" in intro
+    assert "[테스트 1:1]" in intro
+
+    ending = _on_canvas_text(str(draft), 167)  # ending 1부
+    assert "2026년 6월 7일" in ending  # new date swapped in
+    assert "예배를 마칩니다" in ending  # static closing wording preserved
