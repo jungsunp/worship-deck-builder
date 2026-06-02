@@ -403,6 +403,59 @@ def make_sheet_png(out: Path) -> None:
                  "pip install Pillow or place real-sheet.png in data/")
 
 
+# ── Synthetic medley band sheet ──────────────────────────────────────────────
+
+def make_medley_sheet_png(out: Path) -> None:
+    """Draw a synthetic two-song medley sheet bearing the red arrangement marks.
+
+    The real band sheets carry third-party blog watermarks/copyright, so they live in
+    git-ignored data/ and can't be committed. This synthetic stand-in lets CI exercise
+    the transcribe path (mocked) and documents the marks #52 must read: section labels,
+    a ×N repeat, an X-out skip, and a → segue between songs.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFont
+    except ImportError:
+        sys.exit("Pillow not installed. pip install Pillow")
+
+    font_candidates = [
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+        "/Library/Fonts/NanumGothic.ttf",
+    ]
+    font_path = next((p for p in font_candidates if Path(p).exists()), None)
+
+    def fnt(size: int):
+        return ImageFont.truetype(font_path, size) if font_path else ImageFont.load_default()
+
+    img = Image.new("RGB", (800, 600), color="white")
+    d = ImageDraw.Draw(img)
+    red = (210, 30, 30)
+    black = (20, 20, 20)
+
+    # Song 1: title + red arrangement shorthand, with a ×2 repeat and an X-out skip.
+    d.text((40, 24), "주께 드리네", fill=black, font=fnt(28))
+    d.text((40, 70), "V1  C×2  B  → 부르신 곳에서", fill=red, font=fnt(22))
+    d.text((60, 120), "[Verse 1]  나의 모든 것을 주께", fill=black, font=fnt(20))
+    d.text((60, 160), "[Chorus]  주께 드리네 나의 삶을", fill=black, font=fnt(20))
+    d.text((60, 200), "[Bridge]  영원토록 주를 찬양해", fill=black, font=fnt(20))
+    # X-out a dropped 간주 (skip): drawn then struck through in red.
+    skip = "[간주]  (instrumental)"
+    d.text((60, 240), skip, fill=black, font=fnt(20))
+    w = d.textlength(skip, font=fnt(20))
+    d.line((60, 250, 60 + w, 250), fill=red, width=3)
+
+    # Song 2 (after the → segue): its own title + shorthand.
+    d.text((40, 320), "부르신 곳에서", fill=black, font=fnt(28))
+    d.text((40, 366), "C  B×2 (키업E)", fill=red, font=fnt(22))
+    d.text((60, 416), "[Chorus]  나는 예배하네 어떤 상황에도", fill=black, font=fnt(20))
+    d.text((60, 456), "[Bridge]  걸어갈 때 길이 되고", fill=black, font=fnt(20))
+    d.text((60, 520), "(synthetic fixture — see scripts/make_fixtures.py)",
+           fill=(150, 150, 150), font=fnt(14))
+
+    img.save(str(out))
+    print(f"  generated synthetic medley → {out}")
+
+
 # ── Keynote template ─────────────────────────────────────────────────────────
 
 def make_template_key(out: Path) -> None:
@@ -429,6 +482,9 @@ def main() -> None:
 
     print("Generating sample_sheet.png …")
     make_sheet_png(FIXTURES / "sample_sheet.png")
+
+    print("Generating sample_medley_sheet.png …")
+    make_medley_sheet_png(FIXTURES / "sample_medley_sheet.png")
 
     print("Generating sample_template.key (needs Keynote) …")
     make_template_key(FIXTURES / "sample_template.key")
