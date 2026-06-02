@@ -28,9 +28,13 @@ def test_parse_worship_order_has_all_parts() -> None:
 def test_parse_worship_order_titles() -> None:
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
     titles = [item["title"] for item in result.worship_order]
-    assert "마라나타" in titles                      # first worship song
     assert "이를 행하여 나를기념하라" in titles      # sermon title
     assert "피난처 있으니 (찬 70장)" in titles       # offering hymn
+    # The opening 찬양 row's content (마라나타) is the worship BAND NAME, not a song.
+    # The bulletin lists no opening-worship song titles — those come from the band
+    # sheet and are attached to the slot by lyrics.match.assign_worship_songs.
+    opening = next(r for r in result.worship_order if r["part"] == "찬 양")
+    assert opening["title"] == "마라나타"  # band name, surfaced as content — not a worship song
 
 
 def test_parse_offering_hymn_from_sample_bulletin() -> None:
