@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from worship_deck.keynote import build as B
-from worship_deck.keynote.build import save_draft
+from worship_deck.keynote.build import duplicate_slide, save_draft
 
 # ---------------------------------------------------------------------------
 # save_draft — mocked osascript (CI-safe, no Mac)
@@ -16,9 +16,10 @@ from worship_deck.keynote.build import save_draft
 
 
 class _FakeCompleted:
-    def __init__(self, returncode: int = 0, stderr: str = "") -> None:
+    def __init__(self, returncode: int = 0, stderr: str = "", stdout: str = "") -> None:
         self.returncode = returncode
         self.stderr = stderr
+        self.stdout = stdout
 
 
 def test_save_draft_invokes_osascript_and_makes_drafts_dir(
@@ -48,7 +49,7 @@ def test_save_draft_raises_on_nonzero_returncode(
     monkeypatch.setattr(
         subprocess, "run", lambda *a, **kw: _FakeCompleted(returncode=1, stderr="boom")
     )
-    with pytest.raises(RuntimeError, match="Keynote save failed: boom"):
+    with pytest.raises(RuntimeError, match="save_draft.applescript failed: boom"):
         save_draft("template.key", str(tmp_path / "draft.key"))
 
 
@@ -64,6 +65,28 @@ def test_save_draft_raises_when_osascript_missing(
 
 
 # ---------------------------------------------------------------------------
+# duplicate_slide — mocked osascript (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_slide_passes_args_and_returns_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="42\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    n = duplicate_slide("draft.key", 1, 3)
+
+    assert n == 42  # osascript stdout parsed to int
+    assert captured["cmd"] == ["osascript", str(B._DUPLICATE_SLIDE), "draft.key", "1", "3"]
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Keynote; skipped without a Mac + TEMPLATE_KEY
 # ---------------------------------------------------------------------------
 
@@ -74,3 +97,13 @@ def test_save_draft_live_produces_file(real_template_key: Path, tmp_path: Path) 
     out = tmp_path / "draft-2026-06-02.key"
     save_draft(str(real_template_key), str(out))
     assert out.exists()  # .key is a package; exists() covers file or bundle
+
+
+@pytest.mark.local_only
+def test_duplicate_slide_live_adds_exactly_n(real_template_key: Path, tmp_path: Path) -> None:
+    """Each duplicate_slide call must grow the deck by exactly N slides."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+    c1 = duplicate_slide(str(draft), 1, 3)
+    c2 = duplicate_slide(str(draft), 1, 2)
+    assert c2 - c1 == 2  # second call added exactly 2 (self-contained, no fixed baseline)
