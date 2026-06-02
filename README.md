@@ -22,9 +22,8 @@ Native Keynote can only be driven on a Mac that is **powered on and logged in** 
 automation needs the macOS window server). So:
 
 - **The Mac is the worker** — it runs Keynote and builds the deck.
-- **Your iPhone is the remote** — files arrive via an **iCloud drop-folder**, and a small
-  **mobile web app** (reached privately over Tailscale) lets you review/reorder songs and
-  tap *Generate*.
+- **Your iPhone is the remote** — a small **mobile web app** (reached privately over
+  Tailscale) lets you **upload the week's files**, review/reorder songs, and tap *Generate*.
 
 To run while away, the Mac must stay awake (scheduled wake / Tailscale wake-on-LAN).
 
@@ -32,7 +31,8 @@ To run while away, the Mac must stay awake (scheduled wake / Tailscale wake-on-L
 
 ```mermaid
 flowchart TD
-    kakao["KakaoTalk / iPhone"] -->|you save files| inbox[("iCloud inbox")]
+    phone["📱 iPhone"] -->|"download files (Kakao/web) + upload"| web["web/app.py"]
+    web -->|save uploads| inbox[("data/inbox")]
 
     subgraph mac ["MAC WORKER"]
         direction TB
@@ -61,8 +61,8 @@ flowchart TD
     inbox --> bulletin
     inbox --> sheets
     inbox --> hymn
-    draft --> web["web/app.py"]
-    web <-->|"review / reorder / Generate / preview"| phone["📱 iPhone"]
+    draft --> web
+    web -->|"review / reorder / Generate / preview"| phone
 ```
 
 Key insight: the congregation-facing slides (intro/ending date, Bible verses, worship
@@ -107,7 +107,6 @@ Fill in `.env` (git-ignored):
 | Variable | What to set |
 |----------|-------------|
 | `ESV_API_KEY` | Free non-commercial key from [api.esv.org](https://api.esv.org/) — English verse text. |
-| `INBOX_DIR` | Drop folder for the weekly bulletin PDF + sheet images (default: an iCloud Drive path). |
 | `TEMPLATE_KEY` | Path to the master Keynote template deck (`templates/master.key`; git-ignored, place locally). |
 | `OLLAMA_MODEL` / `OLLAMA_HOST` | Lyric-reassembly model + Ollama address. Defaults (`qwen3.5:27b`, `http://127.0.0.1:11434`) work out of the box. |
 | `WEB_HOST` / `WEB_PORT` | Mobile review/trigger web app bind address (defaults `127.0.0.1:8787`). |
