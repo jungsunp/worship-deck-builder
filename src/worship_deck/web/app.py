@@ -10,10 +10,21 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from fastapi import FastAPI, File, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
+from worship_deck import obs, parse, store
+from worship_deck.bible import verses
+from worship_deck.lyrics import match
+from worship_deck.lyrics import transcribe as lyrics_transcribe
+
 app = FastAPI(title="Worship Deck")
+
+_IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
+
+# Per-run assemble status, keyed by ISO service date. In-memory is enough: a single-process
+# uvicorn on the Mac drives the whole run (status is lost on restart, which is acceptable).
+_STATUS: dict[str, dict] = {}
 
 # Uploaded bulletin/sheet files land here — a fixed local dir under the git-ignored
 # data/ tree (no env var: files arrive via the upload form, not an iCloud drop-folder).
@@ -33,6 +44,8 @@ _INDEX_HTML = """<!doctype html>
   input[type=file] { display: block; width: 100%; margin: 1rem 0; font-size: 1rem; }
   button { width: 100%; padding: 1rem; font-size: 1.1rem; border: 0;
            border-radius: 8px; background: #2563eb; color: #fff; }
+  #assemble { background: #16a34a; margin-top: 0.5rem; }
+  #status { margin-top: 1rem; font-size: 1rem; white-space: pre-wrap; }
 </style>
 </head>
 <body>
@@ -41,6 +54,26 @@ _INDEX_HTML = """<!doctype html>
   <input type="file" name="files" multiple>
   <button type="submit">Upload to inbox</button>
 </form>
+<button id="assemble" type="button" onclick="assemble()">Assemble inbox</button>
+<div id="status"></div>
+<script>
+let _timer;
+async function assemble() {
+  document.getElementById('status').textContent = 'Starting…';
+  const r = await fetch('/assemble', {method: 'POST'});
+  const body = await r.json();
+  if (!r.ok) { document.getElementById('status').textContent = 'Error: ' + (body.detail || r.status); return; }
+  poll(body.status_url, body.service_date);
+}
+function poll(url, date) {
+  clearInterval(_timer);
+  _timer = setInterval(async () => {
+    const s = await (await fetch(url)).json();
+    document.getElementById('status').textContent = date + ': ' + s.status + (s.step ? ' (' + s.step + ')' : '') + (s.error ? '\\n' + s.error : '');
+    if (s.status === 'done' || s.status === 'error') clearInterval(_timer);
+  }, 2000);
+}
+</script>
 </body>
 </html>
 """
@@ -75,6 +108,76 @@ def upload(files: list[UploadFile] = File(...)) -> str:
         f"<h1>Saved {len(saved)} file(s)</h1><ul>{items}</ul>"
         "<a href='/'>← Upload more</a>"
     )
+
+
+def _bulletin_path() -> Path | None:
+    """First PDF in the inbox (the weekly bulletin), or None if none uploaded."""
+    pdfs = sorted(p for p in INBOX_DIR.glob("*.pdf") if p.is_file())
+    return pdfs[0] if pdfs else None
+
+
+def _sheet_paths() -> list[Path]:
+    """Band lead-sheet images in the inbox, in filename order (medley page order)."""
+    return sorted(p for p in INBOX_DIR.iterdir() if p.suffix.lower() in _IMAGE_SUFFIXES)
+
+
+def _assemble_async(service_date: str) -> None:
+    """Run the long read-only steps (transcribe + verses) and update the run + status.
+
+    FastAPI runs this in a threadpool after the response is sent. Failures are caught
+    and recorded in `_STATUS` so the page reports them instead of the worker crashing.
+    """
+    logger = obs.configure_logging()
+    try:
+        data = store.load(service_date)
+
+        _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
+        songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
+        match.assign_worship_songs(data.worship_order, songs)
+
+        _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
+        for row in data.worship_order:
+            if row.get("ref"):
+                row["passage"] = verses.lookup(row["ref"])
+
+        store.save(service_date, data)
+        _STATUS[service_date] = {"status": "done", "step": None, "error": None}
+        logger.info("Assembled run for %s (%d song(s))", service_date, len(songs))
+    except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
+        logger.exception("Assemble failed for %s", service_date)
+        _STATUS[service_date] = {"status": "error", "step": None, "error": repr(e)}
+
+
+@app.post("/assemble")
+def assemble(background_tasks: BackgroundTasks) -> dict:
+    """Parse the inbox bulletin (fast, sync) then kick off transcribe + verses async.
+
+    Parsing runs in-request so a missing bulletin / undetectable date fails immediately
+    and we can return the detected service date as the poll key.
+    """
+    pdf = _bulletin_path()
+    if pdf is None:
+        raise HTTPException(status_code=400, detail="no bulletin (PDF) in inbox")
+
+    data = parse.parse(str(pdf))
+    try:
+        service_date = parse.to_iso_date(data.date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="could not detect service date in bulletin")
+
+    store.save(service_date, data)
+    _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
+    background_tasks.add_task(_assemble_async, service_date)
+    return {"service_date": service_date, "status_url": f"/assemble/{service_date}/status"}
+
+
+@app.get("/assemble/{service_date}/status")
+def assemble_status(service_date: str) -> dict:
+    try:
+        store.path_for(service_date)  # validate the date shape
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    return _STATUS.get(service_date, {"status": "unknown"})
 
 
 # TODO: routes for detected-content review, reorder, generate, preview.

@@ -166,6 +166,19 @@ def _parse_announcements(page) -> list[str]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def to_iso_date(date: str) -> str:
+    """Convert a Korean bulletin date ("2026년 5월 31일") to ISO ("2026-05-31").
+
+    Raises ValueError if no Korean date is found — used to key the per-run store, so a
+    bulletin with no detectable date must fail loudly rather than write a junk filename.
+    """
+    m = re.search(r"(\d{4})년\s*(\d{1,2})월\s*(\d{1,2})일", date)
+    if not m:
+        raise ValueError(f"no Korean date in {date!r}")
+    y, mo, d = m.groups()
+    return f"{y}-{int(mo):02d}-{int(d):02d}"
+
+
 def parse(pdf_path: str) -> ServiceData:
     """Parse a bulletin PDF into ServiceData. (pdfplumber)"""
     import pdfplumber
