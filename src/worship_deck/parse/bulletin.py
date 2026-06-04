@@ -45,6 +45,9 @@ class ServiceData:
     offering_hymn_title: str = ""
     # Not in the bulletin; set in the review app. Empty = sing all verses.
     offering_hymn_verses: list[int] = field(default_factory=list)
+    # Ordered PNG paths for every hymn slide (hymn.fetch_hymn_slides); the
+    # operator drops unwanted verse slides in the review app (#25).
+    offering_hymn_images: list[str] = field(default_factory=list)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

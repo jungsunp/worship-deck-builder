@@ -55,8 +55,9 @@ sections:
     slides: [97, 106]
     title_source: bulletin.worship_order   # 찬송가 number / title / verses
     note: "always a 찬송가 hymn"
-    lyrics_source: online_download   # download a 찬송가 PPT per song (cwy0675.tistory.com /
-    # godpeople.or.kr), convert slides -> PNG. No local hymn directory.
+    lyrics_source: online_download   # download a 찬송가 PPT per song from bibletoppt.com
+    # (token API, design "no-bg"; see hymn.py), convert ALL slides -> PNG. No local hymn
+    # directory. Slides are flat images, so verses are dropped by the operator in review (#25).
     render: existing_image
 
   announcements:            # 교회소식
