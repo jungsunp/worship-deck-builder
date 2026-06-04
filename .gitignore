@@ -42,6 +42,10 @@ venv/
 .vscode/
 .idea/
 
+# ---- Claude Code: ignore local/runtime state, keep shared skills tracked ----
+.claude/scheduled_tasks.lock
+.claude/settings.local.json
+
 # ---- Allow synthetic test fixtures (anonymized only — never real church data) ----
 !tests/fixtures/
 !tests/fixtures/**
