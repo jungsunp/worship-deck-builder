@@ -36,6 +36,8 @@ uvicorn worship_deck.web.app:app --host 0.0.0.0 --port 8787  # LAN/phone access:
 
 Section structure, content sources, and render modes are declared in `config/slide_map.yaml`.
 
+The web app (`web/app.py`) is intentionally template-free: pages are inline HTML strings; dynamic content uses small JSON endpoints + `fetch`-based JS (e.g. assemble polling, inbox list). Match this — don't add Jinja2.
+
 Implementation status: `parse` (date extraction done, worship order TODO), `bible` (Korean ref parsing + ESV fetch done, verse assembly TODO), `lyrics` (transcription done — Vision+Ollama hybrid; `chunk()` into ≤2-line slides TODO, #18), `keynote` is a stub. `keynote.build` drives Keynote via AppleScript to duplicate slides and set native text. Implement remaining work in order: `parse` → `bible` → `lyrics` → `keynote`.
 
 ## Constraints
@@ -44,15 +46,25 @@ Implementation status: `parse` (date extraction done, worship order TODO), `bibl
 - `tests/fixtures/` contains sanitized real bulletin data (member names/amounts scrubbed). Never commit unsanitized files. Regenerate with `python scripts/make_fixtures.py` (macOS only).
 - `data/real-bulletin.pdf` and `data/real-sheet.png` — drop real files here for local testing. `TEMPLATE_KEY` env var points to the master Keynote template.
 - `templates/master.key` is git-ignored (large, church media). Place locally, never commit.
-- `local_only` marker gates any test needing macOS + Keynote or live API calls; CI runs on Ubuntu and skips them. Add `if not os.environ.get("KEY"): pytest.skip(...)` inside the test body too — the marker alone doesn't skip when running without `-m "not local_only"`.
+- `local_only` marker gates any test needing macOS + Keynote or live API calls; CI runs on Ubuntu and skips them. Add `if not os.environ.get("KEY"): pytest.skip(...)` inside the test body too — the marker alone doesn't skip when running without `-m "not local_only"`. Live Keynote `local_only` tests are slow (~60–90s, real app open/save) — run them in the background.
+- **Keynote AppleScript gotchas** (drive Keynote via `osascript <file.applescript>`, mirroring `lyrics/transcribe.py`):
+  - `number & " "` builds a *list* (`"1837, 533"`), not text — coerce each: `((x as integer) as text)`.
+  - `item 2 of (position of t)` builds an object specifier and errors (-1700/-1728); do `set p to position of t` first, then `item 2 of p`.
+  - A loop var captured as `a reference to t` won't resolve later — store stable `text item i of s` specifiers instead.
+  - Stale open docs cause -1712 timeouts / -1700 errors; run `osascript -e 'tell application "Keynote" to close every document saving no'` before probing.
+  - Setting whole `object text` preserves the box's base font and turns `\n` into paragraphs.
+  - Keynote exposes **no** autoshrink flag, effective (shrunk) font size, or content height via AppleScript — only fixed box `width`/`height`. Size text headlessly via geometry estimates.
+  - Verify slide appearance by exporting to PNG and reading the image: `export d to (POSIX file folder) as slide images with properties {image format:PNG}` (dest folder must pre-exist; export-*after*-delete fails — delete+save alone is fine).
 - Lyric transcription is a **free local hybrid** (no API key): Apple Vision OCR via `swift src/worship_deck/lyrics/ocr_ko.swift <img>` (needs Xcode Command Line Tools; groups observations by baseline into whole lines) → a local Ollama model reassembles syllables into lyric lines. Set up: `brew install ollama && ollama serve && ollama pull qwen3.5:27b`. Env: `OLLAMA_MODEL` (default `qwen3.5:27b`), `OLLAMA_HOST` (default `http://127.0.0.1:11434`). Model bake-off on real sheets: `qwen3.5:27b` won (best recall/cleanest); `exaone3.5:7.8b` is a strong lighter pick; `qwen2.5vl:7b` was worst (truncates dense sheets). Reassembly is model-agnostic and sends `think: false` (qwen3.5 is a thinking model; output falls back to the `thinking` field). Feeding the image directly to the Ollama *vision* model crashed its runner on a real sheet — running reassembly as a **text** task on the Vision OCR output is why it's reliable.
 - Required env vars: `ESV_API_KEY` (api.esv.org, free non-commercial), `TEMPLATE_KEY` (path to master `.key` template). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable). Uploaded bulletin/sheet files land in a fixed `data/inbox/` (git-ignored; `worship_deck.web.app.INBOX_DIR`) — no env var, since files arrive via the upload form rather than an iCloud drop-folder. 봉헌 hymn slides are fetched online per song — there is no local hymn directory.
+- `source .env` fails (unquoted space in `INBOX_DIR`); load a single var with `export $(grep '^ESV_API_KEY=' .env | xargs)`.
 - Generating pdfplumber-readable Korean PDFs requires Playwright (`page.pdf()`); `fpdf2` with TTC fonts produces PDFs with 0 extractable chars.
 - pdfplumber emits `Could not get FontBBox` log noise on Playwright-generated PDFs — suppress with `logging.disable(logging.WARNING)` around `pdfplumber.open()`.
 - Real bulletins are **US Legal landscape** (14"×8.5" = 1008×612 pts). `sample_bulletin.pdf` matches this format; do not change the paper size.
 - pdfplumber flattens multi-column PDFs: all text at the same Y level is merged into one extracted line (worship order rows appear alongside announcement text on the same line).
 - Playwright landscape PDFs: `page-break-after: always` on a `.page` div at an exact page boundary inserts a blank trailing page — use a separate `.page-break` div between pages instead.
 - Mock `httpx.get` in tests with `monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse())` and a minimal `_FakeResponse` class (see `tests/test_esv.py`). No `respx` or `pytest-httpx` needed.
+- `ruff check src tests` lints the whole tree — with concurrent sessions it may fail on another session's uncommitted files. Lint only your changed paths (`ruff check <file>...`) to check your own work.
 
 ## Coding guidelines
 

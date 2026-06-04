@@ -46,6 +46,14 @@ _INDEX_HTML = """<!doctype html>
            border-radius: 8px; background: #2563eb; color: #fff; }
   #assemble { background: #16a34a; margin-top: 0.5rem; }
   #status { margin-top: 1rem; font-size: 1rem; white-space: pre-wrap; }
+  h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  #inbox { list-style: none; padding: 0; margin: 0; }
+  #inbox li { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0;
+              border-bottom: 1px solid #eee; font-size: 1rem; }
+  #inbox .name { flex: 1; word-break: break-all; }
+  #inbox .size { color: #888; font-size: 0.85rem; }
+  #inbox .del { width: auto; flex: none; padding: 0.4rem 0.7rem; font-size: 1rem;
+                background: #dc2626; }
 </style>
 </head>
 <body>
@@ -54,10 +62,31 @@ _INDEX_HTML = """<!doctype html>
   <input type="file" name="files" multiple>
   <button type="submit">Upload to inbox</button>
 </form>
+<h2>Inbox</h2>
+<ul id="inbox"></ul>
 <button id="assemble" type="button" onclick="assemble()">Assemble inbox</button>
 <div id="status"></div>
 <script>
 let _timer;
+async function loadInbox() {
+  const {files} = await (await fetch('/inbox')).json();
+  const ul = document.getElementById('inbox');
+  ul.innerHTML = files.length ? '' : '<li>(empty)</li>';
+  for (const f of files) {
+    const li = document.createElement('li');
+    const name = document.createElement('span'); name.className = 'name'; name.textContent = f.name;
+    const size = document.createElement('span'); size.className = 'size'; size.textContent = (f.size / 1024).toFixed(1) + ' KB';
+    const btn = document.createElement('button'); btn.className = 'del'; btn.textContent = '✕';
+    btn.onclick = () => del(f.name);
+    li.append(name, size, btn);
+    ul.appendChild(li);
+  }
+}
+async function del(name) {
+  await fetch('/inbox/' + encodeURIComponent(name), {method: 'DELETE'});
+  loadInbox();
+}
+loadInbox();
 async function assemble() {
   document.getElementById('status').textContent = 'Starting…';
   const r = await fetch('/assemble', {method: 'POST'});
@@ -108,6 +137,27 @@ def upload(files: list[UploadFile] = File(...)) -> str:
         f"<h1>Saved {len(saved)} file(s)</h1><ul>{items}</ul>"
         "<a href='/'>← Upload more</a>"
     )
+
+
+@app.get("/inbox")
+def inbox() -> dict:
+    """Current inbox contents (filename + size), so the operator can confirm/correct uploads."""
+    if not INBOX_DIR.exists():
+        return {"files": []}
+    files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file())
+    return {"files": [{"name": p.name, "size": p.stat().st_size} for p in files]}
+
+
+@app.delete("/inbox/{name}")
+def delete_inbox_file(name: str) -> dict:
+    """Remove one uploaded file, path-safe (same guard as /upload: name must have no path parts)."""
+    if Path(name).name != name:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    target = INBOX_DIR / name
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    target.unlink()
+    return {"deleted": name}
 
 
 def _bulletin_path() -> Path | None:
