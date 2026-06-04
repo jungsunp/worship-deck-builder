@@ -93,6 +93,8 @@ change weekly and where their content comes from.
   ollama pull qwen3.5:27b      # 17 GB; best quality. Lighter: exaone3.5:7.8b (4.8 GB)
   ```
 
+- **LibreOffice + poppler**, for converting the downloaded 봉헌 hymn PowerPoint to slide
+  PNGs (`brew install --cask libreoffice && brew install poppler`).
 - **Tailscale** for reaching the mobile web app from your phone while away.
 
 **Install and configure:**
