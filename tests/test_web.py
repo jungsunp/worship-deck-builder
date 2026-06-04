@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from worship_deck import store
-from worship_deck.bible.verses import Passage
+from worship_deck.bible.verses import Verse
 from worship_deck.lyrics.transcribe import Song
 from worship_deck.parse import ServiceData
 from worship_deck.web import app as app_module
@@ -140,8 +140,8 @@ def _assemble_env(tmp_path, monkeypatch):
     (tmp_path / "sheet.png").write_bytes(b"png")
     monkeypatch.setattr(app_module.parse, "parse", lambda _p: _fake_data())
     monkeypatch.setattr(
-        app_module.verses, "lookup",
-        lambda ref: Passage(reference=ref, korean="한글", english="english"),
+        app_module.verses, "lookup_verses",
+        lambda ref: [Verse(number=1, korean="한글", english="english")],
     )
 
 
@@ -161,9 +161,9 @@ def test_assemble_populates_run(_assemble_env, monkeypatch) -> None:
     data = store.load(date)
     opening, ref_row = data.worship_order
     assert opening["songs"] == [{"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""}]
-    assert ref_row["passage"] == {
-        "reference": "시 133:1-3", "korean": "한글", "english": "english",
-    }
+    assert ref_row["passage"] == [
+        {"number": 1, "korean": "한글", "english": "english"},
+    ]
 
 
 def test_assemble_no_bulletin_is_400(tmp_path, monkeypatch) -> None:
@@ -203,9 +203,9 @@ def _fake_run() -> ServiceData:
                 {"title": "마라나타", "lines": ["a", "b"], "composer": ""},
             ]},
             {"part": "찬양", "title": "나의 영원하신 기업", "leader": "성가대", "ref": ""},
-            {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3", "passage": {
-                "reference": "시 133:1-3", "korean": "한글", "english": "english",
-            }},
+            {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3", "passage": [
+                {"number": 1, "korean": "한글", "english": "english"},
+            ]},
         ],
         offering_hymn_number="220",
         offering_hymn_title="피난처 있으니",
