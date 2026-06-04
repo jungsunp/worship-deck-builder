@@ -50,11 +50,32 @@ SAMPLE_VERSES = [
 ]
 
 
+def _keynote_doc_count() -> int | None:
+    """Number of open Keynote documents, or None if the query failed."""
+    r = subprocess.run(
+        ["osascript", "-e", 'tell application "Keynote" to count documents'],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        return None
+    try:
+        return int(r.stdout.strip())
+    except ValueError:
+        return None
+
+
 def ensure_keynote_ready(settle: int = 8, tries: int = 20) -> None:
-    """Launch Keynote, wait for it to answer scripting, and close any stale docs.
+    """Launch Keynote, wait for scripting, and confirm it has ZERO open documents.
+
+    Documents left open by a prior aborted run *stack up* and wedge Keynote — the next open/save
+    then hangs until the timeout (this is what caused a long retry spiral). So we don't just fire
+    a close-all and hope: we close, then poll the document count to 0, retrying, and bail loudly
+    if it won't clear.
 
     NEVER force-quit Keynote to "reset" it — that leaves the scripting bridge in a -609
-    ("connection is invalid") state. A clean launch + settle is the reliable reset.
+    ("connection is invalid") state. A clean launch + settle, then this doc-clearing, is the
+    reliable reset; if it can't clear, relaunch Keynote by hand.
     """
     subprocess.run(["open", "-a", "Keynote"], check=False)
     time.sleep(settle)
@@ -68,10 +89,19 @@ def ensure_keynote_ready(settle: int = 8, tries: int = 20) -> None:
         time.sleep(1)
     else:
         sys.exit("Keynote did not become responsive — launch it manually, then retry.")
-    # Stale open docs cause -1712 timeouts / -1700 errors on the next open/save.
-    subprocess.run(
-        ["osascript", "-e", 'tell application "Keynote" to close every document saving no'],
-        check=False,
+    # Close stale docs and CONFIRM none remain; a single leftover open doc wedges the next save.
+    for _ in range(tries):
+        subprocess.run(
+            ["osascript", "-e", 'tell application "Keynote" to close every document saving no'],
+            check=False,
+        )
+        if _keynote_doc_count() == 0:
+            return
+        time.sleep(1)
+    sys.exit(
+        "Keynote still has documents open after repeated close attempts — it is likely wedged "
+        "(a stuck save or a modal dialog). Quit Keynote manually (do not force-quit while a save "
+        "is running), relaunch, and retry."
     )
 
 
