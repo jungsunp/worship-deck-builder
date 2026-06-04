@@ -207,9 +207,9 @@ function render() {
       sd.appendChild(ta);
       div.appendChild(sd);
     });
-    if (row.passage) {
+    if (row.passage && row.passage.length) {
       const p = document.createElement('div'); p.className = 'passage';
-      p.textContent = row.passage.reference + '\\n' + row.passage.korean + '\\n' + row.passage.english;
+      p.textContent = row.passage.map(v => v.number + '. ' + v.korean + ' / ' + v.english).join('\\n');
       div.appendChild(p);
     }
     order.appendChild(div);
@@ -347,7 +347,7 @@ def _assemble_async(service_date: str) -> None:
         _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
         for row in data.worship_order:
             if row.get("ref"):
-                row["passage"] = verses.lookup(row["ref"])
+                row["passage"] = verses.lookup_verses(row["ref"])
 
         store.save(service_date, data)
         _STATUS[service_date] = {"status": "done", "step": None, "error": None}
