@@ -13,6 +13,7 @@ import subprocess
 from pathlib import Path
 
 from worship_deck.bible.verses import Verse
+from worship_deck.lyrics.transcribe import Song, chunk
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
@@ -20,6 +21,7 @@ _SET_DATE_SLIDES = Path(__file__).parent / "applescript" / "set_date_slides.appl
 _SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.applescript"
 _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
+_SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -233,11 +235,60 @@ def fill_verse_slides(
         delete_slides(key_path, start_index + target, existing_count - target)
     elif target > existing_count:
         duplicate_slide(key_path, start_index, target - existing_count)
-    for i, chunk in enumerate(chunks):
-        kr_text = "\n".join(f"{v.number}. {v.korean}" for v in chunk)
-        en_text = "\n".join(f"{v.number}. {v.english}" for v in chunk)
+    for i, vchunk in enumerate(chunks):
+        kr_text = "\n".join(f"{v.number}. {v.korean}" for v in vchunk)
+        en_text = "\n".join(f"{v.number}. {v.english}" for v in vchunk)
         set_verse_slide(key_path, start_index + i, kr_label, kr_text, en_label, en_text)
     return target
+
+
+def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
+    """Set every on-canvas text item on a slide to `text`, in place (#15).
+
+    Worship-song title and lyric slides each carry a pair of stacked, identical on-canvas text
+    items (plus an off-canvas {0,0} leftover); both are set so the visible text stays
+    consistent. `text` may contain newlines, which Keynote turns into paragraphs while keeping
+    the box's base font. Used for both the title slide and each lyric slide. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_SLIDE_TEXT, key, str(slide_index), text).strip()
+
+
+def fill_song_slides(
+    key_path: str,
+    title_index: int,
+    song: Song,
+    *,
+    existing_lyric_count: int = 1,
+) -> int:
+    """Fill one worship song's title + lyric slides, resizing the lyric block to fit (#15).
+
+    Sets the title slide at title_index to song.title, chunks song.lines into <=2-line slides
+    (lyrics.transcribe.chunk), resizes the lyric block from its template `existing_lyric_count`
+    slides to the chunk count (trimming surplus or duplicating the first lyric slide), then
+    fills each. A blank/empty `song.lines` yields no chunks: all template lyric slides are
+    trimmed and only the title slide remains. Returns the total slides used (1 title + N lyrics).
+
+    Note: resizing shifts the indices of all later slides by (chunks - existing_lyric_count); a
+    caller filling several songs should fill the later songs first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    set_slide_text(key_path, title_index, song.title)
+    chunks = chunk(song.lines)
+    target = len(chunks)
+    first_lyric = title_index + 1
+    if existing_lyric_count > target:
+        delete_slides(key_path, first_lyric + target, existing_lyric_count - target)
+    elif target > existing_lyric_count:
+        duplicate_slide(key_path, first_lyric, target - existing_lyric_count)
+    for i, lines in enumerate(chunks):
+        set_slide_text(key_path, first_lyric + i, "\n".join(lines))
+    return 1 + target
 
 
 def build(template_key: str, slides: list[dict], out_key: str) -> str:
