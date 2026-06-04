@@ -13,8 +13,10 @@ from worship_deck.keynote.build import (
     _chunk_verses,
     delete_slides,
     duplicate_slide,
+    fill_announcement_slides,
     fill_song_slides,
     fill_verse_slides,
+    place_image,
     read_verse_boxes,
     save_draft,
     set_date_slides,
@@ -247,6 +249,40 @@ def test_set_slide_text_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+# ---------------------------------------------------------------------------
+# place_image — mocked (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_place_image_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = place_image("draft.key", 5, "/tmp/slide-1.png")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._PLACE_IMAGE),
+        "draft.key",
+        "5",
+        "/tmp/slide-1.png",
+    ]
+
+
+def test_place_image_raises_on_nonzero_returncode(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        subprocess, "run", lambda *a, **kw: _FakeCompleted(returncode=1, stderr="boom")
+    )
+    with pytest.raises(RuntimeError, match="place_image.applescript failed: boom"):
+        place_image("draft.key", 5, "/tmp/slide-1.png")
+
+
 def _mock_song_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Record fill_song_slides' Keynote primitive calls instead of running osascript."""
     calls: dict = {"set": [], "duplicate": None, "delete": None}
@@ -297,6 +333,59 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
     assert calls["delete"] == (8, 1)  # all template lyric slides trimmed
     assert calls["duplicate"] is None
     assert calls["set"] == [(7, "제목")]  # only the title is set
+
+
+# ---------------------------------------------------------------------------
+# fill_announcement_slides — mocked primitives (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def _mock_announce_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Record fill_announcement_slides' Keynote primitive calls instead of running osascript."""
+    calls: dict = {"set": [], "duplicate": None, "delete": None}
+    monkeypatch.setattr(B, "set_slide_text", lambda k, i, t: calls["set"].append((i, t)))
+    monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    return calls
+
+
+def test_fill_announcement_slides_duplicates_when_items_exceed_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째", "3. 셋째"], existing_count=1)
+
+    assert n == 3
+    assert calls["duplicate"] == (117, 2)  # add 2 to reach 3
+    assert calls["delete"] is None
+    assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째"), (119, "3. 셋째")]
+
+
+def test_fill_announcement_slides_trims_when_template_has_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째"], existing_count=5)
+
+    assert n == 2
+    assert calls["delete"] == (119, 3)  # trim 3 surplus at start+target
+    assert calls["duplicate"] is None
+    assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째")]
+
+
+def test_fill_announcement_slides_empty_list_trims_whole_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, [], existing_count=5)
+
+    assert n == 0
+    assert calls["delete"] == (117, 5)  # whole block trimmed
+    assert calls["duplicate"] is None
+    assert calls["set"] == []  # nothing to set
 
 
 # ---------------------------------------------------------------------------
@@ -443,3 +532,87 @@ def test_fill_song_slides_live_fills_title_and_trims_leftover(
     assert "다섯째 줄" in _on_canvas_text(str(draft), 10)
     # the slide right after the resized lyric block holds none of this song's lyrics (no leftover)
     assert "줄" not in _on_canvas_text(str(draft), 11)
+
+
+@pytest.mark.local_only
+def test_fill_announcement_slides_live_resizes_no_leftover(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """The 교회소식 block is 5 item slides (117-121). Filling 3 items must set each, trim the 2
+    surplus, and leave none of the sample text on the slide right after the block."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    items = ["1. 첫째 소식", "2. 둘째 소식", "3. 셋째 소식"]
+    n = fill_announcement_slides(str(draft), 117, items, existing_count=5)
+    assert n == 3
+
+    assert "첫째 소식" in _on_canvas_text(str(draft), 117)
+    assert "둘째 소식" in _on_canvas_text(str(draft), 118)
+    assert "셋째 소식" in _on_canvas_text(str(draft), 119)
+    # the slide right after the resized block carries none of the sample announcement text
+    assert "소식" not in _on_canvas_text(str(draft), 120)
+
+
+def _last_image_frame(
+    key_path: str, slide_index: int
+) -> tuple[int, float, float, float, float, float, float]:
+    """Read (image_count, x, y, w, h, doc_w, doc_h) for a slide's last image (Mac-only).
+
+    Folds the image frame and the document size into one read so the caller can compare them
+    without reopening the deck."""
+    script = (
+        "on run argv\n"
+        'tell application "Keynote"\n'
+        "  activate\n"
+        "  set d to open (POSIX file (item 1 of argv))\n"
+        "  set s to slide ((item 2 of argv) as integer) of d\n"
+        "  set n to count of images of s\n"
+        "  set img to last image of s\n"
+        "  set p to position of img\n"  # set first, then index (specifier gotcha)
+        "  set px to item 1 of p\n"
+        "  set py to item 2 of p\n"
+        "  set w to width of img\n"
+        "  set h to height of img\n"
+        "  set dw to width of d\n"
+        "  set dh to height of d\n"
+        "  close d saving no\n"
+        "  return (n as text) & \" \" & (px as text) & \" \" & (py as text) & \" \" "
+        "& (w as text) & \" \" & (h as text) & \" \" & (dw as text) & \" \" & (dh as text)\n"
+        "end tell\n"
+        "end run\n"
+    )
+    out = subprocess.run(
+        ["osascript", "-e", script, key_path, str(slide_index)],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+    n, px, py, w, h, dw, dh = out.split()
+    return int(n), float(px), float(py), float(w), float(h), float(dw), float(dh)
+
+
+@pytest.mark.local_only
+def test_place_image_live_covers_slide_centered(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Placing a PNG must add an image that covers the slide edge-to-edge, centered (aspect-fill).
+
+    Uses a 4:3 PNG against the 16:9 deck so the image overflows on one axis: it must reach the
+    slide on both axes (cover), exactly match the slide on the constraining axis, and be centered
+    so the overflow is split evenly (negative offset on the overflowing axis)."""
+    from PIL import Image
+
+    png = tmp_path / "sheet.png"
+    Image.new("RGB", (400, 300), "white").save(png)  # aspect deliberately != deck's
+
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    assert place_image(str(draft), 1, str(png)) == "ok"
+
+    n, px, py, w, h, dw, dh = _last_image_frame(str(draft), 1)
+    assert n >= 1  # an image was added
+    assert w >= dw - 1 and h >= dh - 1  # covers the slide on both axes (no margins)
+    assert abs(w - dw) < 1 or abs(h - dh) < 1  # exactly meets the slide on the constraining axis
+    assert abs(px - (dw - w) / 2) < 1 and abs(py - (dh - h) / 2) < 1  # centered (overflow split)
