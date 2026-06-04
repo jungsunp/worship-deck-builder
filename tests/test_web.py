@@ -60,6 +60,58 @@ def test_upload_sanitizes_filename(tmp_path, monkeypatch) -> None:
     assert not (tmp_path.parent / "evil.pdf").exists()
 
 
+# ── /inbox ───────────────────────────────────────────────────────────────────────
+
+
+def test_inbox_lists_files(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
+    (tmp_path / "sheet.png").write_bytes(b"pngdata")
+    resp = client.get("/inbox")
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "files": [
+            {"name": "bulletin.pdf", "size": 4},
+            {"name": "sheet.png", "size": 7},
+        ]
+    }
+
+
+def test_inbox_empty(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
+    assert client.get("/inbox").json() == {"files": []}
+
+
+def test_delete_inbox_file(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    f = tmp_path / "bulletin.pdf"
+    f.write_bytes(b"%PDF")
+    resp = client.delete("/inbox/bulletin.pdf")
+    assert resp.status_code == 200
+    assert not f.exists()
+
+
+def test_delete_missing_is_404(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    assert client.delete("/inbox/nope.pdf").status_code == 404
+
+
+def test_delete_rejects_traversal(tmp_path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    inbox.mkdir()
+    monkeypatch.setattr(app_module, "INBOX_DIR", inbox)
+    outside = tmp_path / "secret.txt"
+    outside.write_bytes(b"x")
+    # a name carrying a path component is rejected before any unlink
+    resp = client.delete("/inbox/..%2Fsecret.txt")
+    assert resp.status_code in (400, 404)
+    assert outside.exists()
+
+
+def test_index_shows_inbox_section() -> None:
+    assert 'id="inbox"' in client.get("/").text
+
+
 # ── /assemble ──────────────────────────────────────────────────────────────────
 # The heavy steps (Vision OCR + Ollama, ESV) are monkeypatched so these run on CI.
 # Starlette's TestClient runs the BackgroundTask before returning, so the assemble
