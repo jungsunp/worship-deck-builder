@@ -8,12 +8,27 @@ PDF preview for phone review. AppleScript sources live in ./applescript/.
 
 from __future__ import annotations
 
+import math
 import subprocess
 from pathlib import Path
+
+from worship_deck.bible.verses import Verse
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
 _SET_DATE_SLIDES = Path(__file__).parent / "applescript" / "set_date_slides.applescript"
+_SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.applescript"
+_READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
+_DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
+
+# --- verse-slide layout model (calibrated against master.key renders) ---------------------
+# Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
+# text fits a verse box at a readable font and paginate to keep text from shrinking below it.
+_LINE_H = 1.2        # line height as a multiple of font size
+_CHAR_W_KO = 1.0     # avg glyph advance / font size — full-width Hangul
+_CHAR_W_EN = 0.5     # avg glyph advance / font size — proportional Latin
+_MIN_FONT_KO = 60    # readability floor (pt); calibrated so pagination matches master.key's
+_MIN_FONT_EN = 44    # slide counts (시 133:1-3 → 1 slide, 눅 22:14-24 → 4) at master's effective sizes
 
 
 def _run_osascript(script: Path, *args: str) -> str:
@@ -83,6 +98,146 @@ def set_date_slides(key_path: str, date: str, title: str, ref: str) -> int:
     key = str(Path(key_path).expanduser())
     out = _run_osascript(_SET_DATE_SLIDES, key, date, title, ref)
     return int(out.strip())
+
+
+def _verse_lines(text: str, box_w: int, font: int, char_w: float) -> int:
+    """How many wrapped lines `"N. " + text` takes in a box `box_w` wide at `font` pt."""
+    chars_per_line = max(1, int(box_w / (font * char_w)))
+    return max(1, math.ceil(len(text) / chars_per_line))
+
+
+def _fit_lines(box_h: int, font: int) -> int:
+    """How many lines of `font` pt fit in a box `box_h` tall."""
+    return max(1, int(box_h / (font * _LINE_H)))
+
+
+def _chunk_verses(
+    verses: list[Verse],
+    *,
+    ko_box: tuple[int, int],
+    en_box: tuple[int, int],
+    ko_min_font: int = _MIN_FONT_KO,
+    en_min_font: int = _MIN_FONT_EN,
+) -> list[list[Verse]]:
+    """Group consecutive verses so each slide's text stays readable in both languages.
+
+    For each body box (width, height) and its readability floor, estimate how many wrapped
+    lines fit; a verse starts a new slide when adding it would exceed EITHER language's line
+    budget (verses don't share a line). A verse that overflows on its own still gets its own
+    slide. This trades extra slides for never shrinking below the floor — the user's intent.
+    """
+    ko_w, ko_h = ko_box
+    en_w, en_h = en_box
+    ko_budget = _fit_lines(ko_h, ko_min_font)
+    en_budget = _fit_lines(en_h, en_min_font)
+
+    chunks: list[list[Verse]] = []
+    current: list[Verse] = []
+    ko_used = en_used = 0
+    for v in verses:
+        ko_need = _verse_lines(f"{v.number}. {v.korean}", ko_w, ko_min_font, _CHAR_W_KO)
+        en_need = _verse_lines(f"{v.number}. {v.english}", en_w, en_min_font, _CHAR_W_EN)
+        if current and (ko_used + ko_need > ko_budget or en_used + en_need > en_budget):
+            chunks.append(current)
+            current, ko_used, en_used = [], 0, 0
+        current.append(v)
+        ko_used += ko_need
+        en_used += en_need
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def read_verse_boxes(key_path: str, slide_index: int) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Return ((ko_w, ko_h), (en_w, en_h)) for the verse-body boxes on a slide (#14).
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_READ_VERSE_BOXES, key, str(slide_index))
+    ko_line, en_line = out.strip().splitlines()
+    ko_w, ko_h = (int(x) for x in ko_line.split())
+    en_w, en_h = (int(x) for x in en_line.split())
+    return (ko_w, ko_h), (en_w, en_h)
+
+
+def delete_slides(key_path: str, start_index: int, count: int) -> int:
+    """Delete `count` consecutive slides starting at 1-based start_index. Returns new total.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_DELETE_SLIDES, key, str(start_index), str(count))
+    return int(out.strip())
+
+
+def set_verse_slide(
+    key_path: str,
+    slide_index: int,
+    kr_label: str,
+    kr_text: str,
+    en_label: str,
+    en_text: str,
+) -> str:
+    """Set the four on-canvas text items on one verse slide (#14), in place.
+
+    A verse slide carries a 개역한글 label + body and an ESV label + body; off-canvas leftover
+    items are ignored. Items are classified by content (개역한글/ESV) and y-position (Korean
+    above English), never by index, since the order varies across slides. Bodies are
+    newline-joined verse text. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(
+        _SET_VERSE_SLIDE, key, str(slide_index), kr_label, kr_text, en_label, en_text
+    )
+    return out.strip()
+
+
+def fill_verse_slides(
+    key_path: str,
+    start_index: int,
+    kr_label: str,
+    en_label: str,
+    verses: list[Verse],
+    *,
+    existing_count: int = 1,
+    ko_min_font: int = _MIN_FONT_KO,
+    en_min_font: int = _MIN_FONT_EN,
+) -> int:
+    """Fill a verse section starting at start_index, paginating to stay readable (#14).
+
+    Reads the section's body-box geometry, chunks `verses` so neither language shrinks below
+    its readability floor (overflow spills to more slides), resizes the section from its
+    template `existing_count` slides to the chunk count (trimming surplus or duplicating the
+    first slide), then fills each. Every slide shows the same full-passage label (matching the
+    deck). Returns the number of slides used.
+
+    Note: resizing shifts the indices of all later slides by (slides_used - existing_count); a
+    caller filling multiple verse sections should fill the later section first, or offset
+    subsequent start indices accordingly.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    ko_box, en_box = read_verse_boxes(key_path, start_index)
+    chunks = _chunk_verses(
+        verses, ko_box=ko_box, en_box=en_box, ko_min_font=ko_min_font, en_min_font=en_min_font
+    )
+    target = len(chunks)
+    if existing_count > target:
+        delete_slides(key_path, start_index + target, existing_count - target)
+    elif target > existing_count:
+        duplicate_slide(key_path, start_index, target - existing_count)
+    for i, chunk in enumerate(chunks):
+        kr_text = "\n".join(f"{v.number}. {v.korean}" for v in chunk)
+        en_text = "\n".join(f"{v.number}. {v.english}" for v in chunk)
+        set_verse_slide(key_path, start_index + i, kr_label, kr_text, en_label, en_text)
+    return target
 
 
 def build(template_key: str, slides: list[dict], out_key: str) -> str:
