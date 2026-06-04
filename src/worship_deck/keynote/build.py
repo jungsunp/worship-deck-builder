@@ -22,6 +22,7 @@ _SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.appl
 _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
+_PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -257,6 +258,23 @@ def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
     return _run_osascript(_SET_SLIDE_TEXT, key, str(slide_index), text).strip()
 
 
+def place_image(key_path: str, slide_index: int, image_path: str) -> str:
+    """Place a PNG full-bleed (aspect-fill) on the 1-based slide at slide_index, in place (#22).
+
+    Adds the image and scales it to cover the whole slide, centered: Keynote locks an image's
+    aspect ratio, so rather than stretching, the image fills the slide edge-to-edge and any
+    overflow past one pair of edges is clipped on export (no margins). When the PNG already
+    matches the deck's aspect ratio this is an exact fill. Used for genuinely-image slides:
+    downloaded 봉헌 hymn pages, band lead sheets, and media. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    img = str(Path(image_path).expanduser())
+    return _run_osascript(_PLACE_IMAGE, key, str(slide_index), img).strip()
+
+
 def fill_song_slides(
     key_path: str,
     title_index: int,
@@ -289,6 +307,40 @@ def fill_song_slides(
     for i, lines in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
     return 1 + target
+
+
+def fill_announcement_slides(
+    key_path: str,
+    start_index: int,
+    announcements: list[str],
+    *,
+    existing_count: int = 1,
+) -> int:
+    """Fill the 교회소식 block: one native-text slide per announcement, resizing to fit (#16).
+
+    Resizes the announcement block from its template `existing_count` slides to
+    len(announcements) (trimming surplus or duplicating the first item slide), then sets each
+    slide's native text to one item. Announcement item slides have the same structure as song
+    slides — a stacked pair of identical on-canvas text items (plus a {0,0} leftover) and no
+    persistent header — so set_slide_text fills them directly. Returns the slides used.
+
+    An empty list trims the whole block (target 0); real bulletins always have announcements,
+    so this degenerate case is left unguarded (mirrors fill_song_slides' empty-lyrics handling).
+
+    Note: resizing shifts the indices of all later slides by (len - existing_count); a caller
+    filling several expanding sections should fill later sections first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    target = len(announcements)
+    if existing_count > target:
+        delete_slides(key_path, start_index + target, existing_count - target)
+    elif target > existing_count:
+        duplicate_slide(key_path, start_index, target - existing_count)
+    for i, item in enumerate(announcements):
+        set_slide_text(key_path, start_index + i, item)
+    return target
 
 
 def build(template_key: str, slides: list[dict], out_key: str) -> str:
