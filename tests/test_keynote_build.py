@@ -7,8 +7,22 @@ from pathlib import Path
 
 import pytest
 
+from worship_deck.bible.verses import Verse
 from worship_deck.keynote import build as B
-from worship_deck.keynote.build import duplicate_slide, save_draft, set_date_slides
+from worship_deck.keynote.build import (
+    _chunk_verses,
+    delete_slides,
+    duplicate_slide,
+    fill_verse_slides,
+    read_verse_boxes,
+    save_draft,
+    set_date_slides,
+    set_verse_slide,
+)
+
+# Body-box geometry from master.key (width, height), used to drive the chunk model in tests.
+_CTW_KO_BOX, _CTW_EN_BOX = (1844, 544), (1836, 298)   # call-to-worship (slide 48)
+_SERMON_KO_BOX, _SERMON_EN_BOX = (1837, 533), (1822, 332)  # sermon (slide 129)
 
 # ---------------------------------------------------------------------------
 # save_draft — mocked osascript (CI-safe, no Mac)
@@ -116,6 +130,95 @@ def test_set_date_slides_passes_args_and_returns_count(
 
 
 # ---------------------------------------------------------------------------
+# _chunk_verses — pure function (CI-safe)
+# ---------------------------------------------------------------------------
+
+
+def test_chunk_verses_keeps_short_passage_together_in_tall_box() -> None:
+    # 4 short sermon verses fit the tall sermon boxes on one slide.
+    verses = [Verse(n, "짧은절", "short verse") for n in range(14, 18)]
+    chunks = _chunk_verses(verses, ko_box=_SERMON_KO_BOX, en_box=_SERMON_EN_BOX)
+    assert len(chunks) == 1
+
+
+def test_chunk_verses_spills_when_short_box_overflows() -> None:
+    # The call-to-worship ESV box is short (h=298); long ESV verses must spill to >1 slide
+    # rather than shrink below the floor.
+    verses = [Verse(n, "형제가 연합하여 동거함이", "It is like the precious oil " * 4) for n in range(1, 4)]
+    chunks = _chunk_verses(verses, ko_box=_CTW_KO_BOX, en_box=_CTW_EN_BOX)
+    assert len(chunks) >= 2
+    assert [v.number for c in chunks for v in c] == [1, 2, 3]  # order preserved, none dropped
+
+
+def test_chunk_verses_giant_verse_stands_alone() -> None:
+    verses = [Verse(1, "짧다", "short"), Verse(2, "긴" * 200, "long " * 200)]
+    chunks = _chunk_verses(verses, ko_box=_SERMON_KO_BOX, en_box=_SERMON_EN_BOX)
+    assert [len(c) for c in chunks] == [1, 1]
+
+
+# ---------------------------------------------------------------------------
+# set_verse_slide — mocked osascript (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_verse_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_verse_slide(
+        "draft.key", 48, "[시 133:1-3, 개역한글]", "1. 가", "[Psalms 133:1-3, ESV]", "1. a"
+    )
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_VERSE_SLIDE),
+        "draft.key",
+        "48",
+        "[시 133:1-3, 개역한글]",
+        "1. 가",
+        "[Psalms 133:1-3, ESV]",
+        "1. a",
+    ]
+
+
+def test_read_verse_boxes_parses_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="1844 544\n1836 298\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    ko_box, en_box = read_verse_boxes("draft.key", 48)
+
+    assert ko_box == (1844, 544)
+    assert en_box == (1836, 298)
+    assert captured["cmd"] == ["osascript", str(B._READ_VERSE_BOXES), "draft.key", "48"]
+
+
+def test_delete_slides_passes_args_and_returns_count(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="167\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    n = delete_slides("draft.key", 132, 3)
+
+    assert n == 167
+    assert captured["cmd"] == ["osascript", str(B._DELETE_SLIDES), "draft.key", "132", "3"]
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Keynote; skipped without a Mac + TEMPLATE_KEY
 # ---------------------------------------------------------------------------
 
@@ -185,3 +288,51 @@ def test_set_date_slides_live_swaps_text_and_keeps_static(
     ending = _on_canvas_text(str(draft), 167)  # ending 1부
     assert "2026년 6월 7일" in ending  # new date swapped in
     assert "예배를 마칩니다" in ending  # static closing wording preserved
+
+
+@pytest.mark.local_only
+def test_fill_verse_slides_live_fills_call_to_worship(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Fill the 예배의 부름 verse slide (48); first chunk holds verse 1, junk stays off-canvas."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    verses = [
+        Verse(1, "형제가 연합하여 동거함이", "Behold, how good and pleasant it is"),
+        Verse(2, "머리에 있는 보배로운 기름이", "It is like the precious oil on the head"),
+        Verse(3, "헐몬의 이슬이 시온의 산들에", "It is like the dew of Hermon"),
+    ]
+    kr_label, en_label = "[시 133:1-3, 개역한글]", "[Psalms 133:1-3, ESV]"
+
+    n = fill_verse_slides(str(draft), 48, kr_label, en_label, verses, existing_count=1)
+    assert n >= 1
+
+    text = _on_canvas_text(str(draft), 48)  # first chunk
+    assert kr_label in text
+    assert en_label in text
+    assert "1. 형제가 연합하여 동거함이" in text
+    assert "1. Behold, how good and pleasant it is" in text
+    assert "감사함으로 여호와께" not in text  # off-canvas {0,0} junk stays off-canvas
+
+
+@pytest.mark.local_only
+def test_fill_verse_slides_live_resizes_sermon_no_leftover(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Sermon block is 4 template slides (129-132); filling fewer chunks must trim the surplus
+    so no leftover 눅 verse slide remains right after the section."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    # Short verses → the tall sermon boxes pack several per slide → fewer than 4 chunks.
+    verses = [Verse(n, f"{n}절 본문", f"verse {n} text") for n in range(14, 25)]
+    kr_label, en_label = "[눅 22:14-24, 개역한글]", "[Luke 22:14-24, ESV]"
+
+    n = fill_verse_slides(str(draft), 129, kr_label, en_label, verses, existing_count=4)
+    assert n < 4  # packed into fewer slides than the template had
+
+    for i in range(n):  # filled section slides carry the label
+        assert kr_label in _on_canvas_text(str(draft), 129 + i)
+    # the slide immediately after the resized section is no longer a 눅 verse slide
+    assert "[눅" not in _on_canvas_text(str(draft), 129 + n)
