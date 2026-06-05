@@ -23,6 +23,7 @@ _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.ap
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
+_PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -256,6 +257,23 @@ def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
     """
     key = str(Path(key_path).expanduser())
     return _run_osascript(_SET_SLIDE_TEXT, key, str(slide_index), text).strip()
+
+
+def place_image(key_path: str, slide_index: int, image_path: str) -> str:
+    """Place a PNG full-bleed (aspect-fill) on the 1-based slide at slide_index, in place (#22).
+
+    Adds the image and scales it to cover the whole slide, centered: Keynote locks an image's
+    aspect ratio, so rather than stretching, the image fills the slide edge-to-edge and any
+    overflow past one pair of edges is clipped on export (no margins). When the PNG already
+    matches the deck's aspect ratio this is an exact fill. Used for genuinely-image slides:
+    downloaded 봉헌 hymn pages, band lead sheets, and media. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    img = str(Path(image_path).expanduser())
+    return _run_osascript(_PLACE_IMAGE, key, str(slide_index), img).strip()
 
 
 def fill_song_slides(
