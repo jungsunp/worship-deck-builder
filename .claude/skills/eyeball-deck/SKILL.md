@@ -18,6 +18,7 @@ open it). Run it from the repo root with the project's venv active:
 ```bash
 python .claude/skills/eyeball-deck/build_eyeball.py song            # sample worship song
 python .claude/skills/eyeball-deck/build_eyeball.py verse           # sample 예배의 부름 verses
+python .claude/skills/eyeball-deck/build_eyeball.py announce        # 교회소식 from the sample bulletin
 ```
 
 Customize content / placement:
@@ -30,6 +31,11 @@ python .claude/skills/eyeball-deck/build_eyeball.py song \
 
 # real verse lookup (needs ESV_API_KEY) into the sermon block (slides 129–132)
 python .claude/skills/eyeball-deck/build_eyeball.py verse --ref "눅 22:14-24" --at 129 --existing 4
+
+# 교회소식 parsed from a real bulletin PDF (title + reflowed detail per item)
+python .claude/skills/eyeball-deck/build_eyeball.py announce --bulletin data/real-bulletin.pdf
+# or override the content explicitly
+python .claude/skills/eyeball-deck/build_eyeball.py announce --item "1. 새가족 환영회" --item "2. 여름성경학교 안내"
 ```
 
 Useful flags: `--out <path>` (default `/tmp/draft-eyeball.key`; pass
@@ -43,6 +49,9 @@ The script prints the slide range to review and opens the deck.
   Other songs in the sample template start at 19 and 37.
 - **Verses** — 예배의 부름: slide **48** (`--existing 1`); 말씀 (sermon): slides **129–132**
   (`--at 129 --existing 4`).
+- **Announcements (교회소식)** — item slides **117–121** (`--at 117`, default `--existing 5`); each
+  is one item, parsed from the bulletin (`announcement_blocks`: numbered title + reflowed detail).
+  Slides 113–116 are section-title/motto headers (not touched); slide 122 is blank.
 
 (Confirm against the current template if it changed — probe with a throwaway `osascript` that
 dumps each slide's on-canvas text-item positions, as in `tests/test_keynote_build.py`.)
@@ -54,6 +63,10 @@ Name the exact slides to open and what each should show, e.g. for `song --at 7`:
 - slides **8..**: each a ≤2-line lyric chunk;
 - the slide **right after** the filled block = the *next* section's slide (proves surplus
   template slides were trimmed — no leftover).
+
+For `announce --at 117`: slides **117..** each carry one announcement item — paragraph 1 is the
+title (rendered **gold**), the rest is the detail (rendered **white**), matching master.key. The
+slide right after the block is the next section (proves surplus item slides were trimmed).
 
 ## Keynote stability rules (do not skip — these are why earlier runs failed)
 

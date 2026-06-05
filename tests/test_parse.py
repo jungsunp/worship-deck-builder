@@ -7,7 +7,11 @@ from pathlib import Path
 import pytest
 
 from worship_deck.parse import parse
-from worship_deck.parse.bulletin import _parse_offering_hymn, _split_content
+from worship_deck.parse.bulletin import (
+    _parse_offering_hymn,
+    _split_content,
+    announcement_blocks,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -54,6 +58,27 @@ def test_parse_announcements_titles() -> None:
     assert result.announcements[0] == "2026년도 24 나무 소그룹"
     assert result.announcements[1] == "교육부 오픈하우스 안내"
     assert result.announcements[5] == "미디어 사역팀 팀원 모집"
+
+
+def test_announcement_blocks_title_and_reflowed_detail() -> None:
+    blocks = announcement_blocks(str(FIXTURES / "sample_bulletin.pdf"))
+    assert len(blocks) == 6
+
+    first = blocks[0]
+    lines = first.split("\n")
+    assert lines[0] == "1. 2026년도 24 나무 소그룹"  # title keeps its number (paragraph 1 = gold)
+    assert lines[1] == ""  # blank line between title and detail
+    # the soft column-wrap "...안내에 따" / "라 함께..." is rejoined into one flowing line
+    assert "안내에 따라 함께 친교해 주시기 바랍니다." in first
+    assert "  " not in first  # no stray leading/double spacing from pdf wrapping
+
+
+def test_announcement_blocks_keeps_bullets_as_separate_lines() -> None:
+    blocks = announcement_blocks(str(FIXTURES / "sample_bulletin.pdf"))
+    vbs = blocks[4]  # 5. 노스필드 여름성경학교 (VBS) 안내
+    detail = vbs.split("\n\n", 1)[1].split("\n")
+    assert "· 영유아부: 8/3-8/4 (월-화) 9am-12pm" in detail
+    assert "· 초등부: 8/5-8/7 (수-금) 9am-3pm" in detail
 
 
 def test_parse_bible_refs_and_sermon_title() -> None:

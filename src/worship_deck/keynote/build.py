@@ -22,6 +22,7 @@ _SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.appl
 _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
+_SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -289,6 +290,55 @@ def fill_song_slides(
     for i, lines in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
     return 1 + target
+
+
+def set_announcement_slide(key_path: str, slide_index: int, text: str) -> str:
+    """Set one 교회소식 item slide's native text, styling title gold + detail white (#16).
+
+    `text` is one announcement: paragraph 1 is the title (rendered gold), the remaining
+    paragraphs are the detail (rendered white) — matching master.key's item slides, which use a
+    single top-anchored box per item with a gold title paragraph over white detail. Both stacked
+    on-canvas copies are set; off-canvas {0,0} leftovers are skipped. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_ANNOUNCEMENT_SLIDE, key, str(slide_index), text).strip()
+
+
+def fill_announcement_slides(
+    key_path: str,
+    start_index: int,
+    announcements: list[str],
+    *,
+    existing_count: int = 1,
+) -> int:
+    """Fill the 교회소식 block: one native-text slide per announcement, resizing to fit (#16).
+
+    Resizes the announcement block from its template `existing_count` slides to
+    len(announcements) (trimming surplus or duplicating the first item slide), then sets each
+    slide's native text to one item. Each item string is title (paragraph 1) + detail (the
+    remaining paragraphs); set_announcement_slide styles the title gold and the detail white to
+    match master.key. Returns the slides used.
+
+    An empty list trims the whole block (target 0); real bulletins always have announcements,
+    so this degenerate case is left unguarded (mirrors fill_song_slides' empty-lyrics handling).
+
+    Note: resizing shifts the indices of all later slides by (len - existing_count); a caller
+    filling several expanding sections should fill later sections first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    target = len(announcements)
+    if existing_count > target:
+        delete_slides(key_path, start_index + target, existing_count - target)
+    elif target > existing_count:
+        duplicate_slide(key_path, start_index, target - existing_count)
+    for i, item in enumerate(announcements):
+        set_announcement_slide(key_path, start_index + i, item)
+    return target
 
 
 def build(template_key: str, slides: list[dict], out_key: str) -> str:

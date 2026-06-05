@@ -13,10 +13,12 @@ from worship_deck.keynote.build import (
     _chunk_verses,
     delete_slides,
     duplicate_slide,
+    fill_announcement_slides,
     fill_song_slides,
     fill_verse_slides,
     read_verse_boxes,
     save_draft,
+    set_announcement_slide,
     set_date_slides,
     set_slide_text,
     set_verse_slide,
@@ -300,6 +302,80 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
 
 
 # ---------------------------------------------------------------------------
+# fill_announcement_slides — mocked primitives (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_announcement_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_announcement_slide("draft.key", 117, "1. 제목\n\n   상세 내용")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_ANNOUNCEMENT_SLIDE),
+        "draft.key",
+        "117",
+        "1. 제목\n\n   상세 내용",
+    ]
+
+
+def _mock_announce_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Record fill_announcement_slides' Keynote primitive calls instead of running osascript."""
+    calls: dict = {"set": [], "duplicate": None, "delete": None}
+    monkeypatch.setattr(B, "set_announcement_slide", lambda k, i, t: calls["set"].append((i, t)))
+    monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    return calls
+
+
+def test_fill_announcement_slides_duplicates_when_items_exceed_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째", "3. 셋째"], existing_count=1)
+
+    assert n == 3
+    assert calls["duplicate"] == (117, 2)  # add 2 to reach 3
+    assert calls["delete"] is None
+    assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째"), (119, "3. 셋째")]
+
+
+def test_fill_announcement_slides_trims_when_template_has_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째"], existing_count=5)
+
+    assert n == 2
+    assert calls["delete"] == (119, 3)  # trim 3 surplus at start+target
+    assert calls["duplicate"] is None
+    assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째")]
+
+
+def test_fill_announcement_slides_empty_list_trims_whole_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_announce_primitives(monkeypatch)
+
+    n = fill_announcement_slides("k", 117, [], existing_count=5)
+
+    assert n == 0
+    assert calls["delete"] == (117, 5)  # whole block trimmed
+    assert calls["duplicate"] is None
+    assert calls["set"] == []  # nothing to set
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Keynote; skipped without a Mac + TEMPLATE_KEY
 # ---------------------------------------------------------------------------
 
@@ -443,3 +519,28 @@ def test_fill_song_slides_live_fills_title_and_trims_leftover(
     assert "다섯째 줄" in _on_canvas_text(str(draft), 10)
     # the slide right after the resized lyric block holds none of this song's lyrics (no leftover)
     assert "줄" not in _on_canvas_text(str(draft), 11)
+
+
+@pytest.mark.local_only
+def test_fill_announcement_slides_live_resizes_no_leftover(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """The 교회소식 block is 5 item slides (117-121). Filling 3 items must set each, trim the 2
+    surplus, and leave none of the sample text on the slide right after the block."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    items = [
+        "1. 첫째 소식\n\n   첫째 상세 내용입니다.",
+        "2. 둘째 소식\n\n   둘째 상세 내용입니다.",
+        "3. 셋째 소식\n\n   셋째 상세 내용입니다.",
+    ]
+    n = fill_announcement_slides(str(draft), 117, items, existing_count=5)
+    assert n == 3
+
+    s117 = _on_canvas_text(str(draft), 117)
+    assert "1. 첫째 소식" in s117 and "첫째 상세 내용입니다." in s117  # title + detail both set
+    assert "2. 둘째 소식" in _on_canvas_text(str(draft), 118)
+    assert "3. 셋째 소식" in _on_canvas_text(str(draft), 119)
+    # the slide right after the resized block carries none of the sample announcement text
+    assert "소식" not in _on_canvas_text(str(draft), 120)

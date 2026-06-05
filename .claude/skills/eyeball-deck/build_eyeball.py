@@ -12,6 +12,8 @@ Examples:
         --at 7 --existing 10
     python build_eyeball.py verse                       # sample verses into 예배의 부름 (slide 48)
     python build_eyeball.py verse --ref "시 133:1-3" --at 48 --existing 1   # real lookup (needs keys)
+    python build_eyeball.py announce                    # 교회소식 parsed from the sample bulletin
+    python build_eyeball.py announce --bulletin data/real-bulletin.pdf      # a real bulletin
 """
 
 from __future__ import annotations
@@ -28,11 +30,15 @@ sys.path.insert(0, str(REPO / "src"))  # belt-and-suspenders if not pip-installe
 
 from worship_deck.bible.verses import Verse  # noqa: E402
 from worship_deck.keynote.build import (  # noqa: E402
+    fill_announcement_slides,
     fill_song_slides,
     fill_verse_slides,
     save_draft,
 )
 from worship_deck.lyrics.transcribe import Song  # noqa: E402
+from worship_deck.parse.bulletin import announcement_blocks  # noqa: E402
+
+SAMPLE_BULLETIN = REPO / "tests" / "fixtures" / "sample_bulletin.pdf"
 
 SAMPLE_SONG = Song(
     title="주 은혜임을",
@@ -140,6 +146,14 @@ def main() -> None:
     vp.add_argument("--at", type=int, default=48, help="verse-slide index (default: 48)")
     vp.add_argument("--ref", help="Korean ref for a real lookup, e.g. '시 133:1-3' (needs keys)")
 
+    ap_ = sub.add_parser("announce", parents=[common], help="fill 교회소식 (one item per slide)")
+    ap_.set_defaults(existing=5)  # the template 교회소식 block is 5 item slides (117–121)
+    ap_.add_argument("--at", type=int, default=117, help="first announcement-slide index (default: 117)")
+    ap_.add_argument("--bulletin", default=str(SAMPLE_BULLETIN),
+                     help="bulletin PDF to parse announcements from (default: sample fixture)")
+    ap_.add_argument("--item", action="append", dest="items",
+                     help="override: an announcement item; repeatable (skips bulletin parse)")
+
     args = ap.parse_args()
     template = resolve_template(args.template)
     out = str((REPO / args.out) if not Path(args.out).is_absolute() else Path(args.out))
@@ -157,6 +171,12 @@ def main() -> None:
         n = fill_song_slides(out, args.at, song, existing_lyric_count=args.existing)
         first, last = args.at, args.at + n - 1
         print(f"Filled song: {n} slides ({first} title + {n - 1} lyric).")
+    elif args.section == "announce":
+        items = args.items or announcement_blocks(args.bulletin)
+        n = fill_announcement_slides(out, args.at, items, existing_count=args.existing)
+        first, last = args.at, args.at + n - 1
+        src = "--item overrides" if args.items else Path(args.bulletin).name
+        print(f"Filled announcements: {n} slides (one item per slide, from {src}).")
     else:
         if args.ref:
             from worship_deck.bible.verses import lookup_verses, verse_labels
