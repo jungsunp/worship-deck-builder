@@ -17,6 +17,7 @@ from worship_deck.lyrics.transcribe import Song, chunk
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
+_DUPLICATE_BLOCK = Path(__file__).parent / "applescript" / "duplicate_block.applescript"
 _SET_DATE_SLIDES = Path(__file__).parent / "applescript" / "set_date_slides.applescript"
 _SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.applescript"
 _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
@@ -84,6 +85,28 @@ def duplicate_slide(key_path: str, slide_index: int, count: int) -> int:
     """
     key = str(Path(key_path).expanduser())
     out = _run_osascript(_DUPLICATE_SLIDE, key, str(slide_index), str(count))
+    return int(out.strip())
+
+
+def duplicate_block(
+    key_path: str, src_start: int, src_len: int, dest_after: int, times: int
+) -> int:
+    """Duplicate the contiguous block [src_start, src_start+src_len) to after dest_after.
+
+    `duplicate_slide` only places copies right after their source, which interleaves when a
+    multi-slide block is replicated. This copies the whole block (in order) to after
+    `dest_after`, `times` times — used to fan a single worship-song unit (blank + title +
+    lyric) into one per medley song (#86). The source block MUST lie entirely before
+    `dest_after` so its indices stay stable while copies are inserted. Returns the new total
+    slide count.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(
+        _DUPLICATE_BLOCK, key, str(src_start), str(src_len), str(dest_after), str(times)
+    )
     return int(out.strip())
 
 
@@ -308,6 +331,48 @@ def fill_song_slides(
     for i, lines in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
     return 1 + target
+
+
+# A worship-song unit in the template: 3 slides — a blank-green separator, a title slide,
+# and one lyric slide — at start_index, +1, +2. fill_song_slides expands the lyric slide.
+_WORSHIP_UNIT = 3
+
+
+def fill_worship_songs(
+    key_path: str, start_index: int, section_len: int, songs: list[Song]
+) -> int:
+    """Fill the 찬양 medley: one [blank separator + title + ≤2-line lyric slides] block per song (#86).
+
+    The template's worship range (`start_index` .. `start_index+section_len-1`) holds last
+    week's medley as a sequence of 3-slide unit seeds (blank-green separator, title slide,
+    lyric slide). This collapses the range to a single seed unit, fans it out to one unit per
+    song, appends a trailing blank separator (matching the deck's blank-before-each-song +
+    trailing layout), then fills each unit's title and lyric slides via `fill_song_slides`.
+
+    Fills run back-to-front so each song's lyric expansion (which shifts later indices) leaves
+    the still-unfilled earlier units at their predictable positions. Returns the worship
+    section's resulting slide count.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    m = len(songs)
+    if m == 0:
+        return 0
+    s = start_index
+    # 1. Collapse the range to one seed unit (blank, title, lyric); drop last week's content.
+    delete_slides(key_path, s + _WORSHIP_UNIT, section_len - _WORSHIP_UNIT)
+    # 2. Fan the seed unit out to one per song (copies land after the seed's lyric slide).
+    if m > 1:
+        duplicate_block(key_path, s, _WORSHIP_UNIT, s + _WORSHIP_UNIT - 1, m - 1)
+    # 3. Trailing blank separator: copy the seed's blank to after the last unit's lyric slide.
+    duplicate_block(key_path, s, 1, s + _WORSHIP_UNIT * m - 1, 1)
+    # 4. Fill each unit's title + lyrics, back-to-front (last unit first keeps earlier anchors).
+    total = _WORSHIP_UNIT * m + 1  # blank+title+lyric per unit (pre-expansion) + trailing blank
+    for i in reversed(range(m)):
+        used = fill_song_slides(key_path, s + _WORSHIP_UNIT * i + 1, songs[i])
+        total += used - 2  # used = 1 title + L lyrics; the unit already counted 1 title + 1 lyric
+    return total
 
 
 def set_announcement_slide(key_path: str, slide_index: int, text: str) -> str:

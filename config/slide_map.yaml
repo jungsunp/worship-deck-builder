@@ -21,8 +21,13 @@ sections:
     render: native_text
 
   worship_songs:            # 찬양
-    slides: [7, 45]         # range; expands per song
-    structure: "per song: 1 title slide + N lyric slides (<= 2 lines each)"
+    slides: [6, 46]         # verified range (start_index 6, section_len 41); expands per song
+    structure: "per song: blank-green separator + title slide + N lyric slides (<= 2 lines each)"
+    # Green chroma-key lower-third banners (keyed out over the live camera feed). Per song:
+    # a blank-green separator, then the title slide (narrow banner = Song.title), then the
+    # ≤2-line lyric slides (wide banner). One blank before each song + a trailing blank.
+    # keynote.build.fill_worship_songs fans the first 3-slide unit (blank/title/lyric) into
+    # one per medley song. Anchors are master.key positions — re-verify if the template drifts.
     title_source: bulletin.worship_order
     lyrics_source: band_sheet_images   # shared in Kakao; often a multi-song medley.
     # Claude vision reads lyrics + red arrangement marks (V/C/B sections, ×N repeats,

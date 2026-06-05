@@ -12,10 +12,12 @@ from worship_deck.keynote import build as B
 from worship_deck.keynote.build import (
     _chunk_verses,
     delete_slides,
+    duplicate_block,
     duplicate_slide,
     fill_announcement_slides,
     fill_song_slides,
     fill_verse_slides,
+    fill_worship_songs,
     place_image,
     read_verse_boxes,
     save_draft,
@@ -24,7 +26,7 @@ from worship_deck.keynote.build import (
     set_slide_text,
     set_verse_slide,
 )
-from worship_deck.lyrics.transcribe import Song
+from worship_deck.lyrics.transcribe import Song, chunk
 
 # Body-box geometry from master.key (width, height), used to drive the chunk model in tests.
 _CTW_KO_BOX, _CTW_EN_BOX = (1844, 544), (1836, 298)   # call-to-worship (slide 48)
@@ -104,6 +106,23 @@ def test_duplicate_slide_passes_args_and_returns_count(
 
     assert n == 42  # osascript stdout parsed to int
     assert captured["cmd"] == ["osascript", str(B._DUPLICATE_SLIDE), "draft.key", "1", "3"]
+
+
+def test_duplicate_block_passes_args_and_returns_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="50\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    n = duplicate_block("draft.key", 6, 3, 8, 2)
+
+    assert n == 50
+    assert captured["cmd"] == ["osascript", str(B._DUPLICATE_BLOCK), "draft.key", "6", "3", "8", "2"]
 
 
 # ---------------------------------------------------------------------------
@@ -334,6 +353,72 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
     assert calls["delete"] == (8, 1)  # all template lyric slides trimmed
     assert calls["duplicate"] is None
     assert calls["set"] == [(7, "제목")]  # only the title is set
+
+
+# ---------------------------------------------------------------------------
+# fill_worship_songs — mocked primitives (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def _mock_worship_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Record fill_worship_songs' orchestration of delete/duplicate_block/fill_song_slides."""
+    calls: dict = {"delete": None, "dup_block": [], "fill": []}
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    monkeypatch.setattr(
+        B, "duplicate_block", lambda k, a, b, c, d: calls["dup_block"].append((a, b, c, d))
+    )
+
+    def fake_fill(k: str, idx: int, song: Song, existing_lyric_count: int = 1) -> int:
+        calls["fill"].append((idx, song.title))
+        return 1 + len(chunk(song.lines))  # 1 title + L lyric slides
+
+    monkeypatch.setattr(B, "fill_song_slides", fake_fill)
+    return calls
+
+
+def test_fill_worship_songs_three_song_medley(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _mock_worship_primitives(monkeypatch)
+    songs = [
+        Song(title="주 은혜임을", lines=["1", "2", "3", "4"]),  # 2 lyric slides
+        Song(title="주님 다시 오실 때까지", lines=["1", "2"]),  # 1 lyric slide
+        Song(title="마라나타", lines=["1", "2"]),  # 1 lyric slide
+    ]
+
+    # worship range = master slides 6..46 (start_index=6, section_len=41)
+    n = fill_worship_songs("k", 6, 41, songs)
+
+    # collapse to the 3-slide seed unit; drop the other 38 slides in the range
+    assert calls["delete"] == (9, 38)
+    # fan the seed unit to 3 (2 extra copies after the seed lyric @8), then a trailing blank
+    assert calls["dup_block"] == [(6, 3, 8, 2), (6, 1, 14, 1)]
+    # fills run back-to-front; title indices are 6 + 3*i + 1 for i = 2, 1, 0
+    assert calls["fill"] == [(13, "마라나타"), (10, "주님 다시 오실 때까지"), (7, "주 은혜임을")]
+    # 3 units (blank+title+lyric) + trailing blank, plus the extra lyric slide song 1 expands
+    assert n == 11
+
+
+def test_fill_worship_songs_single_song_skips_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _mock_worship_primitives(monkeypatch)
+    songs = [Song(title="마라나타", lines=["1", "2"])]
+
+    n = fill_worship_songs("k", 6, 41, songs)
+
+    assert calls["delete"] == (9, 38)
+    # only the trailing-blank copy — no fan-out for a single song
+    assert calls["dup_block"] == [(6, 1, 8, 1)]
+    assert calls["fill"] == [(7, "마라나타")]
+    assert n == 4  # blank + title + 1 lyric + trailing blank
+
+
+def test_fill_worship_songs_empty_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _mock_worship_primitives(monkeypatch)
+
+    n = fill_worship_songs("k", 6, 41, [])
+
+    assert n == 0
+    assert calls["delete"] is None
+    assert calls["dup_block"] == []
+    assert calls["fill"] == []
 
 
 # ---------------------------------------------------------------------------
