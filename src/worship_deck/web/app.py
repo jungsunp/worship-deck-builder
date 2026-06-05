@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
-from worship_deck import obs, parse, store
+from worship_deck import hymn, obs, parse, store
 from worship_deck.bible import verses
 from worship_deck.lyrics import match
 from worship_deck.lyrics import transcribe as lyrics_transcribe
@@ -33,6 +33,10 @@ _STATUS: dict[str, dict] = {}
 # data/ tree (no env var: files arrive via the upload form, not an iCloud drop-folder).
 # Tests monkeypatch this to a tmp dir.
 INBOX_DIR = Path("data/inbox")
+
+# Downloaded offering-hymn slide PNGs land under HYMN_DIR/<service_date>/hymn/ (git-ignored,
+# alongside the run-store JSON). Tests monkeypatch this to a tmp dir.
+HYMN_DIR = Path("data/runs")
 
 
 _INDEX_HTML = """<!doctype html>
@@ -119,7 +123,7 @@ function poll(url, date) {
   _timer = setInterval(async () => {
     const s = await (await fetch(url)).json();
     const st = document.getElementById('status');
-    st.textContent = date + ': ' + s.status + (s.step ? ' (' + s.step + ')' : '') + (s.error ? '\\n' + s.error : '');
+    st.textContent = date + ': ' + s.status + (s.step ? ' (' + s.step + ')' : '') + (s.error ? '\\n' + s.error : '') + (s.warning ? '\\n⚠ ' + s.warning : '');
     if (s.status === 'done') st.innerHTML += ' <a href="/review/' + date + '">Review →</a>';
     if (s.status === 'done' || s.status === 'error') clearInterval(_timer);
   }, 2000);
@@ -349,8 +353,25 @@ def _assemble_async(service_date: str) -> None:
             if row.get("ref"):
                 row["passage"] = verses.lookup_verses(row["ref"])
 
+        # Best-effort: a failed/forbidden hymn download must not discard the transcribe/verses
+        # work above. On failure we record a warning and leave offering_hymn_images empty so
+        # the operator can add the hymn manually.
+        _STATUS[service_date] = {"status": "running", "step": "hymn", "error": None}
+        warning = None
+        if data.offering_hymn_number:
+            try:
+                pngs = hymn.fetch_hymn_slides(
+                    data.offering_hymn_number, HYMN_DIR / service_date / "hymn"
+                )
+                data.offering_hymn_images = [str(p) for p in pngs]
+            except Exception:  # noqa: BLE001 - download is best-effort, surface as a warning
+                logger.exception(
+                    "Hymn fetch failed for %s (hymn %s)", service_date, data.offering_hymn_number
+                )
+                warning = f"hymn {data.offering_hymn_number} download failed — add it manually"
+
         store.save(service_date, data)
-        _STATUS[service_date] = {"status": "done", "step": None, "error": None}
+        _STATUS[service_date] = {"status": "done", "step": None, "error": None, "warning": warning}
         logger.info("Assembled run for %s (%d song(s))", service_date, len(songs))
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Assemble failed for %s", service_date)

@@ -121,20 +121,22 @@ def test_index_shows_inbox_section() -> None:
 
 
 def _fake_data() -> ServiceData:
-    """Parsed bulletin: an opening 찬양 row (band name) + a ref-bearing row."""
+    """Parsed bulletin: an opening 찬양 row (band name) + a ref-bearing row + a hymn."""
     return ServiceData(
         date="2026년 5월 31일",
         worship_order=[
             {"part": "찬양", "title": "마라나타", "leader": "", "ref": ""},
             {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3"},
         ],
+        offering_hymn_number="220",
     )
 
 
 @pytest.fixture
 def _assemble_env(tmp_path, monkeypatch):
-    """Inbox + runs dir in tmp; parse/transcribe/lookup faked."""
+    """Inbox + runs dir in tmp; parse/transcribe/verses/hymn faked."""
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
     monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
     (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
     (tmp_path / "sheet.png").write_bytes(b"png")
@@ -143,9 +145,13 @@ def _assemble_env(tmp_path, monkeypatch):
         app_module.verses, "lookup_verses",
         lambda ref: [Verse(number=1, korean="한글", english="english")],
     )
+    monkeypatch.setattr(
+        app_module.hymn, "fetch_hymn_slides",
+        lambda number, work_dir, **kw: [work_dir / "slide-1.png", work_dir / "slide-2.png"],
+    )
 
 
-def test_assemble_populates_run(_assemble_env, monkeypatch) -> None:
+def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
         lambda _p: [Song(title="주 은혜임을", lines=["1절", "2절"])],
@@ -164,6 +170,30 @@ def test_assemble_populates_run(_assemble_env, monkeypatch) -> None:
     assert ref_row["passage"] == [
         {"number": 1, "korean": "한글", "english": "english"},
     ]
+    assert data.offering_hymn_images == [
+        str(tmp_path / "runs" / date / "hymn" / "slide-1.png"),
+        str(tmp_path / "runs" / date / "hymn" / "slide-2.png"),
+    ]
+
+
+def test_assemble_hymn_failure_is_nonfatal(_assemble_env, monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda _p: [Song(title="주 은혜임을", lines=["1절"])],
+    )
+
+    def _boom(number, work_dir, **kw):
+        raise RuntimeError("403 forbidden")
+
+    monkeypatch.setattr(app_module.hymn, "fetch_hymn_slides", _boom)
+
+    resp = client.post("/assemble")
+    date = resp.json()["service_date"]
+    status = client.get(f"/assemble/{date}/status").json()
+    # transcribe + verses still succeeded; only the hymn download is soft-failed.
+    assert status["status"] == "done"
+    assert "220" in status["warning"]
+    assert store.load(date).offering_hymn_images == []
 
 
 def test_assemble_no_bulletin_is_400(tmp_path, monkeypatch) -> None:
