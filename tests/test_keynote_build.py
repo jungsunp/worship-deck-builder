@@ -23,6 +23,7 @@ from worship_deck.keynote.build import (
     save_draft,
     set_announcement_slide,
     set_date_slides,
+    set_sermon_title_slide,
     set_slide_text,
     set_verse_slide,
 )
@@ -266,6 +267,28 @@ def test_set_slide_text_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
         "draft.key",
         "8",
         "첫째 줄\n둘째 줄",
+    ]
+
+
+def test_set_sermon_title_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_sermon_title_slide("draft.key", 134, "믿음의 경주", "[히 12:1-2]")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_SERMON_TITLE),
+        "draft.key",
+        "134",
+        "믿음의 경주",
+        "[히 12:1-2]",
     ]
 
 
@@ -613,6 +636,23 @@ def test_fill_verse_slides_live_resizes_sermon_no_leftover(
         assert kr_label in _on_canvas_text(str(draft), 129 + i)
     # the slide immediately after the resized section is no longer a 눅 verse slide
     assert "[눅" not in _on_canvas_text(str(draft), 129 + n)
+
+
+@pytest.mark.local_only
+def test_set_sermon_title_slide_live_sets_title_and_ref(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Slide 134 has a white title box + a gold scripture-ref box (the bracketed one). Both must
+    take their own text, and last week's reference must be gone — not duplicated across both (#90)."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    assert set_sermon_title_slide(str(draft), 134, "믿음의 경주", "[히 12:1-2]") == "ok"
+
+    text = _on_canvas_text(str(draft), 134)
+    assert "믿음의 경주" in text  # title box set
+    assert "[히 12:1-2]" in text  # ref box set
+    assert "[눅" not in text  # last week's reference is gone, not left in the gold box
 
 
 @pytest.mark.local_only
