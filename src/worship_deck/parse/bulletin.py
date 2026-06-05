@@ -32,6 +32,12 @@ _HYMN_NUM_RE = re.compile(r"찬\s*(\d+)\s*장?")
 _X_SPLIT = 105   # left of this → part name cell; right → content cell
 _X_RIGHT = 323   # right edge of the left column
 
+# Announcement (교회소식) middle-column bounds. A detail row whose right edge reaches near the
+# column's right margin (~721) is a soft column-wrap and is rejoined to the next row, rather than
+# kept as an intended line break (bullets / paragraph ends fall short of it). See announcement_blocks.
+_MID_LEFT, _MID_RIGHT = 339, 724
+_ANNOUNCE_WRAP_X = 712
+
 
 @dataclass
 class ServiceData:
@@ -145,26 +151,67 @@ def _parse_worship_order(page) -> list[dict]:
     return result
 
 
-def _parse_announcements(page) -> list[str]:
-    """Extract numbered announcement titles from the middle column of page 1.
+def _extract_announcements(page) -> list[dict]:
+    """Extract the middle-column 교회소식 items as {number, title, detail} dicts.
 
-    Each announcement is an <h3> in the HTML source rendered as "N. Title text".
-    The middle column sits at x0 339–724; the right column (기도제목) starts at
-    x0 ~724 so there is no overlap.  Only lines matching r'^\\d+\\.' are titles.
+    Each announcement is a numbered title row ("N. Title") followed by detail rows. The
+    bulletin renders detail as soft column-wraps: a row that reaches the column's right margin
+    (>= _ANNOUNCE_WRAP_X) is continued on the next row, so it is rejoined (no separator — Korean
+    wraps mid-text) into one flowing line; bullet rows ("·") and rows that fall short of the
+    margin start their own line. The middle column sits at x0 339–724; the right column
+    (기도제목) starts at ~724 so there is no overlap.
     """
-    mid_words = [w for w in page.extract_words() if 339 <= w["x0"] < 724]
+    mid_words = [w for w in page.extract_words() if _MID_LEFT <= w["x0"] < _MID_RIGHT]
 
-    rows: dict[int, list[str]] = {}
+    rows: dict[int, list] = {}
     for w in mid_words:
-        rows.setdefault(round(w["top"]), []).append(w["text"])
+        rows.setdefault(round(w["top"]), []).append(w)
 
-    announcements = []
+    anns: list[dict] = []
+    cur: dict | None = None
+    prev_wrapped = False
     for top in sorted(rows):
-        line = " ".join(rows[top])
-        m = re.match(r"^\d+\.\s+(.+)", line)
+        ws = sorted(rows[top], key=lambda w: w["x0"])
+        text = " ".join(w["text"] for w in ws).strip()
+        wrapped = max(w["x1"] for w in ws) >= _ANNOUNCE_WRAP_X
+        m = re.match(r"^(\d+)\.\s+(.+)", text)
         if m:
-            announcements.append(m.group(1).strip())
-    return announcements
+            cur = {"number": m.group(1), "title": m.group(2).strip(), "detail": []}
+            anns.append(cur)
+        elif cur is not None:  # detail row (skip any header text before the first numbered item)
+            if cur["detail"] and prev_wrapped and not text.startswith("·"):
+                cur["detail"][-1] += text  # rejoin a soft column-wrap
+            else:
+                cur["detail"].append(text)
+        prev_wrapped = wrapped
+    return anns
+
+
+def _parse_announcements(page) -> list[str]:
+    """Numbered announcement titles (number stripped) from the middle column of page 1."""
+    return [a["title"] for a in _extract_announcements(page)]
+
+
+def announcement_blocks(pdf_path: str) -> list[str]:
+    """Per-announcement slide text: "N. title" + blank line + reflowed detail lines (#16).
+
+    One string per 교회소식 item, ready for keynote.build.fill_announcement_slides — paragraph 1
+    (the numbered title) renders gold and the detail paragraphs render white. (pdfplumber)
+    """
+    import pdfplumber
+
+    logging.disable(logging.WARNING)
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            anns = _extract_announcements(pdf.pages[0])
+    finally:
+        logging.disable(logging.NOTSET)
+
+    blocks = []
+    for a in anns:
+        title = f"{a['number']}. {a['title']}"
+        blocks.append(title + ("\n\n" + "\n".join(a["detail"]) if a["detail"] else ""))
+    return blocks
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
