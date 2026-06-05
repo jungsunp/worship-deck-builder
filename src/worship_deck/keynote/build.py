@@ -24,6 +24,7 @@ _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.ap
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
+_SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
@@ -280,6 +281,23 @@ def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
     """
     key = str(Path(key_path).expanduser())
     return _run_osascript(_SET_SLIDE_TEXT, key, str(slide_index), text).strip()
+
+
+def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str) -> str:
+    """Set the 말씀 title slide's two on-canvas boxes — sermon title + scripture ref — in place (#90).
+
+    The standalone sermon title slide carries a white title box and a gold scripture-reference
+    box (plus off-canvas {0,0} leftovers). Unlike a worship title slide, the two boxes hold
+    DIFFERENT text, so set_slide_text (which sets every box to one string) would duplicate the
+    title across both. Boxes are classified by content — the bracketed one (e.g. "[눅 22:14-24]")
+    is the reference — never by index. `ref` includes brackets, e.g. "[히 12:1-2]"; pass "" to
+    blank the reference box. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_SERMON_TITLE, key, str(slide_index), title, ref).strip()
 
 
 def place_image(key_path: str, slide_index: int, image_path: str) -> str:
