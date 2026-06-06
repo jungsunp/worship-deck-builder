@@ -29,6 +29,7 @@ _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcem
 _SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
+_HYMN_IMAGE_BLOCK = Path(__file__).parent / "applescript" / "hymn_image_block.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -342,21 +343,26 @@ def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str
     return _run_osascript(_SET_SERMON_TITLE, key, str(slide_index), title, ref).strip()
 
 
-def place_image(key_path: str, slide_index: int, image_path: str) -> str:
+def place_image(
+    key_path: str, slide_index: int, image_path: str, *, clear_existing: bool = False
+) -> str:
     """Place a PNG full-bleed (aspect-fill) on the 1-based slide at slide_index, in place (#22).
 
     Adds the image and scales it to cover the whole slide, centered: Keynote locks an image's
     aspect ratio, so rather than stretching, the image fills the slide edge-to-edge and any
     overflow past one pair of edges is clipped on export (no margins). When the PNG already
     matches the deck's aspect ratio this is an exact fill. Used for genuinely-image slides:
-    downloaded 봉헌 hymn pages, band lead sheets, and media. Returns "ok".
+    downloaded 봉헌 hymn pages, band lead sheets, and media. With clear_existing=True, the slide's
+    existing images are deleted first (replace instead of stack) — used to swap last week's hymn
+    page for this week's. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
     img = str(Path(image_path).expanduser())
-    return _run_osascript(_PLACE_IMAGE, key, str(slide_index), img).strip()
+    clear = "1" if clear_existing else "0"
+    return _run_osascript(_PLACE_IMAGE, key, str(slide_index), img, clear).strip()
 
 
 def fill_song_slides(
@@ -542,6 +548,57 @@ def fill_announcement_slides(
     return target
 
 
+def hymn_image_block(key_path: str, start_index: int, max_scan: int = 20) -> tuple[int, int]:
+    """Find last week's 봉헌 hymn-page block: the contiguous image slides at/after start_index.
+
+    The offering-hymn section opens with title/intro slides that carry only native text (no image);
+    the hymn pages that follow are flat image slides. So the block to replace is the first run of
+    consecutive image-bearing slides scanning forward from start_index (the section anchor),
+    bounded by max_scan. Returns (first, last) 1-based indices, or (0, 0) if none are found.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_HYMN_IMAGE_BLOCK, key, str(start_index), str(max_scan))
+    first, last = (int(x) for x in out.split())
+    return first, last
+
+
+def fill_hymn_slides(key_path: str, section_start: int, image_paths: list[str]) -> int:
+    """Fill the 봉헌 block: replace last week's hymn pages with this week's PNGs, aspect-fill (#89).
+
+    The hymn page count varies week to week, so the block can't be a fixed size: hymn_image_block
+    detects last week's pages (the contiguous image slides at/after section_start, leaving the
+    section's title/intro text slides alone), then resizes that run to len(image_paths) — trimming
+    leftover pages or duplicating the first — and place_image(clear_existing=True)s each PNG in
+    order, deleting last week's page on each slide first so the new one replaces it rather than
+    stacking on top. The list is already trimmed to the verse slides the operator kept in review
+    (#84/#25). Returns slides used.
+
+    Note: resizing shifts the indices of all later slides; a caller filling several expanding
+    sections should fill later sections first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails, or if no
+            existing hymn-image slides are found to replace.
+    """
+    first, last = hymn_image_block(key_path, section_start)
+    if first == 0:
+        raise RuntimeError(
+            f"No 봉헌 hymn-image slides found at/after slide {section_start} to replace."
+        )
+    existing_count = last - first + 1
+    target = len(image_paths)
+    if existing_count > target:
+        delete_slides(key_path, first + target, existing_count - target)
+    elif target > existing_count:
+        duplicate_slide(key_path, first, target - existing_count)
+    for i, img in enumerate(image_paths):
+        place_image(key_path, first + i, img, clear_existing=True)
+    return target
+
+
 def build(data: ServiceData, template_key: str, out_key: str) -> str:
     """Build the weekly draft deck from the template and the reviewed run store (#29).
 
@@ -550,10 +607,8 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     are filled BACK-TO-FRONT by slide anchor: every expanding fill (verses/announcements/medley)
     shifts the indices of all later slides, so filling the latest section first keeps every
     still-unfilled earlier section at its template anchor. `set_date_slides` is count-neutral
-    (in-place text) so it runs first. Each section is skipped when its content is absent.
-
-    One section has no fill primitive yet and keeps its template content until its issue lands:
-    봉헌 hymn images (#89).
+    (in-place text) so it runs first, then the ad-hoc 말씀 special block is dropped (#97) before
+    any section fill. Each section is skipped when its content is absent.
 
     Returns the draft .key path.
 
@@ -566,7 +621,17 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     sermon_bracket = f"[{data.sermon_ref}]" if data.sermon_ref else ""
     set_date_slides(out_key, data.date, data.sermon_title, sermon_bracket)
 
-    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 교회소식 (117) -> 예배의 부름 (48) -> 찬양 medley (6)
+    # 말씀 ad-hoc special block (135–152, 18 slides): last week's pastor-requested slides
+    # (extra songs, message/poem cards) that sit between the sermon-title slide (134) and the
+    # recurring 파송의 노래/축도/주기도문 closing. They never recur, so a fresh deck must drop them
+    # — the operator adds this week's specials manually in review (#97). Deleted FIRST because it
+    # is the highest-index count-changing op in the build: the template anchor 135 is still exact
+    # here, every later fill runs at a LOWER index (so this deletion can't shift their anchors,
+    # nor they this one). Unconditional — the block is always present in the template, regardless
+    # of this week's data. Re-verify the 135/18 anchor whenever master.key is replaced (#98).
+    delete_slides(out_key, 135, 18)
+
+    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 예배의 부름 (48) -> 찬양 medley (6)
     # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse
     # fill resizes/shifts it (#90). Same title/ref the date slides carry.
     if data.sermon_title:
@@ -580,7 +645,11 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     if data.announcements:
         fill_announcement_slides(out_key, 117, data.announcements, existing_count=5)
 
-    # GAP (#89): 봉헌 offering-hymn image block (97–106) keeps template content.
+    # 봉헌 offering-hymn images: replace last week's pages (detected at/after slide 97, after the
+    # section's title/intro slides) with this week's. An empty list (failed/absent download) keeps
+    # the template's pages for the operator to fix manually rather than replacing them with none.
+    if data.offering_hymn_images:
+        fill_hymn_slides(out_key, 97, data.offering_hymn_images)
 
     if data.choir_song:
         fill_choir_slides(out_key, 77, Song(**data.choir_song))

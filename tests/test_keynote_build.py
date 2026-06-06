@@ -17,9 +17,11 @@ from worship_deck.keynote.build import (
     duplicate_slide,
     fill_announcement_slides,
     fill_choir_slides,
+    fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
     fill_worship_songs,
+    hymn_image_block,
     place_image,
     read_verse_boxes,
     save_draft,
@@ -319,7 +321,22 @@ def test_place_image_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
         "draft.key",
         "5",
         "/tmp/slide-1.png",
+        "0",  # clear_existing off by default
     ]
+
+
+def test_place_image_clear_existing_passes_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    place_image("draft.key", 5, "/tmp/slide-1.png", clear_existing=True)
+
+    assert captured["cmd"][-1] == "1"  # delete existing images first
 
 
 def test_place_image_raises_on_nonzero_returncode(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -589,6 +606,70 @@ def test_fill_announcement_slides_empty_list_trims_whole_block(
     assert calls["delete"] == (117, 5)  # whole block trimmed
     assert calls["duplicate"] is None
     assert calls["set"] == []  # nothing to set
+
+
+# ---------------------------------------------------------------------------
+# fill_hymn_slides — mocked primitives (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def _mock_hymn_primitives(monkeypatch: pytest.MonkeyPatch, block: tuple[int, int]) -> dict:
+    """Record fill_hymn_slides' Keynote primitive calls; stub the detected image block.
+
+    `block` is the (first, last) image-slide run hymn_image_block would detect in the template —
+    e.g. (99, 106) for an 8-page hymn after the section's two title/intro slides.
+    """
+    calls: dict = {"place": [], "duplicate": None, "delete": None}
+    monkeypatch.setattr(B, "hymn_image_block", lambda k, s, *a: block)
+    monkeypatch.setattr(
+        B, "place_image",
+        lambda k, i, p, *, clear_existing=False: calls["place"].append((i, p, clear_existing)),
+    )
+    monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    return calls
+
+
+def test_fill_hymn_slides_duplicates_when_images_exceed_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_hymn_primitives(monkeypatch, block=(99, 106))  # 8 existing pages
+    images = [f"slide-{i}.png" for i in range(1, 13)]  # 12 images
+
+    n = fill_hymn_slides("k", 97, images)
+
+    assert n == 12
+    assert calls["duplicate"] == (99, 4)  # add 4 to reach 12, from the block's first slide
+    assert calls["delete"] is None
+    # placed from the block's first slide (title slides untouched), each replacing last week's page
+    assert calls["place"] == [(99 + i, img, True) for i, img in enumerate(images)]
+
+
+def test_fill_hymn_slides_trims_when_block_has_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_hymn_primitives(monkeypatch, block=(99, 106))  # 8 existing pages
+    images = ["slide-1.png", "slide-2.png", "slide-3.png"]
+
+    n = fill_hymn_slides("k", 97, images)
+
+    assert n == 3
+    assert calls["delete"] == (102, 5)  # trim 5 leftover pages at first+target
+    assert calls["duplicate"] is None
+    assert calls["place"] == [
+        (99, "slide-1.png", True),
+        (100, "slide-2.png", True),
+        (101, "slide-3.png", True),
+    ]
+
+
+def test_fill_hymn_slides_raises_when_no_image_block(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_hymn_primitives(monkeypatch, block=(0, 0))  # no hymn pages detected
+
+    with pytest.raises(RuntimeError, match="No 봉헌 hymn-image slides"):
+        fill_hymn_slides("k", 97, ["slide-1.png"])
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +948,78 @@ def test_place_image_live_covers_slide_centered(
     assert abs(px - (dw - w) / 2) < 1 and abs(py - (dh - h) / 2) < 1  # centered (overflow split)
 
 
+def _slide_count(key_path: str) -> int:
+    """Read the deck's total slide count (Mac-only)."""
+    out = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'on run argv\ntell application "Keynote"\nactivate\n'
+            "set d to open (POSIX file (item 1 of argv))\nset n to count of slides of d\n"
+            "close d saving no\nreturn n as text\nend tell\nend run\n",
+            key_path,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+    return int(out.strip())
+
+
+def _image_count(key_path: str, slide_index: int) -> int:
+    """Number of images on a 1-based slide (Mac-only)."""
+    out = subprocess.run(
+        [
+            "osascript",
+            "-e",
+            'on run argv\ntell application "Keynote"\nactivate\n'
+            "set d to open (POSIX file (item 1 of argv))\n"
+            "set n to count of images of slide ((item 2 of argv) as integer) of d\n"
+            "close d saving no\nreturn n as text\nend tell\nend run\n",
+            key_path,
+            str(slide_index),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout
+    return int(out.strip())
+
+
+@pytest.mark.local_only
+def test_fill_hymn_slides_live_replaces_block_and_keeps_titles(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Replacing last week's hymn pages with fewer PNGs must trim the leftovers (total drops by the
+    surplus), place an aspect-fill image covering each new page, and leave the section's title/intro
+    text slides (before the detected image block) image-free — no hymn page bleeds onto them."""
+    from PIL import Image
+
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+    before = _slide_count(str(draft))
+
+    first, last = hymn_image_block(str(draft), 97)
+    existing = last - first + 1
+    assert first >= 97 and existing >= 2  # template carries last week's multi-page hymn
+
+    images = []
+    for i in range(1, 3):  # fewer than `existing` to force a trim of leftovers
+        png = tmp_path / f"slide-{i}.png"
+        Image.new("RGB", (400, 300), "white").save(png)
+        images.append(str(png))
+
+    n = fill_hymn_slides(str(draft), 97, images)
+    assert n == 2
+    assert _slide_count(str(draft)) == before - (existing - 2)  # leftover pages trimmed
+    assert _image_count(str(draft), first - 1) == 0  # title/intro slide before the block untouched
+
+    for idx in (first, first + 1):
+        cnt, _px, _py, w, h, dw, dh = _last_image_frame(str(draft), idx)
+        assert cnt == 1  # last week's page was cleared, not stacked under the new one
+        assert w >= dw - 1 and h >= dh - 1  # the placed image covers the slide
+
+
 # ---------------------------------------------------------------------------
 # build — section orchestration (CI-safe: fill primitives stubbed, no Mac)
 # ---------------------------------------------------------------------------
@@ -889,9 +1042,11 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     for name in (
         "save_draft",
         "set_date_slides",
+        "delete_slides",
         "set_sermon_title_slide",
         "fill_verse_slides",
         "fill_announcement_slides",
+        "fill_hymn_slides",
         "fill_choir_slides",
         "fill_worship_songs",
     ):
@@ -915,6 +1070,7 @@ def _full_run() -> ServiceData:
         sermon_title="믿음의 경주",
         sermon_ref="히 12:1-2",
         announcements=["공지 하나", "공지 둘"],
+        offering_hymn_images=["slide-1.png", "slide-2.png"],
     )
 
 
@@ -924,14 +1080,18 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
     assert build(_full_run(), "tpl.key", "out.key") == "out.key"
 
     names = [c[0] for c in calls]
-    # save_draft first, then date (count-neutral); then back-to-front by anchor: title
-    # @134 (before the 129 verse fill shifts it) → sermon verses → announce → ctw → medley.
+    # save_draft first, then date (count-neutral), then the ad-hoc 말씀 special-block delete
+    # (highest-index count-changing op, so the 135 anchor is still exact here); then back-to-front
+    # by anchor: title @134 (before the 129 verse fill shifts it) → sermon verses → announce →
+    # hymn → choir → ctw → medley.
     assert names == [
         "save_draft",
         "set_date_slides",
+        "delete_slides",           # 말씀 ad-hoc special block @135 (#97)
         "set_sermon_title_slide",  # 말씀 title @134
         "fill_verse_slides",       # 말씀 @129
         "fill_announcement_slides",  # 교회소식 @117
+        "fill_hymn_slides",        # 봉헌 @97
         "fill_choir_slides",       # 성가대 @77
         "fill_verse_slides",       # 예배의 부름 @48
         "fill_worship_songs",      # 찬양 medley @6
@@ -939,6 +1099,8 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
 
     by_name = {c[0]: c for c in calls}
     assert by_name["save_draft"][1] == ("tpl.key", "out.key")
+    # the ad-hoc 말씀 special block: 18 slides dropped at the template anchor 135 (#97).
+    assert by_name["delete_slides"][1] == ("out.key", 135, 18)
     # date slide takes the top-level sermon title + bracketed ref.
     assert by_name["set_date_slides"][1] == ("out.key", "2026년 6월 7일", "믿음의 경주", "[히 12:1-2]")
     # standalone 말씀 title slide (134) gets the same sermon title + bracketed ref.
@@ -956,6 +1118,10 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
     assert announce[1] == ("out.key", 117, ["공지 하나", "공지 둘"])
     assert announce[2] == {"existing_count": 5}
 
+    hymn = by_name["fill_hymn_slides"]
+    assert hymn[1] == ("out.key", 97, ["slide-1.png", "slide-2.png"])  # detects the block itself
+    assert hymn[2] == {}
+
     choir = by_name["fill_choir_slides"]
     assert choir[1] == (
         "out.key",
@@ -972,6 +1138,8 @@ def test_build_skips_empty_sections(monkeypatch: pytest.MonkeyPatch) -> None:
 
     build(ServiceData(date="2026년 6월 7일"), "tpl.key", "out.key")
 
-    # No worship_order, no announcements → only the copy + the count-neutral date stamp run.
-    assert [c[0] for c in calls] == ["save_draft", "set_date_slides"]
+    # No worship_order, no announcements → only the copy, the count-neutral date stamp, and the
+    # unconditional ad-hoc special-block delete (always present in the template) run.
+    assert [c[0] for c in calls] == ["save_draft", "set_date_slides", "delete_slides"]
     assert calls[1][1] == ("out.key", "2026년 6월 7일", "", "")
+    assert calls[2][1] == ("out.key", 135, 18)
