@@ -6,22 +6,32 @@ tested independently. Human review happens in the web app between `assemble` and
 
 from __future__ import annotations
 
-from . import obs
+import os
+from pathlib import Path
+
+from . import obs, store
+from .keynote import build as keynote_build
 
 
-def run(service_date: str, inbox_dir: str) -> str:
-    """Build a draft deck for the given service date. Returns the draft .key path.
+def run(service_date: str) -> str:
+    """Build a draft deck from the reviewed run store. Returns the draft .key path (#29).
 
-    Steps (to implement):
-      1. parse.bulletin       -> worship order, announcements, Bible refs, sermon title
-      2. lyrics.transcribe    -> ordered lyric lines from band/choir sheet images
-      3. bible.verses         -> 개역한글 + ESV text for each reference
-      4. (review in web app)  -> human confirms song order & line breaks
-      5. keynote.build        -> from the template deck, duplicate section slides to fit
-                                 the week's content and set each slide's native text;
-                                 place downloaded hymn images + lead-sheet/media slides
+    The "build" phase of the two-phase, web-driven run: parse + transcribe + verses happen at
+    assemble time and the operator's edits are persisted to the per-run store, so this step just
+    loads the reviewed `ServiceData` and drives Keynote to produce data/drafts/draft-<date>.key.
+    Wrapped in `obs.run_record` so timing/failures are logged and pushed to the phone.
+
+    Raises:
+        FileNotFoundError: if no run has been assembled for `service_date`.
+        RuntimeError: if TEMPLATE_KEY is unset, or a Keynote script fails (not on a Mac, etc.).
     """
     logger = obs.configure_logging()
     with obs.run_record(service_date):
-        logger.info("Starting deck build for %s (inbox=%s)", service_date, inbox_dir)
-        raise NotImplementedError
+        logger.info("Starting deck build for %s", service_date)
+        data = store.load(service_date)
+        template = os.environ.get("TEMPLATE_KEY")
+        if not template:
+            raise RuntimeError("TEMPLATE_KEY is not set — point it at the master .key template.")
+        # Absolute path: Keynote's `save ... in (POSIX file ...)` throws -609 on a relative path.
+        out = str(Path(f"data/drafts/draft-{service_date}.key").resolve())
+        return keynote_build.build(data, template, out)

@@ -11,10 +11,12 @@ from worship_deck.bible.verses import Verse
 from worship_deck.keynote import build as B
 from worship_deck.keynote.build import (
     _chunk_verses,
+    build,
     delete_slides,
     duplicate_block,
     duplicate_slide,
     fill_announcement_slides,
+    fill_choir_slides,
     fill_song_slides,
     fill_verse_slides,
     fill_worship_songs,
@@ -22,12 +24,14 @@ from worship_deck.keynote.build import (
     read_verse_boxes,
     save_draft,
     set_announcement_slide,
+    set_choir_title,
     set_date_slides,
     set_sermon_title_slide,
     set_slide_text,
     set_verse_slide,
 )
 from worship_deck.lyrics.transcribe import Song, chunk
+from worship_deck.parse.bulletin import ServiceData
 
 # Body-box geometry from master.key (width, height), used to drive the chunk model in tests.
 _CTW_KO_BOX, _CTW_EN_BOX = (1844, 544), (1836, 298)   # call-to-worship (slide 48)
@@ -379,6 +383,75 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
 
 
 # ---------------------------------------------------------------------------
+# set_choir_title / fill_choir_slides — mocked (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_choir_title_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_choir_title("draft.key", 77, "사랑은", "(윤학준 곡)")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_CHOIR_TITLE),
+        "draft.key",
+        "77",
+        "사랑은",
+        "(윤학준 곡)",
+    ]
+
+
+def _mock_choir_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Record fill_choir_slides' Keynote primitive calls instead of running osascript."""
+    calls: dict = {"title": [], "lyric": [], "duplicate": None, "delete": None}
+    monkeypatch.setattr(B, "set_choir_title", lambda k, i, t, c: calls["title"].append((i, t, c)))
+    monkeypatch.setattr(B, "set_slide_text", lambda k, i, t: calls["lyric"].append((i, t)))
+    monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    return calls
+
+
+def test_fill_choir_slides_duplicates_when_chunks_exceed_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_choir_primitives(monkeypatch)
+    song = Song(title="사랑은", lines=["1", "2", "3"], composer="윤학준 편곡")  # 3 lines -> 2 chunks
+
+    n = fill_choir_slides("k", 77, song, title_count=2, existing_lyric_count=1)
+
+    assert n == 4  # 2 title slides + 2 lyric chunks
+    # both title slides get the same title; a bare composer is parenthesized for the credit
+    assert calls["title"] == [(77, "사랑은", "(윤학준 편곡)"), (78, "사랑은", "(윤학준 편곡)")]
+    assert calls["duplicate"] == (79, 1)  # first_lyric=79, add 1 to reach 2
+    assert calls["delete"] is None
+    assert calls["lyric"] == [(79, "1\n2"), (80, "3")]
+
+
+def test_fill_choir_slides_trims_when_template_has_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_choir_primitives(monkeypatch)
+    song = Song(title="사랑은", lines=["1", "2", "3"], composer="(윤학준 곡)")  # 2 chunks
+
+    n = fill_choir_slides("k", 77, song, title_count=2, existing_lyric_count=17)
+
+    assert n == 4
+    # a composer that already carries its own parentheses is not double-wrapped
+    assert calls["title"] == [(77, "사랑은", "(윤학준 곡)"), (78, "사랑은", "(윤학준 곡)")]
+    assert calls["delete"] == (81, 15)  # trim 15 surplus slides at first_lyric+target (79+2)
+    assert calls["duplicate"] is None
+    assert [i for i, _ in calls["lyric"]] == [79, 80]
+
+
+# ---------------------------------------------------------------------------
 # fill_worship_songs — mocked primitives (CI-safe, no Mac)
 # ---------------------------------------------------------------------------
 
@@ -682,6 +755,30 @@ def test_fill_song_slides_live_fills_title_and_trims_leftover(
 
 
 @pytest.mark.local_only
+def test_fill_choir_slides_live_fills_titles_composer_and_lyrics(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """The 성가대 block is 2 title slides (77-78) + 17 lyric slides (79-95). Filling a 3-line song
+    (2 chunks) must set the song title + composer on both title slides (keeping slide 77's static
+    '성가대 찬양' heading), fill 2 lyric slides, and trim the 15 surplus so none remain after."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    song = Song(title="테스트 성가", lines=["첫째 줄", "둘째 줄", "셋째 줄"], composer="테스트 곡")
+
+    n = fill_choir_slides(str(draft), 77, song, existing_lyric_count=17)
+    assert n == 4  # 2 title slides + 2 lyric chunks
+
+    s77, s78 = _on_canvas_text(str(draft), 77), _on_canvas_text(str(draft), 78)
+    assert "테스트 성가" in s77 and "(테스트 곡)" in s77 and "성가대 찬양" in s77  # heading kept
+    assert "테스트 성가" in s78 and "(테스트 곡)" in s78
+    assert "첫째 줄" in _on_canvas_text(str(draft), 79) and "둘째 줄" in _on_canvas_text(str(draft), 79)
+    assert "셋째 줄" in _on_canvas_text(str(draft), 80)
+    # the slide right after the resized lyric block holds none of this song's lyrics (no leftover)
+    assert "줄" not in _on_canvas_text(str(draft), 81)
+
+
+@pytest.mark.local_only
 def test_fill_announcement_slides_live_resizes_no_leftover(
     real_template_key: Path, tmp_path: Path
 ) -> None:
@@ -768,3 +865,113 @@ def test_place_image_live_covers_slide_centered(
     assert w >= dw - 1 and h >= dh - 1  # covers the slide on both axes (no margins)
     assert abs(w - dw) < 1 or abs(h - dh) < 1  # exactly meets the slide on the constraining axis
     assert abs(px - (dw - w) / 2) < 1 and abs(py - (dh - h) / 2) < 1  # centered (overflow split)
+
+
+# ---------------------------------------------------------------------------
+# build — section orchestration (CI-safe: fill primitives stubbed, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+    """Replace every fill primitive build() drives with a recorder; return the call log.
+
+    build() calls these by their module-global name, so patching them on `B` intercepts the
+    dispatch without touching osascript — the test asserts the order/anchors/args headlessly.
+    """
+    calls: list[tuple] = []
+
+    def rec(name):
+        def f(*args, **kwargs):
+            calls.append((name, args, kwargs))
+            return 0
+        return f
+
+    for name in (
+        "save_draft",
+        "set_date_slides",
+        "set_sermon_title_slide",
+        "fill_verse_slides",
+        "fill_announcement_slides",
+        "fill_choir_slides",
+        "fill_worship_songs",
+    ):
+        monkeypatch.setattr(B, name, rec(name))
+    # Stubbed silently (not recorded): build() calls it before save_draft to clear stale docs;
+    # it would otherwise launch Keynote and isn't part of the section-dispatch sequence.
+    monkeypatch.setattr(B, "_ensure_keynote_ready", lambda *a, **k: None)
+    return calls
+
+
+def _full_run() -> ServiceData:
+    """A reviewed run with every section's content in its top-level field (build ignores the
+    worship_order skeleton)."""
+    return ServiceData(
+        date="2026년 6월 7일",
+        worship_songs=[{"title": "주 은혜임을", "lines": ["한 줄", "두 줄"], "composer": "작곡"}],
+        choir_song={"title": "사랑은", "lines": ["사랑은", "오래참고"], "composer": "(윤학준 곡)"},
+        call_to_worship_passage=[{"number": 1, "korean": "보라 형제가", "english": "Behold"}],
+        call_to_worship_ref="시 133:1-3",
+        sermon_passage=[{"number": 1, "korean": "구름 같이", "english": "cloud"}],
+        sermon_title="믿음의 경주",
+        sermon_ref="히 12:1-2",
+        announcements=["공지 하나", "공지 둘"],
+    )
+
+
+def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_fills(monkeypatch)
+
+    assert build(_full_run(), "tpl.key", "out.key") == "out.key"
+
+    names = [c[0] for c in calls]
+    # save_draft first, then date (count-neutral); then back-to-front by anchor: title
+    # @134 (before the 129 verse fill shifts it) → sermon verses → announce → ctw → medley.
+    assert names == [
+        "save_draft",
+        "set_date_slides",
+        "set_sermon_title_slide",  # 말씀 title @134
+        "fill_verse_slides",       # 말씀 @129
+        "fill_announcement_slides",  # 교회소식 @117
+        "fill_choir_slides",       # 성가대 @77
+        "fill_verse_slides",       # 예배의 부름 @48
+        "fill_worship_songs",      # 찬양 medley @6
+    ]
+
+    by_name = {c[0]: c for c in calls}
+    assert by_name["save_draft"][1] == ("tpl.key", "out.key")
+    # date slide takes the top-level sermon title + bracketed ref.
+    assert by_name["set_date_slides"][1] == ("out.key", "2026년 6월 7일", "믿음의 경주", "[히 12:1-2]")
+    # standalone 말씀 title slide (134) gets the same sermon title + bracketed ref.
+    assert by_name["set_sermon_title_slide"][1] == ("out.key", 134, "믿음의 경주", "[히 12:1-2]")
+
+    sermon_call, ctw_call = (c for c in calls if c[0] == "fill_verse_slides")
+    assert sermon_call[1][0:2] == ("out.key", 129)
+    assert sermon_call[2] == {"existing_count": 4}
+    assert sermon_call[1][4] == [Verse(1, "구름 같이", "cloud")]  # passage dict → Verse
+    assert ctw_call[1][0:2] == ("out.key", 48)
+    assert ctw_call[2] == {"existing_count": 1}
+    assert ctw_call[1][4] == [Verse(1, "보라 형제가", "Behold")]
+
+    announce = by_name["fill_announcement_slides"]
+    assert announce[1] == ("out.key", 117, ["공지 하나", "공지 둘"])
+    assert announce[2] == {"existing_count": 5}
+
+    choir = by_name["fill_choir_slides"]
+    assert choir[1] == (
+        "out.key",
+        77,
+        Song(title="사랑은", lines=["사랑은", "오래참고"], composer="(윤학준 곡)"),
+    )
+
+    medley = by_name["fill_worship_songs"]
+    assert medley[1] == ("out.key", 6, 41, [Song(title="주 은혜임을", lines=["한 줄", "두 줄"], composer="작곡")])
+
+
+def test_build_skips_empty_sections(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _stub_fills(monkeypatch)
+
+    build(ServiceData(date="2026년 6월 7일"), "tpl.key", "out.key")
+
+    # No worship_order, no announcements → only the copy + the count-neutral date stamp run.
+    assert [c[0] for c in calls] == ["save_draft", "set_date_slides"]
+    assert calls[1][1] == ("out.key", "2026년 6월 7일", "", "")

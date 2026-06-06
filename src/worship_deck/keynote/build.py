@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import math
 import subprocess
+import time
 from pathlib import Path
 
-from worship_deck.bible.verses import Verse
+from worship_deck.bible.verses import Verse, verse_labels
 from worship_deck.lyrics.transcribe import Song, chunk
+from worship_deck.parse.bulletin import ServiceData
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
@@ -24,6 +26,7 @@ _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.ap
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
+_SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 
@@ -55,6 +58,45 @@ def _run_osascript(script: Path, *args: str) -> str:
     if result.returncode != 0:
         raise RuntimeError(f"Keynote script {script.name} failed: {result.stderr.strip()}")
     return result.stdout
+
+
+def _ensure_keynote_ready(settle: int = 8, tries: int = 20) -> None:
+    """Launch Keynote, wait for scripting, and confirm it has ZERO open documents.
+
+    A document left open by a prior run (e.g. an eyeball draft) makes the next `open` return
+    `missing value` (-1700) and can wedge the save (-609/-1712). So before building we close
+    every document and poll the count to 0, retrying. Never force-quit to reset — that leaves
+    the scripting bridge in a -609 ("connection is invalid") state; a clean launch + settle +
+    doc-clearing is the reliable reset. Mirrors the eyeball-deck helper's `ensure_keynote_ready`.
+    """
+    subprocess.run(["open", "-a", "Keynote"], check=False)
+    time.sleep(settle)
+    for _ in range(tries):
+        if subprocess.run(
+            ["osascript", "-e", 'tell application "Keynote" to get name'],
+            capture_output=True, text=True,
+        ).returncode == 0:
+            break
+        time.sleep(1)
+    else:
+        raise RuntimeError("Keynote did not become responsive — launch it manually, then retry.")
+    for _ in range(tries):
+        subprocess.run(
+            ["osascript", "-e", 'tell application "Keynote" to close every document saving no'],
+            check=False,
+        )
+        r = subprocess.run(
+            ["osascript", "-e", 'tell application "Keynote" to count documents'],
+            capture_output=True, text=True,
+        )
+        if r.returncode == 0 and r.stdout.strip() == "0":
+            return
+        time.sleep(1)
+    raise RuntimeError(
+        "Keynote still has documents open after repeated close attempts — it is likely wedged "
+        "(a stuck save or modal dialog). Quit Keynote manually (not force-quit during a save), "
+        "relaunch, and retry."
+    )
 
 
 def save_draft(template_key: str, out_key: str) -> str:
@@ -351,6 +393,64 @@ def fill_song_slides(
     return 1 + target
 
 
+def set_choir_title(key_path: str, slide_index: int, title: str, composer: str) -> str:
+    """Set a 성가대 title slide's song title + composer credit, in place (#88).
+
+    The two choir title slides are laid out differently in master.key. The section-divider slide
+    is one box of three paragraphs — a static "성가대 찬양" heading, the title, then the composer —
+    so the heading is kept and `title`/`composer` go in paragraphs 2/3 (per-paragraph styling
+    preserved). The title-card slide is a single-line lower-third bar, so it takes the combined
+    "title composer" line. The script picks the branch per box (heading box vs single-line);
+    off-canvas leftovers are skipped. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_CHOIR_TITLE, key, str(slide_index), title, composer).strip()
+
+
+def fill_choir_slides(
+    key_path: str,
+    title_index: int,
+    song: Song,
+    *,
+    title_count: int = 2,
+    existing_lyric_count: int = 17,
+) -> int:
+    """Fill the 성가대 section: title slides + ≤2-line lyric slides, resizing to fit (#88).
+
+    Sets the song's title + composer on each of the `title_count` title slides starting at
+    title_index (`set_choir_title` keeps the static "성가대 찬양" heading), chunks song.lines into
+    ≤2-line lyric slides (lyrics.transcribe.chunk), then resizes the lyric block from its template
+    `existing_lyric_count` slides to the chunk count (trimming surplus or duplicating the first
+    lyric slide) and fills each. The composer credit is shown parenthesized (matching the deck,
+    e.g. "(노희석 편곡)") unless the pasted credit already carries its own parentheses. Returns the
+    total slides used (title_count + N lyrics).
+
+    Note: resizing shifts the indices of all later slides by (chunks - existing_lyric_count); a
+    caller filling later sections must fill them first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    composer = song.composer
+    if composer and not composer.startswith("("):
+        composer = f"({composer})"
+    for i in range(title_count):
+        set_choir_title(key_path, title_index + i, song.title, composer)
+    chunks = chunk(song.lines)
+    target = len(chunks)
+    first_lyric = title_index + title_count
+    if existing_lyric_count > target:
+        delete_slides(key_path, first_lyric + target, existing_lyric_count - target)
+    elif target > existing_lyric_count:
+        duplicate_slide(key_path, first_lyric, target - existing_lyric_count)
+    for i, lines in enumerate(chunks):
+        set_slide_text(key_path, first_lyric + i, "\n".join(lines))
+    return title_count + target
+
+
 # A worship-song unit in the template: 3 slides — a blank-green separator, a title slide,
 # and one lyric slide — at start_index, +1, +2. fill_song_slides expands the lyric slide.
 _WORSHIP_UNIT = 3
@@ -442,9 +542,59 @@ def fill_announcement_slides(
     return target
 
 
-def build(template_key: str, slides: list[dict], out_key: str) -> str:
-    """Generate a fresh deck from the template with the given ordered slides."""
-    raise NotImplementedError
+def build(data: ServiceData, template_key: str, out_key: str) -> str:
+    """Build the weekly draft deck from the template and the reviewed run store (#29).
+
+    Saves a copy of the template, then fills each section's native text from `data`'s top-level
+    section fields (worship_songs / choir_song / *_passage / announcements / sermon_*). Sections
+    are filled BACK-TO-FRONT by slide anchor: every expanding fill (verses/announcements/medley)
+    shifts the indices of all later slides, so filling the latest section first keeps every
+    still-unfilled earlier section at its template anchor. `set_date_slides` is count-neutral
+    (in-place text) so it runs first. Each section is skipped when its content is absent.
+
+    One section has no fill primitive yet and keeps its template content until its issue lands:
+    봉헌 hymn images (#89).
+
+    Returns the draft .key path.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    _ensure_keynote_ready()  # clear stale open docs first, else `open` returns missing value (-1700)
+    save_draft(template_key, out_key)
+
+    sermon_bracket = f"[{data.sermon_ref}]" if data.sermon_ref else ""
+    set_date_slides(out_key, data.date, data.sermon_title, sermon_bracket)
+
+    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 교회소식 (117) -> 예배의 부름 (48) -> 찬양 medley (6)
+    # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse
+    # fill resizes/shifts it (#90). Same title/ref the date slides carry.
+    if data.sermon_title:
+        set_sermon_title_slide(out_key, 134, data.sermon_title, sermon_bracket)
+
+    if data.sermon_passage:
+        kr_label, en_label = verse_labels(data.sermon_ref)
+        verses = [Verse(**v) for v in data.sermon_passage]
+        fill_verse_slides(out_key, 129, kr_label, en_label, verses, existing_count=4)
+
+    if data.announcements:
+        fill_announcement_slides(out_key, 117, data.announcements, existing_count=5)
+
+    # GAP (#89): 봉헌 offering-hymn image block (97–106) keeps template content.
+
+    if data.choir_song:
+        fill_choir_slides(out_key, 77, Song(**data.choir_song))
+
+    if data.call_to_worship_passage:
+        kr_label, en_label = verse_labels(data.call_to_worship_ref)
+        verses = [Verse(**v) for v in data.call_to_worship_passage]
+        fill_verse_slides(out_key, 48, kr_label, en_label, verses, existing_count=1)
+
+    if data.worship_songs:
+        songs = [Song(**s) for s in data.worship_songs]
+        fill_worship_songs(out_key, 6, 41, songs)
+
+    return out_key
 
 
 def export_pdf(key_path: str, out_pdf: str) -> str:

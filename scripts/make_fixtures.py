@@ -123,7 +123,7 @@ def _bulletin_html() -> str:
     <table class="order">
       <!-- 마라나타 is the worship BAND NAME (matches the real bulletin), not a song
            title. The bulletin lists no opening-worship songs; they come from the
-           band lead sheet and are attached to this slot by lyrics.match. -->
+           band lead sheet into the top-level worship_songs field at assemble time. -->
       <tr><td><span class="part">찬 양</span>마라나타</td></tr>
       <tr><td><span class="part">예배의 부름</span>시 133:1-3 &nbsp; {p}</td></tr>
       <tr><td><span class="part">고백의 찬양*</span>믿음으로 우리는 &nbsp; 다함께</td></tr>
