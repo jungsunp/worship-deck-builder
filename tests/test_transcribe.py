@@ -66,6 +66,23 @@ def test_reassemble_parses_songs(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
 
 
+def test_reassemble_drops_blank_lines_and_empty_songs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Blank lyric lines are stripped and an empty trailing song is dropped."""
+    import httpx
+
+    payload = _ollama_payload(
+        [
+            {"title": "실제곡", "lines": ["가사 한 줄", "  ", "", "가사 두 줄"]},
+            {"title": "", "lines": []},  # empty trailing song dropped
+        ]
+    )
+    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(payload))
+
+    assert T._reassemble(["x"]) == [Song(title="실제곡", lines=["가사 한 줄", "가사 두 줄"])]
+
+
 def test_reassemble_sends_model_and_format(monkeypatch: pytest.MonkeyPatch) -> None:
     import httpx
 

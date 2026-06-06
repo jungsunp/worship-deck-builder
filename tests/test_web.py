@@ -324,3 +324,45 @@ def test_review_page_served() -> None:
 
 def test_index_links_to_review() -> None:
     assert "/review/" in client.get("/").text
+
+
+# ── /runs/{date}/build (Generate) ────────────────────────────────────────────
+# pipeline.run drives real Keynote (local_only); monkeypatch it + the `open` so these run on CI.
+# Starlette's TestClient runs the BackgroundTask before returning, so status is terminal.
+
+
+def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+    opened: list = []
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: opened.append(a))
+
+    resp = client.post(f"/runs/{_runs}/build")
+    assert resp.status_code == 200
+    assert resp.json()["status_url"] == f"/runs/{_runs}/build/status"
+
+    status = client.get(f"/runs/{_runs}/build/status").json()
+    assert status["status"] == "done"
+    assert status["path"] == f"/tmp/draft-{_runs}.key"
+    assert opened and opened[0][0] == ["open", f"/tmp/draft-{_runs}.key"]
+
+
+def test_build_missing_run_is_404(_runs) -> None:
+    assert client.post(f"/runs/{_runs}/build").status_code == 404
+
+
+def test_build_records_error(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+
+    def _boom(_d):
+        raise RuntimeError("keynote wedged")
+
+    monkeypatch.setattr(app_module.pipeline, "run", _boom)
+    client.post(f"/runs/{_runs}/build")
+    status = client.get(f"/runs/{_runs}/build/status").json()
+    assert status["status"] == "error"
+    assert "keynote wedged" in status["error"]
+
+
+def test_review_page_has_generate_button() -> None:
+    assert 'id="generate"' in client.get("/review/2026-05-31").text
