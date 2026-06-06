@@ -16,7 +16,6 @@ from fastapi.responses import HTMLResponse
 
 from worship_deck import hymn, obs, parse, store
 from worship_deck.bible import verses
-from worship_deck.lyrics import match
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
 from worship_deck.parse import ServiceData
@@ -145,11 +144,14 @@ _REVIEW_HTML = """<!doctype html>
   h1 { font-size: 1.3rem; } h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
   .row { border: 1px solid #ddd; border-radius: 8px; padding: 0.75rem; margin: 0.5rem 0; }
   .part { font-weight: 600; } .meta { color: #888; font-size: 0.85rem; }
+  .hint { color: #888; font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
   .song { border-top: 1px solid #eee; margin-top: 0.5rem; padding-top: 0.5rem; }
   .song .hd { display: flex; align-items: center; gap: 0.5rem; }
-  .song .hd .t { flex: 1; } .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; }
+  .song .hd .t, .song .t { flex: 1; font-weight: 500; }
+  .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; }
   textarea, input { width: 100%; font-size: 1rem; box-sizing: border-box; }
   textarea { min-height: 5rem; } input { padding: 0.5rem; margin: 0.25rem 0; }
+  .row button.sub { width: auto; padding: 0.5rem 0.9rem; font-size: 1rem; margin-top: 0.4rem; }
   .passage { white-space: pre-wrap; font-size: 0.95rem; }
   button { padding: 0.8rem; font-size: 1.05rem; border: 0; border-radius: 8px;
            background: #2563eb; color: #fff; }
@@ -161,19 +163,8 @@ _REVIEW_HTML = """<!doctype html>
 <body>
 <a href="/">← Home</a>
 <h1>Review <span id="date"></span></h1>
+<p class="hint">전체 예배 순서대로 — 성가대 · 봉헌 · 광고는 해당 순서 자리에서 편집합니다.</p>
 <div id="order"></div>
-
-<h2>성가대 (choir) lyrics</h2>
-<textarea id="choir" placeholder="제목 / 작곡 줄 / 가사… 붙여넣기"></textarea>
-<button id="parseChoir" type="button" onclick="attachChoir()">Parse &amp; attach</button>
-
-<h2>봉헌 (offering hymn)</h2>
-<input id="hymnNumber" placeholder="찬송가 번호">
-<input id="hymnTitle" placeholder="제목">
-<input id="hymnVerses" placeholder="절 (예: 1,3) — 비우면 전체">
-
-<h2>광고 (announcements)</h2>
-<textarea id="announcements" placeholder="항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)"></textarea>
 
 <button id="save" type="button" onclick="save()">Save</button>
 <div id="status"></div>
@@ -189,57 +180,120 @@ async function load() {
   render();
 }
 
+// Identify which section a worship-order row carries, so its editor renders inline (mirrors
+// the Python row predicates: the two 찬양 rows are told apart by the 성가대 leader/title).
+const pk = row => (row.part || '').replace(/\\s/g, '');
+const hasChoir = row => ((row.title || '') + (row.leader || '')).includes('성가대');
+const isOpening = row => pk(row) === '찬양' && !hasChoir(row);
+const isChoir = row => pk(row) === '찬양' && hasChoir(row);
+const isHymn = row => pk(row) === '봉헌';
+const isAnnounce = row => pk(row) === '교회소식';
+const isCtw = row => pk(row) === '예배의부름';
+const isSermon = row => pk(row) === '말씀';
+
 function render() {
   const order = document.getElementById('order');
   order.innerHTML = '';
-  run.worship_order.forEach((row, r) => {
+  run.worship_order.forEach((row) => {
     const div = document.createElement('div'); div.className = 'row';
     const head = document.createElement('div');
     head.innerHTML = '<span class="part">' + (row.part || '') + '</span> '
       + '<span class="meta">' + [row.title, row.leader, row.ref].filter(Boolean).join(' · ') + '</span>';
     div.appendChild(head);
-    (row.songs || []).forEach((song, s) => {
-      const sd = document.createElement('div'); sd.className = 'song';
-      const hd = document.createElement('div'); hd.className = 'hd';
-      const t = document.createElement('span'); t.className = 't';
-      t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
-      const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(r, s, -1);
-      const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(r, s, 1);
-      hd.append(t, up, dn); sd.appendChild(hd);
-      const ta = document.createElement('textarea');
-      ta.dataset.row = r; ta.dataset.song = s; ta.value = (song.lines || []).join('\\n');
-      sd.appendChild(ta);
-      div.appendChild(sd);
-    });
-    if (row.passage && row.passage.length) {
-      const p = document.createElement('div'); p.className = 'passage';
-      p.textContent = row.passage.map(v => v.number + '. ' + v.korean + ' / ' + v.english).join('\\n');
-      div.appendChild(p);
-    }
+    if (isOpening(row)) renderMedley(div);
+    else if (isChoir(row)) renderChoir(div);
+    else if (isHymn(row)) renderHymn(div);
+    else if (isAnnounce(row)) renderAnnounce(div);
+    else if (isCtw(row)) renderPassage(div, run.call_to_worship_passage);
+    else if (isSermon(row)) renderPassage(div, run.sermon_passage);
     order.appendChild(div);
   });
-  document.getElementById('hymnNumber').value = run.offering_hymn_number || '';
-  document.getElementById('hymnTitle').value = run.offering_hymn_title || '';
-  document.getElementById('hymnVerses').value = (run.offering_hymn_verses || []).join(',');
-  document.getElementById('announcements').value = (run.announcements || []).join('\\n---\\n');
 }
+
+function renderMedley(div) {
+  (run.worship_songs || []).forEach((song, s) => {
+    const sd = document.createElement('div'); sd.className = 'song';
+    const hd = document.createElement('div'); hd.className = 'hd';
+    const t = document.createElement('span'); t.className = 't';
+    t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
+    const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(s, -1);
+    const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(s, 1);
+    hd.append(t, up, dn); sd.appendChild(hd);
+    const ta = document.createElement('textarea');
+    ta.dataset.kind = 'worship'; ta.dataset.i = s; ta.value = (song.lines || []).join('\\n');
+    sd.appendChild(ta);
+    div.appendChild(sd);
+  });
+}
+
+function renderChoir(div) {
+  const paste = document.createElement('textarea');
+  paste.id = 'choir'; paste.placeholder = '제목 / 작곡 줄 / 가사… 붙여넣기';
+  div.appendChild(paste);
+  const btn = document.createElement('button');
+  btn.type = 'button'; btn.className = 'sub'; btn.textContent = 'Parse & attach';
+  btn.onclick = attachChoir;
+  div.appendChild(btn);
+  const song = run.choir_song;
+  if (song && song.title) {
+    const sd = document.createElement('div'); sd.className = 'song';
+    const t = document.createElement('div'); t.className = 't';
+    t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
+    sd.appendChild(t);
+    const ta = document.createElement('textarea');
+    ta.dataset.kind = 'choir'; ta.value = (song.lines || []).join('\\n');
+    sd.appendChild(ta);
+    div.appendChild(sd);
+  }
+}
+
+function mkInput(id, ph, val) {
+  const i = document.createElement('input'); i.id = id; i.placeholder = ph; i.value = val || '';
+  return i;
+}
+
+function renderHymn(div) {
+  div.appendChild(mkInput('hymnNumber', '찬송가 번호', run.offering_hymn_number));
+  div.appendChild(mkInput('hymnTitle', '제목', run.offering_hymn_title));
+  div.appendChild(mkInput('hymnVerses', '절 (예: 1,3) — 비우면 전체', (run.offering_hymn_verses || []).join(',')));
+}
+
+function renderAnnounce(div) {
+  const ta = document.createElement('textarea');
+  ta.id = 'announcements'; ta.dataset.kind = 'ann';
+  ta.placeholder = '항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)';
+  ta.value = (run.announcements || []).join('\\n---\\n');
+  div.appendChild(ta);
+}
+
+function renderPassage(div, passage) {
+  if (!passage || !passage.length) return;
+  const p = document.createElement('div'); p.className = 'passage';
+  p.textContent = passage.map(v => v.number + '. ' + v.korean + ' / ' + v.english).join('\\n');
+  div.appendChild(p);
+}
+
+const splitLines = v => v.split('\\n').map(s => s.trim()).filter(Boolean);
 
 function syncFromDom() {
-  document.querySelectorAll('#order textarea').forEach(ta => {
-    const lines = ta.value.split('\\n').map(s => s.trim()).filter(Boolean);
-    run.worship_order[ta.dataset.row].songs[ta.dataset.song].lines = lines;
+  document.querySelectorAll('#order textarea[data-kind="worship"]').forEach(ta => {
+    run.worship_songs[ta.dataset.i].lines = splitLines(ta.value);
   });
-  run.offering_hymn_number = document.getElementById('hymnNumber').value.trim();
-  run.offering_hymn_title = document.getElementById('hymnTitle').value.trim();
-  run.offering_hymn_verses = document.getElementById('hymnVerses').value
-    .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
-  run.announcements = document.getElementById('announcements').value
-    .split(/\\n-{3,}\\n/).map(s => s.trim()).filter(Boolean);
+  const choirTa = document.querySelector('#order textarea[data-kind="choir"]');
+  if (choirTa && run.choir_song) run.choir_song.lines = splitLines(choirTa.value);
+  const annTa = document.querySelector('#order textarea[data-kind="ann"]');
+  if (annTa) run.announcements = annTa.value.split(/\\n-{3,}\\n/).map(s => s.trim()).filter(Boolean);
+  const hn = document.getElementById('hymnNumber');
+  if (hn) run.offering_hymn_number = hn.value.trim();
+  const ht = document.getElementById('hymnTitle');
+  if (ht) run.offering_hymn_title = ht.value.trim();
+  const hv = document.getElementById('hymnVerses');
+  if (hv) run.offering_hymn_verses = hv.value.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
 }
 
-function move(r, s, d) {
+function move(s, d) {
   syncFromDom();
-  const songs = run.worship_order[r].songs;
+  const songs = run.worship_songs;
   const j = s + d;
   if (j < 0 || j >= songs.length) return;
   [songs[s], songs[j]] = [songs[j], songs[s]];
@@ -346,12 +400,13 @@ def _assemble_async(service_date: str) -> None:
 
         _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
         songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
-        match.assign_worship_songs(data.worship_order, songs)
+        data.worship_songs = [asdict(s) for s in songs]
 
         _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
-        for row in data.worship_order:
-            if row.get("ref"):
-                row["passage"] = verses.lookup_verses(row["ref"])
+        if data.call_to_worship_ref:
+            data.call_to_worship_passage = [asdict(v) for v in verses.lookup_verses(data.call_to_worship_ref)]
+        if data.sermon_ref:
+            data.sermon_passage = [asdict(v) for v in verses.lookup_verses(data.sermon_ref)]
 
         # Best-effort: a failed/forbidden hymn download must not discard the transcribe/verses
         # work above. On failure we record a warning and leave offering_hymn_images empty so
@@ -413,11 +468,6 @@ def assemble_status(service_date: str) -> dict:
 # ── Review / edit the assembled run ───────────────────────────────────────────
 
 
-def _is_choir_row(row: dict) -> bool:
-    """The 성가대 choir 찬양 row — the worship 찬양 row that isn't the opening medley."""
-    return row.get("part", "").replace(" ", "") == "찬양" and not match._is_opening_worship(row)
-
-
 @app.get("/review/{service_date}", response_class=HTMLResponse)
 def review(service_date: str) -> str:
     return _REVIEW_HTML
@@ -460,7 +510,7 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
 
 @app.post("/runs/{service_date}/choir")
 def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
-    """Parse pasted 성가대 lyrics and attach them to the choir 찬양 row; return the updated run."""
+    """Parse pasted 성가대 lyrics into the top-level choir_song field; return the updated run."""
     try:
         store.path_for(service_date)
     except ValueError:
@@ -469,10 +519,6 @@ def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
         data = store.load(service_date)
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="no run for that date")
-    song = parse_choir_text(body.get("text", ""))
-    for row in data.worship_order:
-        if _is_choir_row(row):
-            row["songs"] = [asdict(song)]
-            store.save(service_date, data)
-            return asdict(data)
-    raise HTTPException(status_code=404, detail="no 성가대 choir row in this run")
+    data.choir_song = asdict(parse_choir_text(body.get("text", "")))
+    store.save(service_date, data)
+    return asdict(data)

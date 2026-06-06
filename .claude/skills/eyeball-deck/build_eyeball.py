@@ -31,10 +31,12 @@ sys.path.insert(0, str(REPO / "src"))  # belt-and-suspenders if not pip-installe
 from worship_deck.bible.verses import Verse  # noqa: E402
 from worship_deck.keynote.build import (  # noqa: E402
     fill_announcement_slides,
+    fill_choir_slides,
     fill_song_slides,
     fill_verse_slides,
     save_draft,
 )
+from worship_deck.lyrics.choir import parse_choir_text  # noqa: E402
 from worship_deck.lyrics.transcribe import Song  # noqa: E402
 from worship_deck.parse.bulletin import announcement_blocks  # noqa: E402
 
@@ -146,6 +148,10 @@ def main() -> None:
     vp.add_argument("--at", type=int, default=48, help="verse-slide index (default: 48)")
     vp.add_argument("--ref", help="Korean ref for a real lookup, e.g. '시 133:1-3' (needs keys)")
 
+    cp = sub.add_parser("choir", parents=[common], help="fill 성가대 title slides + lyric block")
+    cp.add_argument("--at", type=int, default=77, help="first title-slide index (default: 77)")
+    cp.add_argument("--text-file", help="raw pasted choir text (title + composer + lyric lines)")
+
     ap_ = sub.add_parser("announce", parents=[common], help="fill 교회소식 (one item per slide)")
     ap_.set_defaults(existing=5)  # the template 교회소식 block is 5 item slides (117–121)
     ap_.add_argument("--at", type=int, default=117, help="first announcement-slide index (default: 117)")
@@ -171,6 +177,16 @@ def main() -> None:
         n = fill_song_slides(out, args.at, song, existing_lyric_count=args.existing)
         first, last = args.at, args.at + n - 1
         print(f"Filled song: {n} slides ({first} title + {n - 1} lyric).")
+    elif args.section == "choir":
+        raw = Path(args.text_file).read_text(encoding="utf-8") if args.text_file else ""
+        song = parse_choir_text(raw)
+        # The 성가대 lyric block is a fixed 17 slides (79–95) in master.key. We hardcode it rather
+        # than route through --existing: that flag lives in the shared `common` parent, so its
+        # Action is shared across subparsers and a later set_defaults would clobber ours (argparse
+        # parents gotcha) — it would arrive as 5 here and duplicate instead of trim.
+        n = fill_choir_slides(out, args.at, song, existing_lyric_count=17)
+        first, last = args.at, args.at + n - 1
+        print(f"Filled choir: {n} slides (2 title + {n - 2} lyric) — '{song.title}' / {song.composer}.")
     elif args.section == "announce":
         items = args.items or announcement_blocks(args.bulletin)
         n = fill_announcement_slides(out, args.at, items, existing_count=args.existing)

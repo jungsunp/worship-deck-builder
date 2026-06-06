@@ -121,13 +121,18 @@ def test_index_shows_inbox_section() -> None:
 
 
 def _fake_data() -> ServiceData:
-    """Parsed bulletin: an opening 찬양 row (band name) + a ref-bearing row + a hymn."""
+    """Parsed bulletin: an opening 찬양 row (band name) + a ref-bearing row + a hymn.
+
+    Mirrors parse.parse: the call-to-worship ref is lifted to the top-level field (assemble
+    looks up its passage from there, not from the worship_order row).
+    """
     return ServiceData(
         date="2026년 5월 31일",
         worship_order=[
             {"part": "찬양", "title": "마라나타", "leader": "", "ref": ""},
             {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3"},
         ],
+        call_to_worship_ref="시 133:1-3",
         offering_hymn_number="220",
     )
 
@@ -165,9 +170,8 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     assert status.json()["status"] == "done"
 
     data = store.load(date)
-    opening, ref_row = data.worship_order
-    assert opening["songs"] == [{"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""}]
-    assert ref_row["passage"] == [
+    assert data.worship_songs == [{"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""}]
+    assert data.call_to_worship_passage == [
         {"number": 1, "korean": "한글", "english": "english"},
     ]
     assert data.offering_hymn_images == [
@@ -224,19 +228,20 @@ def test_assemble_status_rejects_bad_date() -> None:
 
 
 def _fake_run() -> ServiceData:
-    """An assembled run: opening medley (2 songs) + 성가대 choir row + a ref row + hymn."""
+    """An assembled run: a worship-order skeleton + the section content in top-level fields."""
     return ServiceData(
         date="2026년 5월 31일",
         worship_order=[
-            {"part": "찬양", "title": "마라나타", "leader": "", "ref": "", "songs": [
-                {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""},
-                {"title": "마라나타", "lines": ["a", "b"], "composer": ""},
-            ]},
+            {"part": "찬양", "title": "마라나타", "leader": "", "ref": ""},
             {"part": "찬양", "title": "나의 영원하신 기업", "leader": "성가대", "ref": ""},
-            {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3", "passage": [
-                {"number": 1, "korean": "한글", "english": "english"},
-            ]},
+            {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3"},
         ],
+        worship_songs=[
+            {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""},
+            {"title": "마라나타", "lines": ["a", "b"], "composer": ""},
+        ],
+        call_to_worship_passage=[{"number": 1, "korean": "한글", "english": "english"}],
+        call_to_worship_ref="시 133:1-3",
         offering_hymn_number="220",
         offering_hymn_title="피난처 있으니",
     )
@@ -282,13 +287,13 @@ def test_put_run_persists_edits(_runs) -> None:
     store.save(_runs, _fake_run())
     run = client.get(f"/runs/{_runs}").json()
     # reorder the two medley songs, fix a lyric line break, pick hymn verses
-    run["worship_order"][0]["songs"].reverse()
-    run["worship_order"][0]["songs"][0]["lines"] = ["new line 1", "new line 2"]
+    run["worship_songs"].reverse()
+    run["worship_songs"][0]["lines"] = ["new line 1", "new line 2"]
     run["offering_hymn_verses"] = [1, 3]
     assert client.put(f"/runs/{_runs}", json=run).status_code == 200
 
     saved = store.load(_runs)
-    songs = saved.worship_order[0]["songs"]
+    songs = saved.worship_songs
     assert [s["title"] for s in songs] == ["마라나타", "주 은혜임을"]
     assert songs[0]["lines"] == ["new line 1", "new line 2"]
     assert saved.offering_hymn_verses == [1, 3]
@@ -304,13 +309,11 @@ def test_choir_paste_attaches_song(_runs) -> None:
     resp = client.post(f"/runs/{_runs}/choir", json={"text": text})
     assert resp.status_code == 200
 
-    choir = store.load(_runs).worship_order[1]
-    assert choir["leader"] == "성가대"
-    assert choir["songs"] == [{
+    assert store.load(_runs).choir_song == {
         "title": "주 하나님 지으신 모든 세계",
         "lines": ["주 하나님 지으신 모든 세계"],
         "composer": "스튜어트 하인 작곡",
-    }]
+    }
 
 
 def test_review_page_served() -> None:
