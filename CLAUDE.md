@@ -38,7 +38,9 @@ Section structure, content sources, and render modes are declared in `config/sli
 
 The web app (`web/app.py`) is intentionally template-free: pages are inline HTML strings; dynamic content uses small JSON endpoints + `fetch`-based JS (e.g. assemble polling, inbox list). Match this — don't add Jinja2.
 
-Implementation status: `parse` (date extraction done, worship order TODO), `bible` (Korean ref parsing + ESV fetch done, verse assembly TODO), `lyrics` (transcription done — Vision+Ollama hybrid; `chunk()` into ≤2-line slides TODO, #18), `keynote` is a stub. `keynote.build` drives Keynote via AppleScript to duplicate slides and set native text. Implement remaining work in order: `parse` → `bible` → `lyrics` → `keynote`.
+The run is two-phase and web-driven: **assemble** (`web/app.py._assemble_async`: parse → Vision+Ollama lyric transcription → Bible verse lookup, persisted to the per-run `store.py`) → **human review** (inline editors in the web app) → **build** (`pipeline.run` loads the reviewed `ServiceData` from the store and drives Keynote). All five steps are implemented; `parse`, `bible`, `lyrics.chunk()`, and the `keynote` builder all shipped (#62–#95).
+
+`keynote/build.py` is a library of small AppleScript primitives (`save_draft`, `duplicate_slide`/`duplicate_block`, `delete_slides`, `place_image`, `set_*_slide`, `read_verse_boxes`) plus per-section `fill_*` functions (`fill_verse_slides`, `fill_song_slides`, `fill_worship_songs`, `fill_choir_slides`, `fill_announcement_slides`), composed by `build(data, template_key, out_key)`; `export_pdf` renders a draft for review. AppleScript sources live in `keynote/applescript/`.
 
 ## Constraints
 
