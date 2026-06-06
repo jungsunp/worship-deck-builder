@@ -40,11 +40,13 @@ def test_revelation() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Coverage sanity: all 66 books present and non-empty
+# Coverage sanity: all 66 books present and non-empty, in both abbreviated and
+# full-name forms (132 entries) — bulletins use either.
 # ---------------------------------------------------------------------------
 
 def test_book_count() -> None:
-    assert len(_KOREAN_BOOKS) == 66
+    assert len(_KOREAN_BOOKS) == 132
+    assert len(set(_KOREAN_BOOKS.values())) == 66
 
 
 def test_all_book_values_nonempty() -> None:

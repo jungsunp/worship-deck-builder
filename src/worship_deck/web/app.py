@@ -173,7 +173,7 @@ _REVIEW_HTML = """<!doctype html>
 <input id="hymnVerses" placeholder="절 (예: 1,3) — 비우면 전체">
 
 <h2>광고 (announcements)</h2>
-<textarea id="announcements" placeholder="한 줄에 하나씩"></textarea>
+<textarea id="announcements" placeholder="항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)"></textarea>
 
 <button id="save" type="button" onclick="save()">Save</button>
 <div id="status"></div>
@@ -221,7 +221,7 @@ function render() {
   document.getElementById('hymnNumber').value = run.offering_hymn_number || '';
   document.getElementById('hymnTitle').value = run.offering_hymn_title || '';
   document.getElementById('hymnVerses').value = (run.offering_hymn_verses || []).join(',');
-  document.getElementById('announcements').value = (run.announcements || []).join('\\n');
+  document.getElementById('announcements').value = (run.announcements || []).join('\\n---\\n');
 }
 
 function syncFromDom() {
@@ -234,7 +234,7 @@ function syncFromDom() {
   run.offering_hymn_verses = document.getElementById('hymnVerses').value
     .split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
   run.announcements = document.getElementById('announcements').value
-    .split('\\n').map(s => s.trim()).filter(Boolean);
+    .split(/\\n-{3,}\\n/).map(s => s.trim()).filter(Boolean);
 }
 
 function move(r, s, d) {

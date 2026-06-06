@@ -28,21 +28,27 @@ _LEADER_TOKENS = {"다함께", "성가대"}
 # 봉헌 hymn number (찬220, 찬 70장) in the row title
 _HYMN_NUM_RE = re.compile(r"찬\s*(\d+)\s*장?")
 
-# Worship order table x-coordinate boundaries (absolute page pts, 14" × 8.5" bulletin)
+# Worship order table x-coordinate boundaries (absolute page pts, 14" × 8.5" bulletin).
+# The left column holds the order; part-name cells sit at x≲66, content cells at x≳120, and
+# the middle (교회소식) column starts at x≈348 — so _X_RIGHT cleanly excludes it.
 _X_SPLIT = 105   # left of this → part name cell; right → content cell
-_X_RIGHT = 323   # right edge of the left column
+_X_RIGHT = 340   # right edge of the left column
 
-# Announcement (교회소식) middle-column bounds. A detail row whose right edge reaches near the
-# column's right margin (~721) is a soft column-wrap and is rejoined to the next row, rather than
-# kept as an intended line break (bullets / paragraph ends fall short of it). See announcement_blocks.
-_MID_LEFT, _MID_RIGHT = 339, 724
-_ANNOUNCE_WRAP_X = 712
+# Worship rows jitter by ~2px between the part-name and content cells, so words are clustered
+# into a row when their tops fall within this many points of each other.
+_ROW_JITTER = 8
+
+# Announcement (교회소식) middle-column bounds: the column sits at x≈348–688 and the 기도제목
+# (prayer-topics) column begins at x≈694, so _MID_RIGHT must stay left of it. Each rendered row
+# is one intended line (the bulletin breaks lines by hand), so rows are kept as-is.
+_MID_LEFT, _MID_RIGHT = 339, 692
 
 
 @dataclass
 class ServiceData:
     date: str = ""
     worship_order: list[dict] = field(default_factory=list)
+    # One slide-ready block per 교회소식 item: "N. title\n\ndetail lines" (gold title, white detail).
     announcements: list[str] = field(default_factory=list)
     call_to_worship_ref: str = ""
     sermon_title: str = ""
@@ -79,15 +85,15 @@ def _split_content(content: str) -> tuple[str, str, str]:
         rest = _INLINE_REF_RE.sub("", content).strip()
         return "", rest, inline.group()
 
-    # 3. Peel off leader from the end
+    # 3. Peel off the leader. The leader (다함께/성가대) lives in its own sub-column and can land
+    #    before or after the title once the row's cells are flattened, so pull it from anywhere;
+    #    otherwise take a trailing name + title-suffix ("황인섭 목사").
     tokens = content.split()
-    if not tokens:
-        return "", "", ref
-    if tokens[-1] in _LEADER_TOKENS:
-        return " ".join(tokens[:-1]).strip(), tokens[-1], ref
-    if len(tokens) >= 2 and tokens[-1] in _TITLE_SUFFIXES:
-        return " ".join(tokens[:-2]).strip(), " ".join(tokens[-2:]), ref
-    return content, "", ref
+    leader = [t for t in tokens if t in _LEADER_TOKENS]
+    tokens = [t for t in tokens if t not in _LEADER_TOKENS]
+    if not leader and len(tokens) >= 2 and tokens[-1] in _TITLE_SUFFIXES:
+        leader, tokens = tokens[-2:], tokens[:-2]
+    return " ".join(tokens).strip(), " ".join(leader).strip(), ref
 
 
 def _parse_offering_hymn(title: str) -> tuple[str, str]:
@@ -107,45 +113,62 @@ def _parse_offering_hymn(title: str) -> tuple[str, str]:
     return number, rest
 
 
+def _worship_grid_bottom(page) -> float:
+    """Y of the worship-order table's last horizontal rule.
+
+    The order is a bordered table whose per-row rules pdfplumber sees as horizontal
+    *lines* (or, in older layouts, thin filled rects). The first contiguous run of
+    left-column rules is that table; the next table below starts after a clear gap, so
+    we return the last rule of the run as the bottom of the worship order.
+    """
+    rules = sorted(
+        [ln["top"] for ln in page.lines
+         if abs(ln["top"] - ln["bottom"]) < 2 and ln["x0"] < 120 and ln["x1"] - ln["x0"] > 150]
+        + [r["top"] for r in page.rects
+           if r["height"] < 2 and r["x0"] < 120 and r["x1"] - r["x0"] > 150]
+    )
+    if not rules:
+        return page.height
+    bottom = rules[0]
+    for y in rules[1:]:
+        if y - bottom > 28:  # gap to the next table below the order
+            break
+        bottom = y
+    return bottom
+
+
+def _cluster_rows(words: list[dict]) -> list[list[dict]]:
+    """Group words into rows: a new row begins when the top jumps more than _ROW_JITTER."""
+    rows: list[list[dict]] = []
+    prev_top = None
+    for w in sorted(words, key=lambda w: w["top"]):
+        if prev_top is None or w["top"] - prev_top > _ROW_JITTER:
+            rows.append([])
+        rows[-1].append(w)
+        prev_top = w["top"]
+    return rows
+
+
 def _parse_worship_order(page) -> list[dict]:
     """Extract the main worship order from page 1's left column.
 
-    The worship order is a two-cell <table> (part name | content) sandwiched
-    between two <hr> elements.  pdfplumber renders those <hr>s as thin filled
-    rects, which we use as Y-range anchors.  Words are then split at _X_SPLIT
-    to separate the part-name cell from the content cell.
+    The order is a (part name | content) table down the left column. Words above the
+    table bottom (_worship_grid_bottom) are clustered into rows — cells in a row jitter a
+    couple points vertically — then split at _X_SPLIT into the part-name and content cells.
+    The column title and the "인도:" leader line carry no content cell and are skipped.
     """
-    # Find the two thin horizontal rules in the left column
-    left_hrs = sorted(
-        [r for r in page.rects if r["x0"] < 100 and r["x1"] < 400 and r["height"] < 2],
-        key=lambda r: r["top"],
-    )
-    if len(left_hrs) < 2:
-        return []
-    hr1_top, hr2_top = left_hrs[0]["top"], left_hrs[1]["top"]
-
-    # Words inside the left column, between the two hrs
-    section_words = [
+    words = [
         w for w in page.extract_words()
-        if w["x0"] < _X_RIGHT and hr1_top < w["top"] < hr2_top
+        if w["x0"] < _X_RIGHT and w["top"] < _worship_grid_bottom(page) + 6
     ]
 
-    # Group words by row (integer top)
-    rows: dict[int, dict] = {}
-    for w in section_words:
-        top = round(w["top"])
-        if top not in rows:
-            rows[top] = {"left": [], "right": []}
-        rows[top]["left" if w["x0"] < _X_SPLIT else "right"].append(w["text"])
-
-    # Parse each row
     result = []
-    for top in sorted(rows):
-        part_raw = " ".join(rows[top]["left"])
-        content = " ".join(rows[top]["right"])
-        if not part_raw or part_raw.startswith("(*"):
-            continue  # skip empty rows and the (*표는…) footnote
-        part = part_raw.rstrip("*").strip()
+    for row in _cluster_rows(words):
+        row.sort(key=lambda w: (w["top"], w["x0"]))
+        part = " ".join(w["text"] for w in row if w["x0"] < _X_SPLIT).rstrip("*").strip()
+        content = " ".join(w["text"] for w in row if w["x0"] >= _X_SPLIT)
+        if not content or not part or part.startswith("인도") or part.startswith("(*"):
+            continue  # column title, the 인도 line, the (*표는…) footnote
         title, leader, ref = _split_content(content)
         result.append({"part": part, "title": title, "leader": leader, "ref": ref})
     return result
@@ -154,14 +177,20 @@ def _parse_worship_order(page) -> list[dict]:
 def _extract_announcements(page) -> list[dict]:
     """Extract the middle-column 교회소식 items as {number, title, detail} dicts.
 
-    Each announcement is a numbered title row ("N. Title") followed by detail rows. The
-    bulletin renders detail as soft column-wraps: a row that reaches the column's right margin
-    (>= _ANNOUNCE_WRAP_X) is continued on the next row, so it is rejoined (no separator — Korean
-    wraps mid-text) into one flowing line; bullet rows ("·") and rows that fall short of the
-    margin start their own line. The middle column sits at x0 339–724; the right column
-    (기도제목) starts at ~724 so there is no overlap.
+    Each announcement is a numbered title row ("N. Title") followed by one detail line per
+    rendered row (the bulletin breaks detail lines by hand, so rows are kept as-is). Rows
+    before the first numbered item (the column tagline) are skipped. The 봉사자 모집 footer
+    sits in bordered boxes below the list, so the scan stops at the first such box.
     """
-    mid_words = [w for w in page.extract_words() if _MID_LEFT <= w["x0"] < _MID_RIGHT]
+    footer_top = min(
+        (r["top"] for r in page.rects
+         if _MID_LEFT <= r["x0"] < _MID_RIGHT and r["x1"] - r["x0"] > 20),
+        default=page.height,
+    )
+    mid_words = [
+        w for w in page.extract_words()
+        if _MID_LEFT <= w["x0"] < _MID_RIGHT and w["top"] < footer_top
+    ]
 
     rows: dict[int, list] = {}
     for w in mid_words:
@@ -169,49 +198,40 @@ def _extract_announcements(page) -> list[dict]:
 
     anns: list[dict] = []
     cur: dict | None = None
-    prev_wrapped = False
     for top in sorted(rows):
-        ws = sorted(rows[top], key=lambda w: w["x0"])
-        text = " ".join(w["text"] for w in ws).strip()
-        wrapped = max(w["x1"] for w in ws) >= _ANNOUNCE_WRAP_X
+        text = " ".join(w["text"] for w in sorted(rows[top], key=lambda w: w["x0"])).strip()
         m = re.match(r"^(\d+)\.\s+(.+)", text)
         if m:
             cur = {"number": m.group(1), "title": m.group(2).strip(), "detail": []}
             anns.append(cur)
         elif cur is not None:  # detail row (skip any header text before the first numbered item)
-            if cur["detail"] and prev_wrapped and not text.startswith("·"):
-                cur["detail"][-1] += text  # rejoin a soft column-wrap
-            else:
-                cur["detail"].append(text)
-        prev_wrapped = wrapped
+            cur["detail"].append(text)
     return anns
 
 
-def _parse_announcements(page) -> list[str]:
-    """Numbered announcement titles (number stripped) from the middle column of page 1."""
-    return [a["title"] for a in _extract_announcements(page)]
-
-
-def announcement_blocks(pdf_path: str) -> list[str]:
-    """Per-announcement slide text: "N. title" + blank line + reflowed detail lines (#16).
+def _announcement_blocks(anns: list[dict]) -> list[str]:
+    """Render extracted announcements as slide-ready strings: "N. title" + blank line + detail.
 
     One string per 교회소식 item, ready for keynote.build.fill_announcement_slides — paragraph 1
-    (the numbered title) renders gold and the detail paragraphs render white. (pdfplumber)
+    (the numbered title) renders gold and the detail paragraphs render white.
     """
-    import pdfplumber
-
-    logging.disable(logging.WARNING)
-    try:
-        with pdfplumber.open(pdf_path) as pdf:
-            anns = _extract_announcements(pdf.pages[0])
-    finally:
-        logging.disable(logging.NOTSET)
-
     blocks = []
     for a in anns:
         title = f"{a['number']}. {a['title']}"
         blocks.append(title + ("\n\n" + "\n".join(a["detail"]) if a["detail"] else ""))
     return blocks
+
+
+def announcement_blocks(pdf_path: str) -> list[str]:
+    """Per-announcement slide text (title + detail) straight from a bulletin PDF (#16). (pdfplumber)"""
+    import pdfplumber
+
+    logging.disable(logging.WARNING)
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            return _announcement_blocks(_extract_announcements(pdf.pages[0]))
+    finally:
+        logging.disable(logging.NOTSET)
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -238,7 +258,7 @@ def parse(pdf_path: str) -> ServiceData:
         with pdfplumber.open(pdf_path) as pdf:
             text = "".join(p.extract_text() or "" for p in pdf.pages)
             worship_order = _parse_worship_order(pdf.pages[0])
-            announcements = _parse_announcements(pdf.pages[0])
+            announcements = _announcement_blocks(_extract_announcements(pdf.pages[0]))
     finally:
         logging.disable(logging.NOTSET)
 

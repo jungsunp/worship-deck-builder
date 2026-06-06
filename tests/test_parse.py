@@ -32,7 +32,7 @@ def test_parse_worship_order_has_all_parts() -> None:
 def test_parse_worship_order_titles() -> None:
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
     titles = [item["title"] for item in result.worship_order]
-    assert "이를 행하여 나를기념하라" in titles      # sermon title
+    assert "설득된 믿음" in titles                   # sermon title
     assert "피난처 있으니 (찬 70장)" in titles       # offering hymn
     # The opening 찬양 row's content (마라나타) is the worship BAND NAME, not a song.
     # The bulletin lists no opening-worship song titles — those come from the band
@@ -53,14 +53,18 @@ def test_parse_announcements_count() -> None:
     assert len(result.announcements) == 6
 
 
-def test_parse_announcements_titles() -> None:
+def test_parse_announcements_blocks() -> None:
+    """announcements now hold full slide blocks (numbered title + detail), not bare titles."""
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
-    assert result.announcements[0] == "2026년도 24 나무 소그룹"
-    assert result.announcements[1] == "교육부 오픈하우스 안내"
-    assert result.announcements[5] == "미디어 사역팀 팀원 모집"
+    # paragraph 1 (gold title) keeps its number; detail follows after a blank line
+    assert result.announcements[0].split("\n")[0] == "1. 2026년도 24 나무 소그룹"
+    assert result.announcements[1].split("\n")[0] == "2. 교육부 오픈하우스 안내"
+    assert result.announcements[5].split("\n")[0] == "6. 미디어 사역팀 팀원 모집"
+    # the detail lines that build() renders white must survive into the run store
+    assert "그룹 리더분들의 안내에 따라 함께 친교해 주시기 바랍니다." in result.announcements[0]
 
 
-def test_announcement_blocks_title_and_reflowed_detail() -> None:
+def test_announcement_blocks_title_and_detail() -> None:
     blocks = announcement_blocks(str(FIXTURES / "sample_bulletin.pdf"))
     assert len(blocks) == 6
 
@@ -68,8 +72,8 @@ def test_announcement_blocks_title_and_reflowed_detail() -> None:
     lines = first.split("\n")
     assert lines[0] == "1. 2026년도 24 나무 소그룹"  # title keeps its number (paragraph 1 = gold)
     assert lines[1] == ""  # blank line between title and detail
-    # the soft column-wrap "...안내에 따" / "라 함께..." is rejoined into one flowing line
-    assert "안내에 따라 함께 친교해 주시기 바랍니다." in first
+    # each rendered row is kept as its own detail line (the bulletin breaks lines by hand)
+    assert "그룹 리더분들의 안내에 따라 함께 친교해 주시기 바랍니다." in lines
     assert "  " not in first  # no stray leading/double spacing from pdf wrapping
 
 
@@ -84,8 +88,9 @@ def test_announcement_blocks_keeps_bullets_as_separate_lines() -> None:
 def test_parse_bible_refs_and_sermon_title() -> None:
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
     assert result.call_to_worship_ref == "시 133:1-3"
-    assert result.sermon_ref == "눅 22:14-24"
-    assert result.sermon_title == "이를 행하여 나를기념하라"
+    # sermon ref uses a full Korean book name ("요한복음"), which the parser must also strip
+    assert result.sermon_ref == "요한복음 4:43-54"
+    assert result.sermon_title == "설득된 믿음"
 
 
 # ── _split_content() unit tests ───────────────────────────────────────────────
