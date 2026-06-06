@@ -413,11 +413,6 @@ def assemble_status(service_date: str) -> dict:
 # ── Review / edit the assembled run ───────────────────────────────────────────
 
 
-def _is_choir_row(row: dict) -> bool:
-    """The 성가대 choir 찬양 row — the worship 찬양 row that isn't the opening medley."""
-    return row.get("part", "").replace(" ", "") == "찬양" and not match._is_opening_worship(row)
-
-
 @app.get("/review/{service_date}", response_class=HTMLResponse)
 def review(service_date: str) -> str:
     return _REVIEW_HTML
@@ -471,7 +466,7 @@ def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
         raise HTTPException(status_code=404, detail="no run for that date")
     song = parse_choir_text(body.get("text", ""))
     for row in data.worship_order:
-        if _is_choir_row(row):
+        if match._is_choir_row(row):
             row["songs"] = [asdict(song)]
             store.save(service_date, data)
             return asdict(data)

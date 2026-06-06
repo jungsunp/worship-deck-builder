@@ -15,6 +15,7 @@ from worship_deck.keynote.build import (
     duplicate_block,
     duplicate_slide,
     fill_announcement_slides,
+    fill_choir_slides,
     fill_song_slides,
     fill_verse_slides,
     fill_worship_songs,
@@ -22,6 +23,7 @@ from worship_deck.keynote.build import (
     read_verse_boxes,
     save_draft,
     set_announcement_slide,
+    set_choir_title,
     set_date_slides,
     set_sermon_title_slide,
     set_slide_text,
@@ -379,6 +381,75 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
 
 
 # ---------------------------------------------------------------------------
+# set_choir_title / fill_choir_slides — mocked (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_choir_title_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_choir_title("draft.key", 77, "사랑은", "(윤학준 곡)")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_CHOIR_TITLE),
+        "draft.key",
+        "77",
+        "사랑은",
+        "(윤학준 곡)",
+    ]
+
+
+def _mock_choir_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Record fill_choir_slides' Keynote primitive calls instead of running osascript."""
+    calls: dict = {"title": [], "lyric": [], "duplicate": None, "delete": None}
+    monkeypatch.setattr(B, "set_choir_title", lambda k, i, t, c: calls["title"].append((i, t, c)))
+    monkeypatch.setattr(B, "set_slide_text", lambda k, i, t: calls["lyric"].append((i, t)))
+    monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
+    return calls
+
+
+def test_fill_choir_slides_duplicates_when_chunks_exceed_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_choir_primitives(monkeypatch)
+    song = Song(title="사랑은", lines=["1", "2", "3"], composer="윤학준 편곡")  # 3 lines -> 2 chunks
+
+    n = fill_choir_slides("k", 77, song, title_count=2, existing_lyric_count=1)
+
+    assert n == 4  # 2 title slides + 2 lyric chunks
+    # both title slides get the same title; a bare composer is parenthesized for the credit
+    assert calls["title"] == [(77, "사랑은", "(윤학준 편곡)"), (78, "사랑은", "(윤학준 편곡)")]
+    assert calls["duplicate"] == (79, 1)  # first_lyric=79, add 1 to reach 2
+    assert calls["delete"] is None
+    assert calls["lyric"] == [(79, "1\n2"), (80, "3")]
+
+
+def test_fill_choir_slides_trims_when_template_has_surplus(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_choir_primitives(monkeypatch)
+    song = Song(title="사랑은", lines=["1", "2", "3"], composer="(윤학준 곡)")  # 2 chunks
+
+    n = fill_choir_slides("k", 77, song, title_count=2, existing_lyric_count=17)
+
+    assert n == 4
+    # a composer that already carries its own parentheses is not double-wrapped
+    assert calls["title"] == [(77, "사랑은", "(윤학준 곡)"), (78, "사랑은", "(윤학준 곡)")]
+    assert calls["delete"] == (81, 15)  # trim 15 surplus slides at first_lyric+target (79+2)
+    assert calls["duplicate"] is None
+    assert [i for i, _ in calls["lyric"]] == [79, 80]
+
+
+# ---------------------------------------------------------------------------
 # fill_worship_songs — mocked primitives (CI-safe, no Mac)
 # ---------------------------------------------------------------------------
 
@@ -679,6 +750,30 @@ def test_fill_song_slides_live_fills_title_and_trims_leftover(
     assert "다섯째 줄" in _on_canvas_text(str(draft), 10)
     # the slide right after the resized lyric block holds none of this song's lyrics (no leftover)
     assert "줄" not in _on_canvas_text(str(draft), 11)
+
+
+@pytest.mark.local_only
+def test_fill_choir_slides_live_fills_titles_composer_and_lyrics(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """The 성가대 block is 2 title slides (77-78) + 17 lyric slides (79-95). Filling a 3-line song
+    (2 chunks) must set the song title + composer on both title slides (keeping slide 77's static
+    '성가대 찬양' heading), fill 2 lyric slides, and trim the 15 surplus so none remain after."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    song = Song(title="테스트 성가", lines=["첫째 줄", "둘째 줄", "셋째 줄"], composer="테스트 곡")
+
+    n = fill_choir_slides(str(draft), 77, song, existing_lyric_count=17)
+    assert n == 4  # 2 title slides + 2 lyric chunks
+
+    s77, s78 = _on_canvas_text(str(draft), 77), _on_canvas_text(str(draft), 78)
+    assert "테스트 성가" in s77 and "(테스트 곡)" in s77 and "성가대 찬양" in s77  # heading kept
+    assert "테스트 성가" in s78 and "(테스트 곡)" in s78
+    assert "첫째 줄" in _on_canvas_text(str(draft), 79) and "둘째 줄" in _on_canvas_text(str(draft), 79)
+    assert "셋째 줄" in _on_canvas_text(str(draft), 80)
+    # the slide right after the resized lyric block holds none of this song's lyrics (no leftover)
+    assert "줄" not in _on_canvas_text(str(draft), 81)
 
 
 @pytest.mark.local_only

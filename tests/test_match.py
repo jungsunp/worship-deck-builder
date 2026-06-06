@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from worship_deck.lyrics.match import assign_worship_songs
+from worship_deck.lyrics.match import _is_choir_row, assign_worship_songs
 from worship_deck.lyrics.transcribe import Song
 
 
@@ -44,3 +44,10 @@ def test_no_opening_worship_row_is_a_noop() -> None:
 def test_empty_songs_attaches_empty_list() -> None:
     order = assign_worship_songs(_worship_order(), [])
     assert order[0]["songs"] == []
+
+
+def test_is_choir_row_picks_the_non_opening_chanyang_row() -> None:
+    order = _worship_order()
+    assert _is_choir_row(order[2]) is True  # 찬양 + 성가대 leader
+    assert _is_choir_row(order[0]) is False  # opening band 찬양 row
+    assert _is_choir_row(order[1]) is False  # 예배의 부름, not 찬양

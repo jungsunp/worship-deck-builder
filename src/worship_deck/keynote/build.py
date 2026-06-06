@@ -24,6 +24,7 @@ _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.ap
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
+_SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 
@@ -349,6 +350,64 @@ def fill_song_slides(
     for i, lines in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
     return 1 + target
+
+
+def set_choir_title(key_path: str, slide_index: int, title: str, composer: str) -> str:
+    """Set a 성가대 title slide's song title + composer credit, in place (#88).
+
+    The two choir title slides are laid out differently in master.key. The section-divider slide
+    is one box of three paragraphs — a static "성가대 찬양" heading, the title, then the composer —
+    so the heading is kept and `title`/`composer` go in paragraphs 2/3 (per-paragraph styling
+    preserved). The title-card slide is a single-line lower-third bar, so it takes the combined
+    "title composer" line. The script picks the branch per box (heading box vs single-line);
+    off-canvas leftovers are skipped. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_CHOIR_TITLE, key, str(slide_index), title, composer).strip()
+
+
+def fill_choir_slides(
+    key_path: str,
+    title_index: int,
+    song: Song,
+    *,
+    title_count: int = 2,
+    existing_lyric_count: int = 17,
+) -> int:
+    """Fill the 성가대 section: title slides + ≤2-line lyric slides, resizing to fit (#88).
+
+    Sets the song's title + composer on each of the `title_count` title slides starting at
+    title_index (`set_choir_title` keeps the static "성가대 찬양" heading), chunks song.lines into
+    ≤2-line lyric slides (lyrics.transcribe.chunk), then resizes the lyric block from its template
+    `existing_lyric_count` slides to the chunk count (trimming surplus or duplicating the first
+    lyric slide) and fills each. The composer credit is shown parenthesized (matching the deck,
+    e.g. "(노희석 편곡)") unless the pasted credit already carries its own parentheses. Returns the
+    total slides used (title_count + N lyrics).
+
+    Note: resizing shifts the indices of all later slides by (chunks - existing_lyric_count); a
+    caller filling later sections must fill them first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    composer = song.composer
+    if composer and not composer.startswith("("):
+        composer = f"({composer})"
+    for i in range(title_count):
+        set_choir_title(key_path, title_index + i, song.title, composer)
+    chunks = chunk(song.lines)
+    target = len(chunks)
+    first_lyric = title_index + title_count
+    if existing_lyric_count > target:
+        delete_slides(key_path, first_lyric + target, existing_lyric_count - target)
+    elif target > existing_lyric_count:
+        duplicate_slide(key_path, first_lyric, target - existing_lyric_count)
+    for i, lines in enumerate(chunks):
+        set_slide_text(key_path, first_lyric + i, "\n".join(lines))
+    return title_count + target
 
 
 # A worship-song unit in the template: 3 slides — a blank-green separator, a title slide,

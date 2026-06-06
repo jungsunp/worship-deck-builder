@@ -21,6 +21,11 @@ def _is_opening_worship(row: dict) -> bool:
     return "성가대" not in (row.get("title", "") + row.get("leader", ""))
 
 
+def _is_choir_row(row: dict) -> bool:
+    """The 성가대 choir 찬양 row — the worship 찬양 row that isn't the opening medley."""
+    return row.get("part", "").replace(" ", "") == "찬양" and not _is_opening_worship(row)
+
+
 def assign_worship_songs(worship_order: list[dict], songs: list[Song]) -> list[dict]:
     """Attach the band-sheet medley (ordered) to the opening 찬양 slot.
 
