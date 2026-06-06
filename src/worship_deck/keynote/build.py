@@ -360,7 +360,10 @@ def place_image(
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    img = str(Path(image_path).expanduser())
+    # Must be absolute: AppleScript `POSIX file` turns a relative path into a volume-less HFS
+    # reference (`file :data:...`), which `make new image` can't load (returns missing value →
+    # "Can't get width of missing value"). Hymn-image paths are stored relative (data/runs/...).
+    img = str(Path(image_path).expanduser().absolute())
     clear = "1" if clear_existing else "0"
     return _run_osascript(_PLACE_IMAGE, key, str(slide_index), img, clear).strip()
 

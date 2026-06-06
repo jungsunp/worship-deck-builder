@@ -8,13 +8,14 @@ a PDF preview of the draft. This is the human-in-the-loop checkpoint.
 from __future__ import annotations
 
 import shutil
+import subprocess
 from dataclasses import asdict, fields
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import HTMLResponse
 
-from worship_deck import hymn, obs, parse, store
+from worship_deck import hymn, obs, parse, pipeline, store
 from worship_deck.bible import verses
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
@@ -27,6 +28,10 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 # Per-run assemble status, keyed by ISO service date. In-memory is enough: a single-process
 # uvicorn on the Mac drives the whole run (status is lost on restart, which is acceptable).
 _STATUS: dict[str, dict] = {}
+
+# Per-run build status, keyed by ISO service date. Separate from _STATUS so a build doesn't
+# clobber the assemble status the same date already carries.
+_BUILD_STATUS: dict[str, dict] = {}
 
 # Uploaded bulletin/sheet files land here — a fixed local dir under the git-ignored
 # data/ tree (no env var: files arrive via the upload form, not an iCloud drop-folder).
@@ -156,7 +161,9 @@ _REVIEW_HTML = """<!doctype html>
   button { padding: 0.8rem; font-size: 1.05rem; border: 0; border-radius: 8px;
            background: #2563eb; color: #fff; }
   #save { width: 100%; background: #16a34a; margin-top: 1rem; }
-  #status { margin-top: 0.75rem; font-size: 1rem; }
+  #generate { width: 100%; background: #7c3aed; margin-top: 0.5rem; }
+  #generate:disabled { background: #c4b5fd; }
+  #status { margin-top: 0.75rem; font-size: 1rem; white-space: pre-wrap; }
   a { color: #2563eb; }
 </style>
 </head>
@@ -167,6 +174,7 @@ _REVIEW_HTML = """<!doctype html>
 <div id="order"></div>
 
 <button id="save" type="button" onclick="save()">Save</button>
+<button id="generate" type="button" onclick="generate()">Generate deck</button>
 <div id="status"></div>
 <script>
 const date = location.pathname.split('/').pop();
@@ -316,6 +324,29 @@ async function save() {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(run),
   });
   document.getElementById('status').textContent = r.ok ? 'Saved.' : 'Save error: ' + r.status;
+  return r.ok;
+}
+
+let _buildTimer;
+async function generate() {
+  const btn = document.getElementById('generate');
+  const st = document.getElementById('status');
+  // Persist edits first — the build reads the saved run store, not the page.
+  if (!(await save())) return;
+  btn.disabled = true;
+  st.textContent = 'Building deck… (this takes a minute on the Mac)';
+  const r = await fetch('/runs/' + date + '/build', {method: 'POST'});
+  const body = await r.json();
+  if (!r.ok) { st.textContent = 'Build error: ' + (body.detail || r.status); btn.disabled = false; return; }
+  clearInterval(_buildTimer);
+  _buildTimer = setInterval(async () => {
+    const s = await (await fetch(body.status_url)).json();
+    if (s.status === 'running') return;
+    clearInterval(_buildTimer);
+    btn.disabled = false;
+    if (s.status === 'done') st.textContent = 'Done — draft saved at ' + s.path + '\\nOpening in Keynote…';
+    else st.textContent = 'Build failed: ' + (s.error || s.status);
+  }, 2000);
 }
 
 load();
@@ -522,3 +553,50 @@ def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
     data.choir_song = asdict(parse_choir_text(body.get("text", "")))
     store.save(service_date, data)
     return asdict(data)
+
+
+# ── Build (Generate) ─────────────────────────────────────────────────────────
+
+
+def _build_async(service_date: str) -> None:
+    """Drive Keynote to build the draft .key from the reviewed run, then open it on the Mac.
+
+    FastAPI runs this in a threadpool after the response is sent. The build is slow
+    (~60–90s, real Keynote) and local_only, so it must not block the phone's request.
+    Failures are caught and recorded in `_BUILD_STATUS` so the page reports them.
+    PDF preview is a follow-up (#26 split): for now the operator reviews the opened deck.
+    """
+    logger = obs.configure_logging()
+    try:
+        path = pipeline.run(service_date)
+        # Open the draft in Keynote on the Mac (operator is at the machine). Best-effort:
+        # the build already succeeded, so a failed `open` shouldn't flip the status to error.
+        subprocess.run(["open", path], check=False)
+        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "error": None}
+        logger.info("Built draft for %s at %s", service_date, path)
+    except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
+        logger.exception("Build failed for %s", service_date)
+        _BUILD_STATUS[service_date] = {"status": "error", "path": None, "error": repr(e)}
+
+
+@app.post("/runs/{service_date}/build")
+def build_run(service_date: str, background_tasks: BackgroundTasks) -> dict:
+    """Kick off the Keynote build for an assembled+reviewed run; poll the status_url for the path."""
+    try:
+        store.path_for(service_date)  # validate the date shape
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    if not store.exists(service_date):
+        raise HTTPException(status_code=404, detail="no run for that date")
+    _BUILD_STATUS[service_date] = {"status": "running", "path": None, "error": None}
+    background_tasks.add_task(_build_async, service_date)
+    return {"service_date": service_date, "status_url": f"/runs/{service_date}/build/status"}
+
+
+@app.get("/runs/{service_date}/build/status")
+def build_status(service_date: str) -> dict:
+    try:
+        store.path_for(service_date)  # validate the date shape
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    return _BUILD_STATUS.get(service_date, {"status": "unknown"})
