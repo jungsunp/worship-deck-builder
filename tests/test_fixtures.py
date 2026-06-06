@@ -27,8 +27,8 @@ def test_bulletin_fixture_is_valid_pdf() -> None:
         logging.disable(logging.NOTSET)
 
     assert "주일예배" in text
-    assert "시 133" in text          # 예배의 부름 reference
-    assert "눅 22:14-24" in text     # 말씀 reference
+    assert "시 133" in text                # 예배의 부름 reference
+    assert "요한복음 4:43-54" in text      # 말씀 reference (full Korean book name)
     assert "교회소식" in text
 
 
