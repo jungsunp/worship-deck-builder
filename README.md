@@ -77,6 +77,40 @@ are placed as-is.
 See [`config/slide_map.yaml`](config/slide_map.yaml) — it encodes which template sections
 change weekly and where their content comes from.
 
+### Replacing the template (`master.key`) — maintenance checklist
+
+`master.key` is a real recent deck, so it's replaced occasionally (a new seasonal design, a
+re-ordered service). The build locates each section by a **hard-coded slide index** that is
+true only for the *current* template. A new deck almost certainly shifts these, and the build
+will then edit/delete the wrong slides **with no error**. So after dropping in a new
+`master.key`, re-verify every anchor below and update both `keynote/build.py` and
+`config/slide_map.yaml` (they must agree). This is rare but mandatory — there is no automatic
+drift handling yet ([#98](../../issues/98)).
+
+The anchors (1-based slide numbers), as called in `build()`:
+
+| Section | Anchor(s) in `build.py` | Notes |
+|---|---|---|
+| 찬양 worship medley | `fill_worship_songs(…, 6, 41, …)` | start slide 6, section length 41 |
+| 예배의 부름 verses | `fill_verse_slides(…, 48, …, existing_count=1)` | |
+| 성가대 choir | `fill_choir_slides(…, 77, …)` | also `title_count=2`, `existing_lyric_count=17` in the fn defaults |
+| 봉헌 hymn images | `fill_hymn_slides(…, 97, …)` | start slide only; the block size is detected at runtime |
+| 교회소식 announcements | `fill_announcement_slides(…, 117, …, existing_count=5)` | |
+| 말씀 verses | `fill_verse_slides(…, 129, …, existing_count=4)` | |
+| 말씀 title slide | `set_sermon_title_slide(…, 134, …)` | |
+| 말씀 ad-hoc special block | `delete_slides(…, 135, 18)` | **most fragile** — 18 ad-hoc slides between the title and the 파송/축도/주기도문 closing; size + content vary every week ([#97](../../issues/97)) |
+
+**How to find the new numbers** — open the new `master.key` in Keynote and read the slide
+positions from the navigator, or decode the deck without Keynote (the `.key` is a Zip of
+Snappy-framed protobuf; unzip `Index/Slide-*.iwa`, decompress each Snappy block, and the
+Korean text survives in the literals — enough to map slide → section). For the special block:
+its range is everything between the sermon-title slide and the first recurring-closing slide
+(파송의 노래 / 축도 / 주기도문). Update `existing_count` / `section_len` arguments too if the
+template's per-section slide counts changed.
+
+After updating, run `pytest -m "not local_only" tests/test_keynote_build.py` (the `build`
+dispatch test pins the anchors) and do an eyeball build to confirm.
+
 ## Setup
 
 **System prerequisites (macOS):**
