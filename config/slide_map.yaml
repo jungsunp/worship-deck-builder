@@ -79,7 +79,11 @@ sections:
     bible_versions: [개역한글, ESV]
     render: native_text
     special_slides:
-      note: "pastor frequently requests ad-hoc slides (messages/images/videos/lyrics)"
+      slides: [135, 152]   # ad-hoc block (18 slides); DELETED on a fresh build (#97)
+      note: "last week's pastor-requested slides (messages/images/videos/lyrics), between the
+        말씀 title slide and the 파송의 노래/축도/주기도문 closing. Never recur, so build() drops
+        them; the operator adds this week's specials manually in review. Re-verify range on
+        master.key replacement (#98)."
       render: manual
 
   ending_date:
