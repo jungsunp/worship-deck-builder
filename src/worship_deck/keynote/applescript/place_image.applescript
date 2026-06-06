@@ -2,12 +2,16 @@ on run argv
     set keyPath to item 1 of argv
     set slideIndex to (item 2 of argv) as integer
     set imgPath to item 3 of argv
+    -- Optional 4th arg "1": delete the slide's existing images first (replace, not stack) — used
+    -- to swap last week's 봉헌 hymn page for this week's rather than layering on top of it.
+    set clearExisting to ((count of argv) ≥ 4 and (item 4 of argv) is "1")
     tell application "Keynote"
         activate  -- ensure the app is fully launched before the open event (avoids -609)
         set d to open (POSIX file keyPath)
         set slideW to width of d
         set slideH to height of d
         tell slide slideIndex of d
+            if clearExisting then delete every image
             set img to make new image with properties {file:(POSIX file imgPath)}
         end tell
         -- Full-bleed by aspect-fill (cover): Keynote locks an image's aspect ratio, so we can't

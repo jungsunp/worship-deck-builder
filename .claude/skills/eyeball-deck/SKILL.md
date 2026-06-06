@@ -19,6 +19,7 @@ open it). Run it from the repo root with the project's venv active:
 python .claude/skills/eyeball-deck/build_eyeball.py song            # sample worship song
 python .claude/skills/eyeball-deck/build_eyeball.py verse           # sample 예배의 부름 verses
 python .claude/skills/eyeball-deck/build_eyeball.py announce        # 교회소식 from the sample bulletin
+python .claude/skills/eyeball-deck/build_eyeball.py hymn            # 봉헌 hymn 220 downloaded online
 ```
 
 Customize content / placement:
@@ -36,6 +37,11 @@ python .claude/skills/eyeball-deck/build_eyeball.py verse --ref "눅 22:14-24" -
 python .claude/skills/eyeball-deck/build_eyeball.py announce --bulletin data/real-bulletin.pdf
 # or override the content explicitly
 python .claude/skills/eyeball-deck/build_eyeball.py announce --item "1. 새가족 환영회" --item "2. 여름성경학교 안내"
+
+# 봉헌 hymn: download a specific 찬송가 number online (needs soffice + poppler + network)
+python .claude/skills/eyeball-deck/build_eyeball.py hymn --number 220
+# or place your own PNGs (skips the download)
+python .claude/skills/eyeball-deck/build_eyeball.py hymn --image a.png --image b.png
 ```
 
 Useful flags: `--out <path>` (default `/tmp/draft-eyeball.key`; pass
@@ -52,6 +58,13 @@ The script prints the slide range to review and opens the deck.
 - **Announcements (교회소식)** — item slides **117–121** (`--at 117`, default `--existing 5`); each
   is one item, parsed from the bulletin (`announcement_blocks`: numbered title + reflowed detail).
   Slides 113–116 are section-title/motto headers (not touched); slide 122 is blank.
+- **Offering hymn (봉헌)** — section anchor **97** (`--at 97`). Slides 97–98 are the 봉헌
+  title/intro text slides; last week's hymn *page images* follow (99–106 in the current template).
+  The block size **varies weekly** (a different hymn has a different page count), so `fill_hymn_slides`
+  does NOT take an `--existing`: `hymn_image_block` auto-detects last week's pages (the contiguous
+  image slides at/after 97) and replaces exactly those, leaving the title/intro slides alone. Each
+  new page is placed with `clear_existing=True`, deleting last week's page on that slide first
+  (replace, not stack).
 
 (Confirm against the current template if it changed — probe with a throwaway `osascript` that
 dumps each slide's on-canvas text-item positions, as in `tests/test_keynote_build.py`.)
@@ -67,6 +80,12 @@ Name the exact slides to open and what each should show, e.g. for `song --at 7`:
 For `announce --at 117`: slides **117..** each carry one announcement item — paragraph 1 is the
 title (rendered **gold**), the rest is the detail (rendered **white**), matching master.key. The
 slide right after the block is the next section (proves surplus item slides were trimmed).
+
+For `hymn`: the script prints the detected page range (e.g. "Replaced last week's hymn pages
+(slides 99–106) with 9 new …"). Tell the user to check: the 봉헌 **title/intro** slides (97–98)
+are **unchanged**; the detected block now shows **this week's** hymn pages, full-bleed; and the
+slide **right after** the block is the next section (환영 및 인사) — no leftover hymn pages, and no
+old page peeking out from under a new one (each replaced slide has exactly one image).
 
 ## Keynote stability rules (do not skip — these are why earlier runs failed)
 

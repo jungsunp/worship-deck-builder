@@ -29,11 +29,14 @@ REPO = Path(__file__).resolve().parents[3]  # .claude/skills/eyeball-deck/ -> re
 sys.path.insert(0, str(REPO / "src"))  # belt-and-suspenders if not pip-installed
 
 from worship_deck.bible.verses import Verse  # noqa: E402
+from worship_deck.hymn import fetch_hymn_slides  # noqa: E402
 from worship_deck.keynote.build import (  # noqa: E402
     fill_announcement_slides,
     fill_choir_slides,
+    fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
+    hymn_image_block,
     save_draft,
 )
 from worship_deck.lyrics.choir import parse_choir_text  # noqa: E402
@@ -152,6 +155,14 @@ def main() -> None:
     cp.add_argument("--at", type=int, default=77, help="first title-slide index (default: 77)")
     cp.add_argument("--text-file", help="raw pasted choir text (title + composer + lyric lines)")
 
+    hp = sub.add_parser("hymn", parents=[common], help="fill 봉헌 hymn image block (downloaded PNGs)")
+    hp.add_argument("--at", type=int, default=97, help="봉헌 section anchor; the hymn-page block is "
+                    "auto-detected at/after it (default: 97)")
+    hp.add_argument("--number", default="220",
+                    help="찬송가 number to download from bibletoppt (default: 220)")
+    hp.add_argument("--image", action="append", dest="images",
+                    help="override: a PNG path; repeatable (skips the download)")
+
     ap_ = sub.add_parser("announce", parents=[common], help="fill 교회소식 (one item per slide)")
     ap_.set_defaults(existing=5)  # the template 교회소식 block is 5 item slides (117–121)
     ap_.add_argument("--at", type=int, default=117, help="first announcement-slide index (default: 117)")
@@ -193,6 +204,20 @@ def main() -> None:
         first, last = args.at, args.at + n - 1
         src = "--item overrides" if args.items else Path(args.bulletin).name
         print(f"Filled announcements: {n} slides (one item per slide, from {src}).")
+    elif args.section == "hymn":
+        if args.images:
+            images = [str(Path(p).expanduser()) for p in args.images]
+            src = f"{len(images)} --image overrides"
+        else:
+            work = Path("/tmp/eyeball-hymn") / args.number
+            print(f"Downloading 찬송가 {args.number} → PNG slides (soffice + pdftoppm) …", flush=True)
+            images = [str(p) for p in fetch_hymn_slides(args.number, work)]
+            src = f"찬송가 {args.number} ({len(images)} slides)"
+        blk_first, blk_last = hymn_image_block(out, args.at)
+        n = fill_hymn_slides(out, args.at, images)
+        first, last = blk_first, blk_first + n - 1
+        print(f"Replaced last week's hymn pages (slides {blk_first}–{blk_last}) with {n} new "
+              f"({src}); 봉헌 title/intro slides before {blk_first} left untouched.")
     else:
         if args.ref:
             from worship_deck.bible.verses import lookup_verses, verse_labels
