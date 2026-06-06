@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from worship_deck.lyrics.choir import parse_choir_text
-from worship_deck.lyrics.transcribe import Song
+from worship_deck.lyrics.transcribe import Song, chunk
 
 # Two sample choir blocks: title line + composer/arranger line + line-broken lyrics.
 _SONG_A = """\
@@ -63,3 +63,21 @@ def test_no_composer_line_leaves_composer_empty() -> None:
 
 def test_empty_input_returns_empty_song() -> None:
     assert parse_choir_text("   \n\n  ") == Song(title="")
+
+
+def test_interior_blank_lines_preserved_as_stanza_breaks() -> None:
+    """Blank lines between stanzas survive so chunk() starts each stanza on a new slide."""
+    raw = "제목\n작곡자 작곡\n\n높은 산이\n거친 들이\n\n그 어디나\n할렐루야\n"
+    song = parse_choir_text(raw)
+    assert song.lines == ["높은 산이", "거친 들이", "", "그 어디나", "할렐루야"]
+    assert chunk(song.lines) == [
+        ["높은 산이", "거친 들이"],
+        ["그 어디나", "할렐루야"],
+    ]
+
+
+def test_interlude_marker_dropped() -> None:
+    """A 간주 line (with or without parens) is dropped, not paired into a lyric slide."""
+    raw = "제목\n작곡자 작곡\n\n높은 산이\n간주\n(간주)\n그 어디나\n"
+    song = parse_choir_text(raw)
+    assert song.lines == ["높은 산이", "그 어디나"]
