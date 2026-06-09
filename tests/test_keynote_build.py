@@ -11,6 +11,8 @@ from worship_deck.bible.verses import Verse
 from worship_deck.keynote import build as B
 from worship_deck.keynote.build import (
     _chunk_verses,
+    _fit_title,
+    _wrap_balanced,
     build,
     delete_slides,
     duplicate_block,
@@ -23,11 +25,15 @@ from worship_deck.keynote.build import (
     fill_worship_songs,
     hymn_image_block,
     place_image,
+    read_title_box,
     read_verse_boxes,
     save_draft,
     set_announcement_slide,
+    set_call_to_worship_ref,
     set_choir_title,
     set_date_slides,
+    set_offering_hymn_title_slide,
+    set_sermon_ref_slide,
     set_sermon_title_slide,
     set_slide_text,
     set_verse_slide,
@@ -283,18 +289,139 @@ def test_set_sermon_title_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> 
         captured["cmd"] = cmd
         return _FakeCompleted(returncode=0, stdout="ok\n")
 
+    # read_title_box drives the wrap/shrink; stub it so the test stays CI-safe (no Keynote).
+    monkeypatch.setattr(B, "read_title_box", lambda *a: (758, 326, 130))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = set_sermon_title_slide("draft.key", 134, "믿음의 경주", "[히 12:1-2]")
+    result = set_sermon_title_slide("draft.key", 134, "참된 예배", "[히 12:1-2]")
 
     assert result == "ok"
+    # short title fits one line at the box's base font, so text is unwrapped and font is 130
     assert captured["cmd"] == [
         "osascript",
         str(B._SET_SERMON_TITLE),
         "draft.key",
         "134",
-        "믿음의 경주",
+        "참된 예배",
         "[히 12:1-2]",
+        "130",
+    ]
+
+
+def test_set_sermon_title_slide_wraps_and_shrinks_long_title(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(B, "read_title_box", lambda *a: (758, 326, 130))
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    set_sermon_title_slide("draft.key", 134, "왜 그럼 그 때는 가만히 계셨을까?", "[삼상 5:1-12]")
+
+    # title overflows one line, so it wraps to two balanced lines and the font shrinks below base
+    wrapped, font = captured["cmd"][4], captured["cmd"][6]
+    assert wrapped == "왜 그럼 그 때는\n가만히 계셨을까?"
+    assert int(font) < 130
+
+
+def test_set_call_to_worship_ref_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_call_to_worship_ref("draft.key", 47, "눅 15:19-23")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_CTW_REF),
+        "draft.key",
+        "47",
+        "[ 눅 15:19-23 ]",  # spaced brackets, matching the deck
+    ]
+
+
+def test_set_sermon_ref_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_sermon_ref_slide("draft.key", 127, "삼상 5:1-12")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_SERMON_REF),
+        "draft.key",
+        "127",
+        "삼상 5:1-12",          # bare Korean ref box
+        "[1 Samuel 5:1-12]",    # bracketed English ref box (ESV book name)
+    ]
+
+
+def test_read_title_box_parses_dimensions(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        return _FakeCompleted(returncode=0, stdout="758 326 130.0\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    assert read_title_box("draft.key", 134) == (758, 326, 130)
+
+
+# _wrap_balanced / _fit_title — pure functions (CI-safe)
+
+def test_wrap_balanced_two_lines_splits_evenly() -> None:
+    assert _wrap_balanced("왜 그럼 그 때는 가만히 계셨을까?", 2) == ["왜 그럼 그 때는", "가만히 계셨을까?"]
+
+
+def test_wrap_balanced_single_word_stays_one_line() -> None:
+    assert _wrap_balanced("주기도문", 2) == ["주기도문"]
+
+
+def test_fit_title_short_keeps_one_line_at_base_font() -> None:
+    text, font = _fit_title("참된 예배", 758, 326, 130)
+    assert text == "참된 예배"
+    assert font == 130
+
+
+def test_fit_title_long_wraps_to_two_lines_under_base() -> None:
+    text, font = _fit_title("왜 그럼 그 때는 가만히 계셨을까?", 758, 326, 130)
+    assert text == "왜 그럼 그 때는\n가만히 계셨을까?"
+    # Shrunk from base but kept the LARGEST fitting font, so it stays bigger than the gold
+    # scripture ref (84pt on master.key) — the title is the dominant element (#106 follow-up).
+    assert 84 < font < 130
+
+
+def test_set_offering_hymn_title_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_offering_hymn_title_slide("draft.key", 97, "455", "주님의 마음을 본받는 자")
+
+    assert result == "ok"
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_OFFERING_HYMN_TITLE),
+        "draft.key",
+        "97",
+        "[ 주님의 마음을 본받는 자 ]",
+        "(찬 455장)",
     ]
 
 
@@ -810,6 +937,26 @@ def test_set_sermon_title_slide_live_sets_title_and_ref(
 
 
 @pytest.mark.local_only
+def test_set_offering_hymn_title_slide_live_sets_title_and_number(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Slide 97 is one box of 3 paragraphs — a static "봉 헌" heading, the bracketed hymn title,
+    then "(찬 N장)". The heading must survive while the title/number are replaced with this week's,
+    and last week's number/title must be gone (#106)."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    assert set_offering_hymn_title_slide(str(draft), 97, "455", "주님의 마음을 본받는 자") == "ok"
+
+    text = _on_canvas_text(str(draft), 97)
+    assert "봉" in text  # static heading preserved
+    assert "[ 주님의 마음을 본받는 자 ]" in text  # title paragraph set
+    assert "(찬 455장)" in text  # number paragraph set
+    assert "피난처" not in text  # last week's title is gone
+    assert "70장" not in text  # last week's number is gone
+
+
+@pytest.mark.local_only
 def test_fill_song_slides_live_fills_title_and_trims_leftover(
     real_template_key: Path, tmp_path: Path
 ) -> None:
@@ -1044,10 +1191,13 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         "set_date_slides",
         "delete_slides",
         "set_sermon_title_slide",
+        "set_sermon_ref_slide",
         "fill_verse_slides",
         "fill_announcement_slides",
+        "set_offering_hymn_title_slide",
         "fill_hymn_slides",
         "fill_choir_slides",
+        "set_call_to_worship_ref",
         "fill_worship_songs",
     ):
         monkeypatch.setattr(B, name, rec(name))
@@ -1070,6 +1220,8 @@ def _full_run() -> ServiceData:
         sermon_title="믿음의 경주",
         sermon_ref="히 12:1-2",
         announcements=["공지 하나", "공지 둘"],
+        offering_hymn_number="455",
+        offering_hymn_title="주님의 마음을 본받는 자",
         offering_hymn_images=["slide-1.png", "slide-2.png"],
     )
 
@@ -1090,9 +1242,12 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
         "delete_slides",           # 말씀 ad-hoc special block @135 (#97)
         "set_sermon_title_slide",  # 말씀 title @134
         "fill_verse_slides",       # 말씀 @129
+        "set_sermon_ref_slide",    # 말씀 ref recap @127 (count-neutral, #107)
         "fill_announcement_slides",  # 교회소식 @117
-        "fill_hymn_slides",        # 봉헌 @97
+        "set_offering_hymn_title_slide",  # 봉헌 title @97 (count-neutral)
+        "fill_hymn_slides",        # 봉헌 images @97
         "fill_choir_slides",       # 성가대 @77
+        "set_call_to_worship_ref",  # 예배의 부름 ref slide @47 (count-neutral, #107)
         "fill_verse_slides",       # 예배의 부름 @48
         "fill_worship_songs",      # 찬양 medley @6
     ]
@@ -1114,9 +1269,17 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
     assert ctw_call[2] == {"existing_count": 1}
     assert ctw_call[1][4] == [Verse(1, "보라 형제가", "Behold")]
 
+    # 예배의 부름 ref-display slide (47) gets this week's bare reference (#107).
+    assert by_name["set_call_to_worship_ref"][1] == ("out.key", 47, "시 133:1-3")
+    # 말씀 scripture-ref recap slide (127) gets this week's sermon reference (#107).
+    assert by_name["set_sermon_ref_slide"][1] == ("out.key", 127, "히 12:1-2")
+
     announce = by_name["fill_announcement_slides"]
     assert announce[1] == ("out.key", 117, ["공지 하나", "공지 둘"])
     assert announce[2] == {"existing_count": 5}
+
+    hymn_title = by_name["set_offering_hymn_title_slide"]
+    assert hymn_title[1] == ("out.key", 97, "455", "주님의 마음을 본받는 자")  # number + title
 
     hymn = by_name["fill_hymn_slides"]
     assert hymn[1] == ("out.key", 97, ["slide-1.png", "slide-2.png"])  # detects the block itself

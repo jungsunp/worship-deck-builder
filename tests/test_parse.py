@@ -8,10 +8,16 @@ import pytest
 
 from worship_deck.parse import parse
 from worship_deck.parse.bulletin import (
+    _find_row,
     _parse_offering_hymn,
+    _part_cell,
     _split_content,
     announcement_blocks,
 )
+
+
+def _w(text: str, x0: float, x1: float) -> dict:
+    return {"text": text, "x0": x0, "x1": x1}
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -139,6 +145,46 @@ def test_split_content_branches(content: str, expected: tuple[str, str, str]) ->
 )
 def test_parse_offering_hymn_branches(title: str, expected: tuple) -> None:
     assert _parse_offering_hymn(title) == expected
+
+
+# ── _part_cell() unit tests ───────────────────────────────────────────────────
+# Real coords from NPC060726: the 말 씀 row carries a gutter series prefix "왜" (x0≈97)
+# between the part name (x≈27–47) and the content; it must split off into the content (it
+# leads the sermon title "왜 그럼 그 때는…"), not glue onto the part name (#104).
+
+def test_part_cell_splits_gutter_series_prefix_to_content() -> None:
+    # 말(27–36) 씀(39–47)  …50pt gap…  왜(97–104)
+    cells = [_w("말", 27.4, 36.1), _w("씀", 38.7, 47.3), _w("왜", 97.3, 104.2)]
+    assert _part_cell(cells) == ("말 씀", ["왜"])
+
+
+def test_part_cell_keeps_multi_word_part_and_strips_footnote() -> None:
+    # 환영(27–45) 및(47–56) 인사*(59–80) — small gaps, all one part; trailing * stripped, no gutter
+    cells = [_w("환영", 27, 45), _w("및", 47, 56), _w("인사*", 59, 80)]
+    assert _part_cell(cells) == ("환영 및 인사", [])
+
+
+def test_part_cell_empty() -> None:
+    assert _part_cell([]) == ("", [])
+
+
+# ── _find_row() unit tests ────────────────────────────────────────────────────
+# The sermon row sometimes carries a series prefix in the part cell ("왜 말 씀"); the
+# lookup must match by whitespace-stripped substring, not exact equality (#104).
+
+def test_find_row_matches_series_prefix() -> None:
+    order = [
+        {"part": "예배의 부름", "title": "", "leader": "", "ref": "시 133:1-3"},
+        {"part": "왜 말 씀", "title": "그럼 그 때는", "leader": "강선우 목사", "ref": "삼상 5:1-12"},
+        {"part": "봉 헌", "title": "피난처 있으니 (찬 70장)", "leader": "다함께", "ref": ""},
+    ]
+    assert _find_row(order, "말 씀")["title"] == "그럼 그 때는"
+    assert _find_row(order, "말 씀")["ref"] == "삼상 5:1-12"
+    # exact-spacing rows still match
+    assert _find_row(order, "예배의 부름")["ref"] == "시 133:1-3"
+    assert _find_row(order, "봉 헌")["title"] == "피난처 있으니 (찬 70장)"
+    # no match → {}
+    assert _find_row(order, "축 도") == {}
 
 
 def test_parse_worship_order_leaders() -> None:

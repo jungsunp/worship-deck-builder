@@ -3,6 +3,7 @@ on run argv
     set slideIndex to (item 2 of argv) as integer
     set titleText to item 3 of argv
     set refText to item 4 of argv
+    set fontText to item 5 of argv  -- title font (pt) sized to fit the box; "0" = leave unchanged
     tell application "Keynote"
         activate  -- ensure the app is fully launched before the open event (avoids -609)
         set d to open (POSIX file keyPath)
@@ -20,7 +21,12 @@ on run argv
                 if txt contains "[" then
                     set object text of (text item i of s) to refText
                 else
+                    -- titleText carries \n line breaks (wrapped to fit); set as paragraphs, then
+                    -- shrink the box's font to the fitted size so the title clears the box edges.
                     set object text of (text item i of s) to titleText
+                    if fontText is not "0" then
+                        set size of object text of (text item i of s) to (fontText as number)
+                    end if
                 end if
             end if
         end repeat

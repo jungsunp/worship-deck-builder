@@ -92,3 +92,8 @@ def verse_labels(reference: str) -> tuple[str, str]:
     kr_label = f"[{reference}, 개역한글]"
     en_label = f"[{_ref_to_query(parse_ref(reference))}, ESV]"
     return kr_label, en_label
+
+
+def english_ref(reference: str) -> str:
+    """Return the bare ESV-style English reference, e.g. "삼상 5:1-12" -> "1 Samuel 5:1-12"."""
+    return _ref_to_query(parse_ref(reference))

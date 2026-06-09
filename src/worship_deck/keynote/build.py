@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from worship_deck.bible.verses import Verse, verse_labels
+from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.lyrics.transcribe import Song, chunk
 from worship_deck.parse.bulletin import ServiceData
 
@@ -28,8 +28,14 @@ _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.apples
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
 _SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
+_SET_OFFERING_HYMN_TITLE = (
+    Path(__file__).parent / "applescript" / "set_offering_hymn_title.applescript"
+)
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
 _HYMN_IMAGE_BLOCK = Path(__file__).parent / "applescript" / "hymn_image_block.applescript"
+_READ_TITLE_BOX = Path(__file__).parent / "applescript" / "read_title_box.applescript"
+_SET_CTW_REF = Path(__file__).parent / "applescript" / "set_ctw_ref.applescript"
+_SET_SERMON_REF = Path(__file__).parent / "applescript" / "set_sermon_ref.applescript"
 
 # --- verse-slide layout model (calibrated against master.key renders) ---------------------
 # Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
@@ -39,6 +45,17 @@ _CHAR_W_KO = 1.0     # avg glyph advance / font size — full-width Hangul
 _CHAR_W_EN = 0.5     # avg glyph advance / font size — proportional Latin
 _MIN_FONT_KO = 60    # readability floor (pt); calibrated so pagination matches master.key's
 _MIN_FONT_EN = 44    # slide counts (시 133:1-3 → 1 slide, 눅 22:14-24 → 4) at master's effective sizes
+
+# --- sermon-title fit model (#106 follow-up) ----------------------------------------------
+# The standalone 말씀 title box auto-grows to its content (no word-wrap/autoshrink via
+# AppleScript), so a long title at the designed font overflows the decorative frame around it
+# (e.g. "왜 그럼 그 때는 가만히 계셨을까?"). We wrap it ourselves and pick the LARGEST font that fits
+# the frame, so the title stays the dominant element (bigger than the gold scripture ref) —
+# matching the church's hand-built decks.
+_TITLE_CHAR_W_KO = 0.83  # Hangul title advance / font: calibrated to master.key's title box
+                         # ("이를 행하여 / 나를 기념하라" = 7-char lines at 130pt in a 758pt box)
+_MIN_FONT_TITLE = 70   # readability floor (pt); options at/above it are preferred when wrapping
+_MAX_TITLE_LINES = 4   # cap on wrapped title lines considered
 
 
 def _run_osascript(script: Path, *args: str) -> str:
@@ -182,6 +199,52 @@ def _fit_lines(box_h: int, font: int) -> int:
     return max(1, int(box_h / (font * _LINE_H)))
 
 
+def _wrap_balanced(text: str, lines: int) -> list[str]:
+    """Greedily pack `text`'s space-separated words into at most `lines` roughly equal lines.
+
+    Lines break only at spaces; a per-line target of len(text)/lines keeps them balanced. A
+    single word (no spaces) cannot be split, so it is returned as one line. Returns fewer than
+    `lines` entries when there aren't enough words to fill them.
+    """
+    words = text.split()
+    if lines <= 1 or len(words) <= 1:
+        return [text.strip()] if words else []
+    target = len(text) / lines
+    out: list[str] = []
+    cur = ""
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > target and len(out) < lines - 1:
+            out.append(cur)
+            cur = w
+        else:
+            cur = f"{cur} {w}" if cur else w
+    if cur:
+        out.append(cur)
+    return out
+
+
+def _fit_title(text: str, box_w: int, box_h: int, base_font: int) -> tuple[str, int]:
+    """Size a sermon title to a box_w×box_h box: return (text with \\n breaks, font pt).
+
+    Keynote can't word-wrap or autoshrink via AppleScript, so we do both: try 1.._MAX_TITLE_LINES
+    lines, balance-wrapping each way, and size each option by what fits the box width (longest
+    line) and height (line count). Pick the LARGEST font (ties → fewest lines) so the title stays
+    prominent; restrict to options at/above _MIN_FONT_TITLE when any qualify. The font is capped at
+    the template's base font so short titles are never enlarged. Hangul advance is _TITLE_CHAR_W_KO.
+    """
+    options: list[tuple[int, int, list[str]]] = []  # (line_count, font, lines)
+    for n in range(1, _MAX_TITLE_LINES + 1):
+        wrapped = _wrap_balanced(text, n)
+        longest = max((len(ln) for ln in wrapped), default=1)
+        font = int(
+            min(base_font, box_w / (longest * _TITLE_CHAR_W_KO), box_h / (len(wrapped) * _LINE_H))
+        )
+        options.append((len(wrapped), font, wrapped))
+    pool = [o for o in options if o[1] >= _MIN_FONT_TITLE] or options
+    line_count, font, lines = max(pool, key=lambda o: (o[1], -o[0]))
+    return "\n".join(lines), font
+
+
 def _chunk_verses(
     verses: list[Verse],
     *,
@@ -231,6 +294,21 @@ def read_verse_boxes(key_path: str, slide_index: int) -> tuple[tuple[int, int], 
     ko_w, ko_h = (int(x) for x in ko_line.split())
     en_w, en_h = (int(x) for x in en_line.split())
     return (ko_w, ko_h), (en_w, en_h)
+
+
+def read_title_box(key_path: str, slide_index: int) -> tuple[int, int, int]:
+    """Return (width, height, font_pt) of the sermon-title box on a slide (#106 follow-up).
+
+    The title box is the on-canvas text item that is NOT the bracketed scripture-ref box; its
+    geometry + base font drive _fit_title's wrap/shrink so the title fits without overflowing.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_READ_TITLE_BOX, key, str(slide_index))
+    w, h, font = (int(float(x)) for x in out.strip().split())
+    return w, h, font
 
 
 def delete_slides(key_path: str, start_index: int, count: int) -> int:
@@ -334,13 +412,78 @@ def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str
     DIFFERENT text, so set_slide_text (which sets every box to one string) would duplicate the
     title across both. Boxes are classified by content — the bracketed one (e.g. "[눅 22:14-24]")
     is the reference — never by index. `ref` includes brackets, e.g. "[히 12:1-2]"; pass "" to
-    blank the reference box. Returns "ok".
+    blank the reference box.
+
+    The title box does not word-wrap or autoshrink, so a long title overflows it (#106 follow-up):
+    the box geometry is read and `_fit_title` wraps the title to the fewest readable lines and the
+    font shrunk to fit, both applied by the script. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    return _run_osascript(_SET_SERMON_TITLE, key, str(slide_index), title, ref).strip()
+    box_w, box_h, base_font = read_title_box(key, slide_index)
+    wrapped, font = _fit_title(title, box_w, box_h, base_font)
+    return _run_osascript(
+        _SET_SERMON_TITLE, key, str(slide_index), wrapped, ref, str(font)
+    ).strip()
+
+
+def set_call_to_worship_ref(key_path: str, slide_index: int, ref: str) -> str:
+    """Update the 예배의 부름 reference-display slide's bracketed citation, in place (#107).
+
+    The 예배의 부름 section has a ref-display slide whose single box holds two paragraphs — a static
+    "예배의 부름" heading and the bracketed passage citation — separate from the verse-body slide that
+    `fill_verse_slides` fills. `build()` never touched it, so its citation kept last week's reference.
+    This rewrites paragraph 2 to "[ <ref> ]" (matching the deck's spaced brackets), preserving the
+    heading and paragraph styles. `ref` is the bare reference, e.g. "눅 15:19-23". Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_CTW_REF, key, str(slide_index), f"[ {ref} ]").strip()
+
+
+def set_sermon_ref_slide(key_path: str, slide_index: int, ref: str) -> str:
+    """Update the 말씀 scripture-ref recap slide's two citation boxes, in place (#107).
+
+    A recap slide shown just before the sermon reading carries two on-canvas boxes — a bare Korean
+    reference (e.g. "눅 22:14-24") and a bracketed English reference (e.g. "[Luke 22:14-24]") —
+    distinct from the verse-body slides that `fill_verse_slides` fills, so `build()` never touched
+    it and it kept last week's reference. We classify by the bracket and overwrite each — Korean
+    with the raw `ref`, English with the ESV book name in brackets — preserving each box's
+    font/color. `ref` is the bare Korean reference, e.g. "삼상 5:1-12". Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(
+        _SET_SERMON_REF, key, str(slide_index), ref, f"[{english_ref(ref)}]"
+    ).strip()
+
+
+def set_offering_hymn_title_slide(
+    key_path: str, slide_index: int, number: str, title: str
+) -> str:
+    """Set the 봉헌 title slide's hymn title + number text, in place (#106).
+
+    The 봉헌 title slide is ONE on-canvas box of 3 paragraphs in master.key — a static "봉 헌"
+    heading, the bracketed hymn title, then the hymn number — so it keeps paragraph 1 and writes
+    `title`/`number` into paragraphs 2/3 (per-paragraph font preserved), mirroring the 성가대
+    section-divider in set_choir_title. The two lines are formatted here to match the template's
+    existing style: "[ <title> ]" and "(찬 <number>장)". Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    title_line = f"[ {title} ]"
+    number_line = f"(찬 {number}장)"
+    return _run_osascript(
+        _SET_OFFERING_HYMN_TITLE, key, str(slide_index), title_line, number_line
+    ).strip()
 
 
 def place_image(
@@ -634,7 +777,7 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # of this week's data. Re-verify the 135/18 anchor whenever master.key is replaced (#98).
     delete_slides(out_key, 135, 18)
 
-    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 예배의 부름 (48) -> 찬양 medley (6)
+    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 말씀 ref recap (127) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 예배의 부름 (48/47) -> 찬양 medley (6)
     # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse
     # fill resizes/shifts it (#90). Same title/ref the date slides carry.
     if data.sermon_title:
@@ -645,17 +788,39 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
         verses = [Verse(**v) for v in data.sermon_passage]
         fill_verse_slides(out_key, 129, kr_label, en_label, verses, existing_count=4)
 
+    # 말씀 scripture-ref recap slide (127): the bare-Korean + bracketed-English ref boxes shown
+    # before the sermon reading, distinct from the verse-body slides — must be updated separately
+    # or it keeps last week's reference (#107). 127 < 129, so this count-neutral write and the
+    # expanding verse fill don't shift each other.
+    if data.sermon_ref:
+        set_sermon_ref_slide(out_key, 127, data.sermon_ref)
+
     if data.announcements:
         fill_announcement_slides(out_key, 117, data.announcements, existing_count=5)
 
     # 봉헌 offering-hymn images: replace last week's pages (detected at/after slide 97, after the
     # section's title/intro slides) with this week's. An empty list (failed/absent download) keeps
     # the template's pages for the operator to fix manually rather than replacing them with none.
+    # 봉헌 title slide (97): rewrite the bracketed hymn title + "(찬 N장)" number from this week's
+    # parsed values, else it keeps last week's text (#106). Count-neutral (in-place paragraph text),
+    # and separate from the image fill so the title updates even when the download returned no pages.
+    if data.offering_hymn_number or data.offering_hymn_title:
+        set_offering_hymn_title_slide(
+            out_key, 97, data.offering_hymn_number, data.offering_hymn_title
+        )
+
     if data.offering_hymn_images:
         fill_hymn_slides(out_key, 97, data.offering_hymn_images)
 
     if data.choir_song:
         fill_choir_slides(out_key, 77, Song(**data.choir_song))
+
+    # 예배의 부름: the ref-display slide (47) carries the bare Korean + bracketed English citation
+    # boxes; the verse-body slide (48) holds the passage text. They are distinct — 47 must be
+    # updated separately or it keeps last week's reference (#107). 47 < 48, so the count-neutral
+    # ref write and the expanding verse fill don't shift each other.
+    if data.call_to_worship_ref:
+        set_call_to_worship_ref(out_key, 47, data.call_to_worship_ref)
 
     if data.call_to_worship_passage:
         kr_label, en_label = verse_labels(data.call_to_worship_ref)

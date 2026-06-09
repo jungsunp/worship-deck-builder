@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -224,6 +224,108 @@ def test_assemble_status_rejects_bad_date() -> None:
     assert client.get("/assemble/not-a-date/status").status_code == 400
 
 
+# ── #105: re-assemble warns + preserves review edits ──────────────────────────
+
+
+def _fake_transcribe(monkeypatch, *titles) -> None:
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda _p: [Song(title=t, lines=["x"]) for t in titles],
+    )
+
+
+def test_first_assemble_does_not_need_confirm(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    body = client.post("/assemble").json()
+    assert "needs_confirm" not in body
+    assert "status_url" in body
+
+
+def test_reassemble_existing_run_needs_confirm_and_preserves_store(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    before = store.path_for(date).read_text(encoding="utf-8")
+
+    body = client.post("/assemble").json()
+    assert body["service_date"] == date
+    assert body["needs_confirm"] is True
+    assert body["kept"] == []  # nothing edited yet
+    # the warning short-circuits before any save — the stored run is untouched
+    assert store.path_for(date).read_text(encoding="utf-8") == before
+
+
+def test_reassemble_confirm_lists_kept_and_refreshed_sections(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    client.post(f"/runs/{date}/choir", json={"text": "제목\n작곡자 작곡\n가사 한 줄"})
+    run = client.get(f"/runs/{date}").json()
+    run["worship_songs"][0]["lines"] = ["operator edit"]
+    run["offering_hymn_verses"] = [1, 3]
+    client.put(f"/runs/{date}", json=run)
+
+    body = client.post("/assemble").json()
+    kept, refresh = body["kept"], body["refresh"]
+    # kept lists exactly the operator's edits
+    assert "성가대 choir lyrics" in kept
+    assert "봉헌 verse picks (1, 3)" in kept
+    assert "찬양 songs (edited lyrics/order)" in kept
+    # refresh lists the not-edited sections, and never an edited one
+    assert "교회소식 announcements (re-parsed)" in refresh
+    assert not any("songs" in r for r in refresh)  # 찬양 was edited → not refreshed
+
+
+def test_reassemble_preserves_pure_human_fields(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    client.post(f"/runs/{date}/choir", json={"text": "제목\n작곡자 작곡\n가사 한 줄"})
+    run = client.get(f"/runs/{date}").json()
+    run["offering_hymn_verses"] = [1, 3]
+    client.put(f"/runs/{date}", json=run)
+
+    assert client.post("/assemble?confirm=1").status_code == 200
+    saved = store.load(date)
+    assert saved.choir_song["title"] == "제목"
+    assert saved.offering_hymn_verses == [1, 3]
+
+
+def test_reassemble_preserves_edited_songs_refreshes_unedited(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    run = client.get(f"/runs/{date}").json()
+    run["worship_songs"][0]["lines"] = ["operator edit"]  # marks worship_songs edited
+    client.put(f"/runs/{date}", json=run)
+
+    # a corrected bulletin + a different transcription would overwrite if not preserved
+    monkeypatch.setattr(
+        app_module.parse, "parse", lambda _p: replace(_fake_data(), announcements=["1. new notice"])
+    )
+    _fake_transcribe(monkeypatch, "song B")
+    assert client.post("/assemble?confirm=1").status_code == 200
+
+    saved = store.load(date)
+    assert saved.worship_songs[0]["lines"] == ["operator edit"]  # edited → preserved
+    assert saved.worship_songs[0]["title"] == "song A"
+    assert saved.announcements == ["1. new notice"]  # unedited → refreshed
+
+
+def test_reassemble_preserves_edited_announcements_refreshes_songs(_assemble_env, monkeypatch) -> None:
+    monkeypatch.setattr(
+        app_module.parse, "parse", lambda _p: replace(_fake_data(), announcements=["1. orig"])
+    )
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    run = client.get(f"/runs/{date}").json()
+    run["announcements"] = ["1. operator edit"]  # marks announcements edited
+    client.put(f"/runs/{date}", json=run)
+
+    _fake_transcribe(monkeypatch, "song B")
+    assert client.post("/assemble?confirm=1").status_code == 200
+
+    saved = store.load(date)
+    assert saved.announcements == ["1. operator edit"]  # edited → preserved
+    assert [s["title"] for s in saved.worship_songs] == ["song B"]  # unedited → refreshed
+
+
 # ── review: /review, /runs ───────────────────────────────────────────────────────
 
 
@@ -297,6 +399,18 @@ def test_put_run_persists_edits(_runs) -> None:
     assert [s["title"] for s in songs] == ["마라나타", "주 은혜임을"]
     assert songs[0]["lines"] == ["new line 1", "new line 2"]
     assert saved.offering_hymn_verses == [1, 3]
+
+
+def test_put_run_tracks_edited_fields(_runs) -> None:
+    store.save(_runs, _fake_run())
+    run = client.get(f"/runs/{_runs}").json()
+    # a no-op round-trip marks nothing
+    client.put(f"/runs/{_runs}", json=run)
+    assert store.load(_runs).edited_fields == []
+    # a real edit marks exactly that field (so a later re-assemble preserves it, #105)
+    run["worship_songs"][0]["lines"] = ["changed"]
+    client.put(f"/runs/{_runs}", json=run)
+    assert store.load(_runs).edited_fields == ["worship_songs"]
 
 
 def test_put_run_400_bad_date() -> None:

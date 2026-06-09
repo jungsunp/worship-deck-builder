@@ -33,6 +33,9 @@ _HYMN_NUM_RE = re.compile(r"찬\s*(\d+)\s*장?")
 # the middle (교회소식) column starts at x≈348 — so _X_RIGHT cleanly excludes it.
 _X_SPLIT = 105   # left of this → part name cell; right → content cell
 _X_RIGHT = 340   # right edge of the left column
+# Words inside a part name are ~2–4pt apart; a wider gap means a gutter label sitting between the
+# part and content columns (e.g. the sermon-series prefix "왜" before 말 씀, #104) — not the part.
+_PART_GAP = 16
 
 # Worship rows jitter by ~2px between the part-name and content cells, so words are clustered
 # into a row when their tops fall within this many points of each other.
@@ -71,6 +74,9 @@ class ServiceData:
     # Ordered PNG paths for every hymn slide (hymn.fetch_hymn_slides); the
     # operator drops unwanted verse slides in the review app (#25).
     offering_hymn_images: list[str] = field(default_factory=list)
+    # Names of parsed/transcribed fields the operator has hand-edited in review; a re-assemble
+    # preserves these instead of overwriting them (#105). Set by PUT /runs.
+    edited_fields: list[str] = field(default_factory=list)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -160,6 +166,21 @@ def _cluster_rows(words: list[dict]) -> list[list[dict]]:
     return rows
 
 
+def _part_cell(part_words: list[dict]) -> tuple[str, list[str]]:
+    """Split the part-name cell into (part name, gutter words).
+
+    Real part names are a tight run of words at the left margin; a word separated by more than
+    _PART_GAP sits in the gutter between the part and content columns — a sermon-series prefix that
+    leads the content title (e.g. "왜" before 그럼 그 때는…, #104). Such words belong to the content,
+    so they are returned separately to be prepended there — not glued onto the part name. The part's
+    trailing "*" footnote mark is stripped.
+    """
+    s = sorted(part_words, key=lambda w: w["x0"])
+    i = next((k for k in range(1, len(s)) if s[k]["x0"] - s[k - 1]["x1"] > _PART_GAP), len(s))
+    part = " ".join(w["text"] for w in s[:i]).rstrip("*").strip()
+    return part, [w["text"] for w in s[i:]]
+
+
 def _parse_worship_order(page) -> list[dict]:
     """Extract the main worship order from page 1's left column.
 
@@ -176,8 +197,8 @@ def _parse_worship_order(page) -> list[dict]:
     result = []
     for row in _cluster_rows(words):
         row.sort(key=lambda w: (w["top"], w["x0"]))
-        part = " ".join(w["text"] for w in row if w["x0"] < _X_SPLIT).rstrip("*").strip()
-        content = " ".join(w["text"] for w in row if w["x0"] >= _X_SPLIT)
+        part, gutter = _part_cell([w for w in row if w["x0"] < _X_SPLIT])
+        content = " ".join(gutter + [w["text"] for w in row if w["x0"] >= _X_SPLIT])
         if not content or not part or part.startswith("인도") or part.startswith("(*"):
             continue  # column title, the 인도 line, the (*표는…) footnote
         title, leader, ref = _split_content(content)
@@ -233,6 +254,17 @@ def _announcement_blocks(anns: list[dict]) -> list[str]:
     return blocks
 
 
+def _find_row(worship_order: list[dict], part: str) -> dict:
+    """Find a worship-order row by part name, tolerant of spacing and series prefixes.
+
+    The part-name cell sometimes carries a series prefix ("왜 말 씀" for the 말 씀 row, #104),
+    so match by whitespace-stripped substring rather than exact equality (mirrors the web UI's
+    `pk` predicate). Returns {} when no row matches.
+    """
+    key = part.replace(" ", "")
+    return next((r for r in worship_order if key in r["part"].replace(" ", "")), {})
+
+
 def announcement_blocks(pdf_path: str) -> list[str]:
     """Per-announcement slide text (title + detail) straight from a bulletin PDF (#16). (pdfplumber)"""
     import pdfplumber
@@ -276,12 +308,9 @@ def parse(pdf_path: str) -> ServiceData:
     date_match = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
     date = re.sub(r"\s+", " ", date_match.group()) if date_match else ""
 
-    def _row(part: str) -> dict:
-        return next((r for r in worship_order if r["part"] == part), {})
-
-    call = _row("예배의 부름")
-    sermon = _row("말 씀")
-    hymn_no, hymn_title = _parse_offering_hymn(_row("봉 헌").get("title", ""))
+    call = _find_row(worship_order, "예배의 부름")
+    sermon = _find_row(worship_order, "말 씀")
+    hymn_no, hymn_title = _parse_offering_hymn(_find_row(worship_order, "봉 헌").get("title", ""))
 
     return ServiceData(
         date=date,
