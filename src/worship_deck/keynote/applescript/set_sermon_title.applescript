@@ -5,8 +5,7 @@ on run argv
     set refText to item 4 of argv
     set fontText to item 5 of argv  -- title font (pt) sized to fit the box; "0" = leave unchanged
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- The 말씀 title slide carries two on-canvas text items: a white sermon-title box and a
         -- gold scripture-reference box. Off-canvas items (position {0,0}) are leftover junk and
@@ -30,8 +29,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

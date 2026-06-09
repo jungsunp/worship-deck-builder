@@ -6,8 +6,7 @@ on run argv
     set enLabel to item 5 of argv
     set enText to item 6 of argv
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- Classify the 4 on-canvas text items. Off-canvas items (position {0,0}) are
         -- leftover junk and are skipped. Items: a 개역한글 label + body, an ESV label + body.
@@ -45,8 +44,6 @@ on run argv
         set object text of krBody to krText
         set object text of enLabelItem to enLabel
         set object text of enBody to enText
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

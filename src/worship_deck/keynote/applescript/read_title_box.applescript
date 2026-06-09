@@ -2,8 +2,7 @@ on run argv
     set keyPath to item 1 of argv
     set slideIndex to (item 2 of argv) as integer
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- The sermon-title box is the on-canvas (position not {0,0}) text item that is NOT the
         -- bracketed scripture-ref box. Return its width, height, and base font size so the caller
@@ -22,7 +21,6 @@ on run argv
                 end if
             end if
         end repeat
-        close d saving no
     end tell
     return out
 end run

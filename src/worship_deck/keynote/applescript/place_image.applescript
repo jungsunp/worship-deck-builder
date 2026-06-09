@@ -6,8 +6,7 @@ on run argv
     -- to swap last week's 봉헌 hymn page for this week's rather than layering on top of it.
     set clearExisting to ((count of argv) ≥ 4 and (item 4 of argv) is "1")
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set slideW to width of d
         set slideH to height of d
         tell slide slideIndex of d
@@ -26,8 +25,6 @@ on run argv
         set finalW to width of img
         set finalH to height of img
         set position of img to {(slideW - finalW) / 2, (slideH - finalH) / 2}
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

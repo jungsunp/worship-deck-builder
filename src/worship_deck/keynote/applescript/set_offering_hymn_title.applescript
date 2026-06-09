@@ -9,8 +9,7 @@ on run argv
     -- 3 (setting paragraph text preserves each paragraph's font). Off-canvas {0,0} leftovers are
     -- skipped; the heading box is the multi-paragraph one whose first paragraph is the 봉헌 heading.
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         repeat with i from 1 to (count text items of s)
             set t to text item i of s
@@ -23,8 +22,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

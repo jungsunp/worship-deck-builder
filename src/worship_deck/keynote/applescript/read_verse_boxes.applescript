@@ -2,8 +2,7 @@ on run argv
     set keyPath to item 1 of argv
     set slideIndex to (item 2 of argv) as integer
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- The two verse bodies are the on-canvas (position not {0,0}) text items that are not
         -- the 개역한글/ESV labels. Korean sits above English (smaller y).
@@ -31,7 +30,6 @@ on run argv
         end if
         set out to (((width of koBody) as integer) as text) & " " & (((height of koBody) as integer) as text) & linefeed
         set out to out & (((width of enBody) as integer) as text) & " " & (((height of enBody) as integer) as text)
-        close d saving no
     end tell
     return out
 end run

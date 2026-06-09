@@ -36,6 +36,7 @@ from worship_deck.keynote.build import (  # noqa: E402
     fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
+    finalize_draft,
     hymn_image_block,
     save_draft,
 )
@@ -232,6 +233,10 @@ def main() -> None:
         )
         first, last = args.at, args.at + n - 1
         print(f"Filled verses: {n} slides.")
+
+    # Open-once/save-once (#117): the fills mutated the open front document without saving; this
+    # single save persists them to disk before we open the file for review.
+    finalize_draft(out)
 
     print(f"Review slides {first}–{last + 1} (the +1 confirms the next section has no leftover).")
     if not args.no_open:

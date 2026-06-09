@@ -3,8 +3,7 @@ on run argv
     set slideIndex to (item 2 of argv) as integer
     set refText to item 3 of argv
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- The 예배의 부름 ref-display slide is ONE box of two paragraphs: a static "예배의 부름"
         -- heading and the bracketed passage citation. Find that box by its heading and overwrite
@@ -20,8 +19,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run
