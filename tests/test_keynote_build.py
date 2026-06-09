@@ -23,6 +23,7 @@ from worship_deck.keynote.build import (
     fill_song_slides,
     fill_verse_slides,
     fill_worship_songs,
+    finalize_draft,
     hymn_image_block,
     place_image,
     read_title_box,
@@ -97,6 +98,25 @@ def test_save_draft_raises_when_osascript_missing(
     monkeypatch.setattr(subprocess, "run", boom)
     with pytest.raises(RuntimeError, match="needs macOS"):
         save_draft("template.key", str(tmp_path / "draft.key"))
+
+
+# ---------------------------------------------------------------------------
+# finalize_draft — mocked osascript (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_draft_passes_args_and_returns_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    """finalize_draft saves the open front document once (#117) and passes out_key vestigially."""
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert finalize_draft("out.key") == "out.key"
+    assert captured["cmd"] == ["osascript", str(B._FINALIZE), "out.key"]
 
 
 # ---------------------------------------------------------------------------
@@ -804,13 +824,29 @@ def test_fill_hymn_slides_raises_when_no_image_block(
 # ---------------------------------------------------------------------------
 
 
+@pytest.fixture(autouse=True)
+def _clean_keynote_before_live(request: pytest.FixtureRequest) -> None:
+    """Clear stale open Keynote docs before each live test (#117); no-op for the mocked tests.
+
+    Open-once/save-once means save_draft no longer closes its draft — it leaves it open as the
+    `front document` that every primitive (and the read-back helpers below) mutate/read in place.
+    So before each local_only test we close any doc left open by a prior test, mirroring build()'s
+    own `_ensure_keynote_ready()` precondition, so save_draft's draft is the unambiguous front doc.
+    """
+    if request.node.get_closest_marker("local_only"):
+        B._ensure_keynote_ready()
+
+
 def _on_canvas_text(key_path: str, slide_index: int) -> str:
-    """Read the concatenated on-canvas text-item contents of one slide (Mac-only helper)."""
+    """Read the concatenated on-canvas text-item contents of one slide (Mac-only helper).
+
+    Reads the open `front document` (the draft save_draft left open) so it sees the build's
+    in-place, not-yet-saved edits (#117); `key_path` is vestigial but kept for call-site symmetry.
+    """
     script = (
         'on run argv\n'
         'tell application "Keynote"\n'
-        "  activate\n"
-        "  set d to open (POSIX file (item 1 of argv))\n"
+        "  set d to front document\n"
         "  set s to slide ((item 2 of argv) as integer) of d\n"
         '  set out to ""\n'
         "  repeat with t in (text items of s)\n"
@@ -819,7 +855,6 @@ def _on_canvas_text(key_path: str, slide_index: int) -> str:
         '      set out to out & ((object text of t) as text) & linefeed\n'
         "    end if\n"
         "  end repeat\n"
-        "  close d saving no\n"
         "  return out\n"
         "end tell\n"
         "end run\n"
@@ -1037,12 +1072,11 @@ def _last_image_frame(
     """Read (image_count, x, y, w, h, doc_w, doc_h) for a slide's last image (Mac-only).
 
     Folds the image frame and the document size into one read so the caller can compare them
-    without reopening the deck."""
+    without reopening the deck. Reads the open `front document` (#117), not the on-disk file."""
     script = (
         "on run argv\n"
         'tell application "Keynote"\n'
-        "  activate\n"
-        "  set d to open (POSIX file (item 1 of argv))\n"
+        "  set d to front document\n"
         "  set s to slide ((item 2 of argv) as integer) of d\n"
         "  set n to count of images of s\n"
         "  set img to last image of s\n"
@@ -1053,7 +1087,6 @@ def _last_image_frame(
         "  set h to height of img\n"
         "  set dw to width of d\n"
         "  set dh to height of d\n"
-        "  close d saving no\n"
         "  return (n as text) & \" \" & (px as text) & \" \" & (py as text) & \" \" "
         "& (w as text) & \" \" & (h as text) & \" \" & (dw as text) & \" \" & (dh as text)\n"
         "end tell\n"
@@ -1096,14 +1129,14 @@ def test_place_image_live_covers_slide_centered(
 
 
 def _slide_count(key_path: str) -> int:
-    """Read the deck's total slide count (Mac-only)."""
+    """Read the open draft's total slide count (Mac-only; reads `front document`, #117)."""
     out = subprocess.run(
         [
             "osascript",
             "-e",
-            'on run argv\ntell application "Keynote"\nactivate\n'
-            "set d to open (POSIX file (item 1 of argv))\nset n to count of slides of d\n"
-            "close d saving no\nreturn n as text\nend tell\nend run\n",
+            'on run argv\ntell application "Keynote"\n'
+            "set d to front document\nset n to count of slides of d\n"
+            "return n as text\nend tell\nend run\n",
             key_path,
         ],
         capture_output=True,
@@ -1114,15 +1147,15 @@ def _slide_count(key_path: str) -> int:
 
 
 def _image_count(key_path: str, slide_index: int) -> int:
-    """Number of images on a 1-based slide (Mac-only)."""
+    """Number of images on a 1-based slide (Mac-only; reads the open `front document`, #117)."""
     out = subprocess.run(
         [
             "osascript",
             "-e",
-            'on run argv\ntell application "Keynote"\nactivate\n'
-            "set d to open (POSIX file (item 1 of argv))\n"
+            'on run argv\ntell application "Keynote"\n'
+            "set d to front document\n"
             "set n to count of images of slide ((item 2 of argv) as integer) of d\n"
-            "close d saving no\nreturn n as text\nend tell\nend run\n",
+            "return n as text\nend tell\nend run\n",
             key_path,
             str(slide_index),
         ],
@@ -1199,6 +1232,7 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         "fill_choir_slides",
         "set_call_to_worship_ref",
         "fill_worship_songs",
+        "finalize_draft",
     ):
         monkeypatch.setattr(B, name, rec(name))
     # Stubbed silently (not recorded): build() calls it before save_draft to clear stale docs;
@@ -1250,6 +1284,7 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
         "set_call_to_worship_ref",  # 예배의 부름 ref slide @47 (count-neutral, #107)
         "fill_verse_slides",       # 예배의 부름 @48
         "fill_worship_songs",      # 찬양 medley @6
+        "finalize_draft",          # single save of the open front document (#117)
     ]
 
     by_name = {c[0]: c for c in calls}
@@ -1301,8 +1336,14 @@ def test_build_skips_empty_sections(monkeypatch: pytest.MonkeyPatch) -> None:
 
     build(ServiceData(date="2026년 6월 7일"), "tpl.key", "out.key")
 
-    # No worship_order, no announcements → only the copy, the count-neutral date stamp, and the
-    # unconditional ad-hoc special-block delete (always present in the template) run.
-    assert [c[0] for c in calls] == ["save_draft", "set_date_slides", "delete_slides"]
+    # No worship_order, no announcements → only the copy, the count-neutral date stamp, the
+    # unconditional ad-hoc special-block delete (always present in the template), and the final
+    # single save (#117) run.
+    assert [c[0] for c in calls] == [
+        "save_draft",
+        "set_date_slides",
+        "delete_slides",
+        "finalize_draft",
+    ]
     assert calls[1][1] == ("out.key", "2026년 6월 7일", "", "")
     assert calls[2][1] == ("out.key", 135, 18)

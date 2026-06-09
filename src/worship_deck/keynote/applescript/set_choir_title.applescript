@@ -17,8 +17,7 @@ on run argv
         set lineText to titleText
     end if
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         repeat with i from 1 to (count text items of s)
             set t to text item i of s
@@ -33,8 +32,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

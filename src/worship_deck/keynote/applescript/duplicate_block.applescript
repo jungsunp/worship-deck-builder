@@ -5,8 +5,7 @@ on run argv
     set destAfter to (item 4 of argv) as integer
     set dupTimes to (item 5 of argv) as integer
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         tell d
             -- Copy the contiguous block [srcStart .. srcStart+srcLen-1] to after slide
             -- destAfter, dupTimes times, preserving block order. The source block MUST sit
@@ -21,8 +20,6 @@ on run argv
             end repeat
             set n to count of slides
         end tell
-        save d
-        close d saving no
     end tell
     return n
 end run

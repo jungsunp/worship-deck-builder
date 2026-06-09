@@ -18,6 +18,7 @@ from worship_deck.lyrics.transcribe import Song, chunk
 from worship_deck.parse.bulletin import ServiceData
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
+_FINALIZE = Path(__file__).parent / "applescript" / "finalize.applescript"
 _DUPLICATE_SLIDE = Path(__file__).parent / "applescript" / "duplicate_slide.applescript"
 _DUPLICATE_BLOCK = Path(__file__).parent / "applescript" / "duplicate_block.applescript"
 _SET_DATE_SLIDES = Path(__file__).parent / "applescript" / "set_date_slides.applescript"
@@ -124,6 +125,13 @@ def save_draft(template_key: str, out_key: str) -> str:
     Save-As leaves the template untouched. Later issues (#21, #13–16) extend this plumbing
     to duplicate slides and set native text.
 
+    Open-once/save-once (#117): this writes a pristine copy to out_key but the open document
+    STAYS BOUND TO THE TEMPLATE (`save … in` does not rebind it). Every later primitive mutates
+    that open `front document` in place (no per-call open/save), and `finalize_draft` saves it
+    once at the end of build() WITH the explicit out_key path (a bare save would overwrite the
+    template). Callers must therefore run `_ensure_keynote_ready()` first (zero open docs → front
+    document is unambiguously this draft) and `finalize_draft(out_key)` last.
+
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote save fails.
     """
@@ -131,6 +139,23 @@ def save_draft(template_key: str, out_key: str) -> str:
     out = str(Path(out_key).expanduser())
     Path(out).parent.mkdir(parents=True, exist_ok=True)
     _run_osascript(_SAVE_DRAFT, template, out)
+    return out_key
+
+
+def finalize_draft(out_key: str) -> str:
+    """Save the open draft once, at the end of build() (#117), returning out_key.
+
+    The mutating/reading primitives no longer open/save the deck per call — they edit the open
+    `front document` opened by `save_draft` — so this single save persists all of the build's
+    edits (~55 disk cycles collapse to ~2). It MUST save with the explicit out_key: the open
+    document is still bound to the template, so a bare `save front document` would write the
+    week's edits into master.key and corrupt it. The draft is left open; the web app's post-build
+    `open path` just focuses it.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote save fails.
+    """
+    _run_osascript(_FINALIZE, str(Path(out_key).expanduser()))
     return out_key
 
 
@@ -756,6 +781,11 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     (in-place text) so it runs first, then the ad-hoc 말씀 special block is dropped (#97) before
     any section fill. Each section is skipped when its content is absent.
 
+    Open-once/save-once (#117): `save_draft` opens the template once and save-as'es it into the
+    open draft; every fill mutates that open `front document` in place; `finalize_draft` saves it
+    once at the end. `_ensure_keynote_ready` guarantees zero open docs first, so `front document`
+    is unambiguously the draft.
+
     Returns the draft .key path.
 
     Raises:
@@ -831,6 +861,9 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
         songs = [Song(**s) for s in data.worship_songs]
         fill_worship_songs(out_key, 6, 41, songs)
 
+    # Persist every in-place edit with a single save (#117): save_draft opened the deck once and
+    # the section fills mutated the open front document; this is the one save that writes them.
+    finalize_draft(out_key)
     return out_key
 
 

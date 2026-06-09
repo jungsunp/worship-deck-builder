@@ -5,8 +5,7 @@ on run argv
     set refStr to item 4 of argv
     set n to 0
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         repeat with s in (slides of d)
             -- A date slide has an on-canvas text item bearing 년/월. Off-canvas items
             -- (position {0, 0}) are leftover junk and are ignored.
@@ -36,8 +35,6 @@ on run argv
                 end repeat
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return n
 end run

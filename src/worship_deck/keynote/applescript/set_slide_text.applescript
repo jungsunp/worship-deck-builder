@@ -3,8 +3,7 @@ on run argv
     set slideIndex to (item 2 of argv) as integer
     set newText to item 3 of argv
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- Worship-song title and lyric slides each carry a pair of stacked, identical on-canvas
         -- text items; off-canvas items (position {0, 0}) are leftover junk and are skipped. Set
@@ -16,8 +15,6 @@ on run argv
                 set object text of t to newText
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

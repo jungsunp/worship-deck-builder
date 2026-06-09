@@ -3,16 +3,13 @@ on run argv
     set startIdx to (item 2 of argv) as integer
     set cnt to (item 3 of argv) as integer
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         -- Deleting slide startIdx cnt times removes cnt consecutive slides: each delete shifts
         -- the next slide down into startIdx.
         repeat cnt times
             delete slide startIdx of d
         end repeat
         set n to count of slides of d
-        save d
-        close d saving no
     end tell
     return n
 end run

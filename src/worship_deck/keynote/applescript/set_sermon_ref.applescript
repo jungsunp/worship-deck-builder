@@ -4,8 +4,7 @@ on run argv
     set krText to item 3 of argv   -- bare Korean ref, e.g. "삼상 5:1-12"
     set enText to item 4 of argv   -- bracketed English ref, e.g. "[1 Samuel 5:1-12]"
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- The 말씀 scripture-ref recap slide (shown before the sermon reading) carries two on-canvas
         -- text boxes: a bare Korean reference and a bracketed English reference (e.g. "[Luke 22:14-24]").
@@ -23,8 +22,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

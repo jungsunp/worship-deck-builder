@@ -8,8 +8,7 @@ on run argv
     set goldColor to {65308, 54301, 10093}
     set whiteColor to {65535, 65535, 65535}
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set s to slide slideIndex of d
         -- Item slides carry a stacked pair of identical on-canvas text items; off-canvas items
         -- (position {0, 0}) are leftover junk and are skipped. Set + recolor every on-canvas item.
@@ -23,8 +22,6 @@ on run argv
                 end if
             end if
         end repeat
-        save d
-        close d saving no
     end tell
     return "ok"
 end run

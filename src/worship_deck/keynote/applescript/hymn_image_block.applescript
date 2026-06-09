@@ -3,8 +3,7 @@ on run argv
     set startIndex to (item 2 of argv) as integer
     set maxScan to (item 3 of argv) as integer
     tell application "Keynote"
-        activate  -- ensure the app is fully launched before the open event (avoids -609)
-        set d to open (POSIX file keyPath)
+        set d to front document
         set total to count of slides of d
         set lastScan to startIndex + maxScan
         if lastScan > total then set lastScan to total
@@ -34,7 +33,6 @@ on run argv
                 set j to j + 1
             end repeat
         end if
-        close d saving no
         return (firstImg as text) & " " & (lastImg as text)
     end tell
 end run
