@@ -25,6 +25,56 @@ app = FastAPI(title="Worship Deck")
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
+# Parsed/transcribed fields that are also editable in the review UI. PUT /runs records which of
+# these the operator changed (ServiceData.edited_fields) so a re-assemble preserves them (#105).
+_EDITABLE_PARSED = ("worship_songs", "announcements", "offering_hymn_number", "offering_hymn_title")
+
+# Human-readable labels for the re-assemble confirmation (#105): names exactly which sections a
+# re-assemble will keep vs overwrite, so the operator can review before re-assembling.
+_EDIT_LABELS = {
+    "worship_songs": "찬양 songs (edited lyrics/order)",
+    "announcements": "교회소식 announcements (edited)",
+    "offering_hymn_number": "봉헌 hymn number (edited)",
+    "offering_hymn_title": "봉헌 hymn title (edited)",
+}
+_REFRESH_LABELS = {
+    "worship_songs": "찬양 songs (re-transcribed)",
+    "announcements": "교회소식 announcements (re-parsed)",
+    "offering_hymn_number": "봉헌 hymn number",
+    "offering_hymn_title": "봉헌 hymn title",
+}
+
+
+def _kept_on_reassemble(existing: ServiceData) -> list[str]:
+    """Labels for the review edits a re-assemble would preserve, for the confirm dialog (#105)."""
+    kept: list[str] = []
+    if existing.choir_song.get("title"):
+        kept.append("성가대 choir lyrics")
+    if existing.offering_hymn_verses:
+        kept.append("봉헌 verse picks (" + ", ".join(str(v) for v in existing.offering_hymn_verses) + ")")
+    kept += [_EDIT_LABELS[f] for f in existing.edited_fields if f in _EDIT_LABELS]
+    return kept
+
+
+def _refreshed_on_reassemble(existing: ServiceData) -> list[str]:
+    """Labels for the sections a re-assemble would overwrite from the bulletin (#105).
+
+    The machine-only fields (verses, hymn images) always refresh when their input exists; the
+    editable-parsed fields refresh only when the operator has NOT edited them.
+    """
+    refreshed: list[str] = []
+    if existing.call_to_worship_ref or existing.sermon_ref:
+        refreshed.append("Bible verses (예배의 부름 · 말씀)")
+    if existing.offering_hymn_number:
+        refreshed.append("봉헌 hymn slide images")
+    for f in _EDITABLE_PARSED:
+        if f in existing.edited_fields:
+            continue
+        if f.startswith("offering_hymn_") and not existing.offering_hymn_number:
+            continue  # no 봉헌 this week — don't list hymn number/title
+        refreshed.append(_REFRESH_LABELS[f])
+    return refreshed
+
 # Per-run assemble status, keyed by ISO service date. In-memory is enough: a single-process
 # uvicorn on the Mac drives the whole run (status is lost on restart, which is acceptable).
 _STATUS: dict[str, dict] = {}
@@ -115,11 +165,24 @@ async function loadRuns() {
 }
 loadInbox();
 loadRuns();
-async function assemble() {
+async function assemble(confirm) {
   document.getElementById('status').textContent = 'Starting…';
-  const r = await fetch('/assemble', {method: 'POST'});
+  const r = await fetch('/assemble' + (confirm ? '?confirm=1' : ''), {method: 'POST'});
   const body = await r.json();
   if (!r.ok) { document.getElementById('status').textContent = 'Error: ' + (body.detail || r.status); return; }
+  if (body.needs_confirm) {
+    const bullets = (items, empty) => items && items.length
+      ? items.map(k => ' • ' + k).join('\\n') : ' • ' + empty;
+    const msg = 'A run for ' + body.service_date + ' already exists. Re-assembling will:\\n\\n'
+      + '↻ Refresh (overwrite from the bulletin):\\n'
+      + bullets(body.refresh, '(nothing)') + '\\n\\n'
+      + '✓ Keep (your review edits):\\n'
+      + bullets(body.kept, '(none — no review edits saved yet)') + '\\n\\n'
+      + 'Continue?';
+    if (window.confirm(msg)) return assemble(true);
+    document.getElementById('status').textContent = 'Cancelled.';
+    return;
+  }
   poll(body.status_url, body.service_date);
 }
 function poll(url, date) {
@@ -430,8 +493,11 @@ def _assemble_async(service_date: str) -> None:
         data = store.load(service_date)
 
         _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
-        songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
-        data.worship_songs = [asdict(s) for s in songs]
+        # Skip re-transcription if the operator already hand-edited the medley (#105) — a
+        # re-assemble must not clobber their line-break/order fixes.
+        if "worship_songs" not in data.edited_fields:
+            songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
+            data.worship_songs = [asdict(s) for s in songs]
 
         _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
         if data.call_to_worship_ref:
@@ -458,18 +524,22 @@ def _assemble_async(service_date: str) -> None:
 
         store.save(service_date, data)
         _STATUS[service_date] = {"status": "done", "step": None, "error": None, "warning": warning}
-        logger.info("Assembled run for %s (%d song(s))", service_date, len(songs))
+        logger.info("Assembled run for %s (%d song(s))", service_date, len(data.worship_songs))
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Assemble failed for %s", service_date)
         _STATUS[service_date] = {"status": "error", "step": None, "error": repr(e)}
 
 
 @app.post("/assemble")
-def assemble(background_tasks: BackgroundTasks) -> dict:
+def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
     """Parse the inbox bulletin (fast, sync) then kick off transcribe + verses async.
 
     Parsing runs in-request so a missing bulletin / undetectable date fails immediately
     and we can return the detected service date as the poll key.
+
+    Re-assembling a date that already has a run is destructive (#105): the fresh parse would
+    wipe review edits. We warn first (return needs_confirm) unless `confirm`, then merge —
+    preserving pure-human fields (choir, hymn verses) and any operator-edited parsed fields.
     """
     pdf = _bulletin_path()
     if pdf is None:
@@ -480,6 +550,21 @@ def assemble(background_tasks: BackgroundTasks) -> dict:
         service_date = parse.to_iso_date(data.date)
     except ValueError:
         raise HTTPException(status_code=400, detail="could not detect service date in bulletin")
+
+    existing = store.load(service_date) if store.exists(service_date) else None
+    if existing is not None and not confirm:
+        return {
+            "service_date": service_date,
+            "needs_confirm": True,
+            "kept": _kept_on_reassemble(existing),
+            "refresh": _refreshed_on_reassemble(existing),
+        }
+    if existing is not None:
+        data.edited_fields = list(existing.edited_fields)
+        data.choir_song = existing.choir_song  # pure human — never parsed
+        data.offering_hymn_verses = existing.offering_hymn_verses
+        for f in existing.edited_fields:  # preserve operator-edited parsed fields
+            setattr(data, f, getattr(existing, f))
 
     store.save(service_date, data)
     _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
@@ -533,8 +618,16 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     except ValueError:
         raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
     known = {f.name for f in fields(ServiceData)}
+    existing = store.load(service_date) if store.exists(service_date) else None
     data = ServiceData(**{k: v for k, v in body.items() if k in known})
     data.offering_hymn_verses = [int(v) for v in data.offering_hymn_verses]
+    # Record which parsed/transcribed fields the operator actually changed, so a later
+    # re-assemble preserves them instead of re-deriving them (#105). pure-human fields
+    # (choir_song, offering_hymn_verses) are always preserved, so they aren't tracked.
+    edited = set(existing.edited_fields) if existing else set()
+    if existing:
+        edited |= {f for f in _EDITABLE_PARSED if getattr(data, f) != getattr(existing, f)}
+    data.edited_fields = sorted(edited)
     store.save(service_date, data)
     return {"saved": service_date}
 
