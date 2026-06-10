@@ -13,7 +13,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from worship_deck import hymn, obs, parse, pipeline, store
 from worship_deck.bible import verses
@@ -221,6 +221,15 @@ _REVIEW_HTML = """<!doctype html>
   textarea { min-height: 5rem; } input { padding: 0.5rem; margin: 0.25rem 0; }
   .row button.sub { width: auto; padding: 0.5rem 0.9rem; font-size: 1rem; margin-top: 0.4rem; }
   .passage { white-space: pre-wrap; font-size: 0.95rem; }
+  .hymngrid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+  .hymnthumb { position: relative; width: 30%; cursor: pointer; border: 2px solid #16a34a;
+               border-radius: 6px; overflow: hidden; }
+  .hymnthumb img { display: block; width: 100%; }
+  .hymnthumb.dropped { border-color: #ddd; opacity: 0.5; filter: grayscale(1); }
+  .hymnthumb .badge { position: absolute; top: 0; right: 0; padding: 0.1rem 0.4rem;
+                      font-size: 0.75rem; color: #fff; background: #16a34a; }
+  .hymnthumb.dropped .badge { background: #999; }
+  .hymncount { color: #888; font-size: 0.85rem; margin-top: 0.4rem; }
   button { padding: 0.8rem; font-size: 1.05rem; border: 0; border-radius: 8px;
            background: #2563eb; color: #fff; }
   #save { width: 100%; background: #16a34a; margin-top: 1rem; }
@@ -323,10 +332,49 @@ function mkInput(id, ph, val) {
   return i;
 }
 
+// Full ordered list of downloaded hymn PNG paths (kept + dropped); the grid renders from
+// this while run.offering_hymn_images holds the kept subset the build will place (#84/#108).
+let hymnAll = [];
+
 function renderHymn(div) {
   div.appendChild(mkInput('hymnNumber', '찬송가 번호', run.offering_hymn_number));
   div.appendChild(mkInput('hymnTitle', '제목', run.offering_hymn_title));
-  div.appendChild(mkInput('hymnVerses', '절 (예: 1,3) — 비우면 전체', (run.offering_hymn_verses || []).join(',')));
+  const grid = document.createElement('div'); grid.id = 'hymngrid'; grid.className = 'hymngrid';
+  div.appendChild(grid);
+  const count = document.createElement('div'); count.id = 'hymncount'; count.className = 'hymncount';
+  div.appendChild(count);
+  fetch('/runs/' + date + '/hymn').then(r => r.json()).then(j => {
+    hymnAll = j.images || [];
+    renderHymnGrid();
+  });
+}
+
+function renderHymnGrid() {
+  const grid = document.getElementById('hymngrid');
+  if (!grid) return;
+  grid.innerHTML = '';
+  const kept = run.offering_hymn_images || [];
+  hymnAll.forEach(path => {
+    const on = kept.includes(path);
+    const cell = document.createElement('div');
+    cell.className = 'hymnthumb' + (on ? '' : ' dropped');
+    cell.onclick = () => toggleHymn(path);
+    const img = document.createElement('img');
+    img.src = '/runs/' + date + '/hymn/' + path.split('/').pop();
+    const badge = document.createElement('span'); badge.className = 'badge';
+    badge.textContent = on ? '✓' : '제외';
+    cell.append(img, badge);
+    grid.appendChild(cell);
+  });
+  const c = document.getElementById('hymncount');
+  if (c) c.textContent = '선택 ' + (run.offering_hymn_images || []).length + ' / ' + hymnAll.length + ' 슬라이드';
+}
+
+function toggleHymn(path) {
+  const kept = run.offering_hymn_images || (run.offering_hymn_images = []);
+  if (kept.includes(path)) run.offering_hymn_images = kept.filter(p => p !== path);
+  else run.offering_hymn_images = hymnAll.filter(p => kept.includes(p) || p === path);  // keep slide order
+  renderHymnGrid();
 }
 
 function renderAnnounce(div) {
@@ -358,8 +406,6 @@ function syncFromDom() {
   if (hn) run.offering_hymn_number = hn.value.trim();
   const ht = document.getElementById('hymnTitle');
   if (ht) run.offering_hymn_title = ht.value.trim();
-  const hv = document.getElementById('hymnVerses');
-  if (hv) run.offering_hymn_verses = hv.value.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n));
 }
 
 function move(s, d) {
@@ -646,6 +692,39 @@ def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
     data.choir_song = asdict(parse_choir_text(body.get("text", "")))
     store.save(service_date, data)
     return asdict(data)
+
+
+@app.get("/runs/{service_date}/hymn")
+def list_hymn_slides(service_date: str) -> dict:
+    """List every downloaded 봉헌 hymn PNG (slide order) for the review grid (#84/#108).
+
+    Paths match how _assemble_async stores them (str(HYMN_DIR/<date>/hymn/<name>)) so the
+    client can membership-check them against the kept offering_hymn_images list.
+    """
+    try:
+        store.path_for(service_date)  # validate the date shape
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    hymn_dir = HYMN_DIR / service_date / "hymn"
+    if not hymn_dir.is_dir():
+        return {"images": []}
+    pngs = sorted(p for p in hymn_dir.iterdir() if p.suffix.lower() == ".png")
+    return {"images": [str(p) for p in pngs]}
+
+
+@app.get("/runs/{service_date}/hymn/{name}")
+def get_hymn_slide(service_date: str, name: str) -> FileResponse:
+    """Serve one hymn PNG for the review thumbnail grid, path-safe (mirrors /inbox guards)."""
+    try:
+        store.path_for(service_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    if Path(name).name != name:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    target = HYMN_DIR / service_date / "hymn" / name
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
 
 
 # ── Build (Generate) ─────────────────────────────────────────────────────────
