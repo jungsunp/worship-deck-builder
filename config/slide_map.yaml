@@ -45,7 +45,8 @@ sections:
   confession_song:          # 고백의 찬양
     slides: []
     automate: false
-    note: "does not change weekly; ignore for now"
+    note: "title changes weekly (bulletin row); lyrics transcribed from the uploaded
+      sheet image at assemble (#109) — slide fill not yet automated"
 
   choir_song:               # 찬양 (성가대)
     slides:

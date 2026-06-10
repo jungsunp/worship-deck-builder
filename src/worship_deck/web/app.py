@@ -27,18 +27,29 @@ _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg"}
 
 # Parsed/transcribed fields that are also editable in the review UI. PUT /runs records which of
 # these the operator changed (ServiceData.edited_fields) so a re-assemble preserves them (#105).
-_EDITABLE_PARSED = ("worship_songs", "announcements", "offering_hymn_number", "offering_hymn_title")
+_EDITABLE_PARSED = (
+    "worship_songs",
+    "choir_song",
+    "confession_song",
+    "announcements",
+    "offering_hymn_number",
+    "offering_hymn_title",
+)
 
 # Human-readable labels for the re-assemble confirmation (#105): names exactly which sections a
 # re-assemble will keep vs overwrite, so the operator can review before re-assembling.
 _EDIT_LABELS = {
     "worship_songs": "찬양 songs (edited lyrics/order)",
+    "choir_song": "성가대 choir lyrics (edited)",
+    "confession_song": "고백의 찬양 lyrics (edited)",
     "announcements": "교회소식 announcements (edited)",
     "offering_hymn_number": "봉헌 hymn number (edited)",
     "offering_hymn_title": "봉헌 hymn title (edited)",
 }
 _REFRESH_LABELS = {
     "worship_songs": "찬양 songs (re-transcribed)",
+    "choir_song": "성가대 choir lyrics (re-parsed from inbox text)",
+    "confession_song": "고백의 찬양 lyrics (re-transcribed)",
     "announcements": "교회소식 announcements (re-parsed)",
     "offering_hymn_number": "봉헌 hymn number",
     "offering_hymn_title": "봉헌 hymn title",
@@ -48,8 +59,20 @@ _REFRESH_LABELS = {
 def _kept_on_reassemble(existing: ServiceData) -> list[str]:
     """Labels for the review edits a re-assemble would preserve, for the confirm dialog (#105)."""
     kept: list[str] = []
-    if existing.choir_song.get("title"):
+    # Unedited choir/confession with no inbox input are carried over as-is (edited ones are
+    # covered by _EDIT_LABELS below; with inbox input present they refresh instead).
+    if (
+        existing.choir_song.get("title")
+        and "choir_song" not in existing.edited_fields
+        and _choir_text() is None
+    ):
         kept.append("성가대 choir lyrics")
+    if (
+        existing.confession_song.get("title")
+        and "confession_song" not in existing.edited_fields
+        and _confession_path() is None
+    ):
+        kept.append("고백의 찬양 lyrics")
     if existing.offering_hymn_verses:
         kept.append("봉헌 verse picks (" + ", ".join(str(v) for v in existing.offering_hymn_verses) + ")")
     kept += [_EDIT_LABELS[f] for f in existing.edited_fields if f in _EDIT_LABELS]
@@ -72,6 +95,10 @@ def _refreshed_on_reassemble(existing: ServiceData) -> list[str]:
             continue
         if f.startswith("offering_hymn_") and not existing.offering_hymn_number:
             continue  # no 봉헌 this week — don't list hymn number/title
+        if f == "choir_song" and _choir_text() is None:
+            continue  # no inbox text — carried over, not refreshed
+        if f == "confession_song" and _confession_path() is None:
+            continue  # no inbox image — carried over, not refreshed
         refreshed.append(_REFRESH_LABELS[f])
     return refreshed
 
@@ -102,19 +129,28 @@ _INDEX_HTML = """<!doctype html>
 <style>
   body { font-family: -apple-system, sans-serif; margin: 0; padding: 1.5rem; }
   h1 { font-size: 1.3rem; }
-  input[type=file] { display: block; width: 100%; margin: 1rem 0; font-size: 1rem; }
+  input[type=file] { display: block; width: 100%; margin: 0.5rem 0; font-size: 1rem; }
   button { width: 100%; padding: 1rem; font-size: 1.1rem; border: 0;
            border-radius: 8px; background: #2563eb; color: #fff; }
   #assemble { background: #16a34a; margin-top: 0.5rem; }
   #status { margin-top: 1rem; font-size: 1rem; white-space: pre-wrap; }
   h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+  .slot { border: 1px solid #ddd; border-radius: 8px; padding: 0.75rem; margin: 0.5rem 0; }
+  .slot .label { font-weight: 600; }
+  .slot .hint { color: #888; font-size: 0.85rem; margin: 0.25rem 0; }
+  .slot .count { color: #16a34a; font-size: 0.9rem; }
+  .slot .none { color: #aaa; font-size: 0.9rem; margin: 0.25rem 0; }
+  textarea { width: 100%; min-height: 6rem; font-size: 1rem; box-sizing: border-box; }
+  .filerow { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0;
+             font-size: 1rem; }
+  .filerow .ok { color: #16a34a; font-weight: 700; flex: none; }
+  .filerow .ok.warn { color: #d97706; }
+  .filerow .name { flex: 1; word-break: break-all; }
+  .filerow .size { color: #888; font-size: 0.85rem; flex: none; }
+  .filerow .del { width: auto; flex: none; padding: 0.4rem 0.7rem; font-size: 1rem;
+                  background: #dc2626; }
   #inbox { list-style: none; padding: 0; margin: 0; }
-  #inbox li { display: flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0;
-              border-bottom: 1px solid #eee; font-size: 1rem; }
-  #inbox .name { flex: 1; word-break: break-all; }
-  #inbox .size { color: #888; font-size: 0.85rem; }
-  #inbox .del { width: auto; flex: none; padding: 0.4rem 0.7rem; font-size: 1rem;
-                background: #dc2626; }
+  #inbox li { border-bottom: 1px solid #eee; }
   #runs { list-style: none; padding: 0; margin: 0; }
   #runs li { padding: 0.5rem 0; border-bottom: 1px solid #eee; font-size: 1rem; }
   #runs a { color: #2563eb; text-decoration: none; }
@@ -122,35 +158,104 @@ _INDEX_HTML = """<!doctype html>
 </head>
 <body>
 <h1>주보 / 악보 업로드</h1>
-<form method="post" action="/upload" enctype="multipart/form-data">
-  <input type="file" name="files" multiple>
-  <button type="submit">Upload to inbox</button>
-</form>
-<h2>Inbox</h2>
-<ul id="inbox"></ul>
+<div class="slot">
+  <div class="label">주보 (PDF)</div>
+  <div class="files" id="files-bulletin"></div>
+  <input type="file" accept=".pdf" onchange="uploadSlot(this, 'bulletin')">
+</div>
+<div class="slot">
+  <div class="label">찬양 악보 (이미지) <span class="count" id="sheetCount"></span></div>
+  <div class="hint">파일명 순서 = 메들리 순서</div>
+  <div class="files" id="files-sheet"></div>
+  <input type="file" multiple accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'sheets')">
+</div>
+<div class="slot">
+  <div class="label">고백의 찬양 악보 (이미지 1장)</div>
+  <div class="files" id="files-confession"></div>
+  <input type="file" accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'confession')">
+</div>
+<div class="slot">
+  <div class="label">성가대 가사 (텍스트)</div>
+  <div class="hint">제목 / 작곡 줄 / 가사 — 절 사이 빈 줄 유지 · 자동 저장</div>
+  <textarea id="choirText" oninput="choirChanged()" onblur="flushChoir()"></textarea>
+  <div class="hint" id="choirStatus"></div>
+</div>
+<div id="otherWrap" hidden>
+  <h2>기타 파일</h2>
+  <div class="hint" style="color:#888;font-size:0.85rem">슬롯으로 인식되지 않아 빌드에 사용되지 않는
+    파일 — 삭제 후 위 슬롯으로 다시 업로드</div>
+  <ul id="inbox"></ul>
+</div>
 <button id="assemble" type="button" onclick="assemble()">Assemble inbox</button>
 <div id="status"></div>
 <h2>Review a run</h2>
 <ul id="runs"></ul>
 <script>
 let _timer;
+function fileRow(f, tag, mark) {
+  const row = document.createElement(tag); row.className = 'filerow';
+  const ok = document.createElement('span'); ok.className = mark ? 'ok warn' : 'ok';
+  ok.textContent = mark || '✓';
+  const name = document.createElement('span'); name.className = 'name'; name.textContent = f.name;
+  const size = document.createElement('span'); size.className = 'size'; size.textContent = (f.size / 1024).toFixed(1) + ' KB';
+  const btn = document.createElement('button'); btn.className = 'del'; btn.textContent = '✕';
+  btn.onclick = () => del(f.name);
+  row.append(ok, name, size, btn);
+  return row;
+}
 async function loadInbox() {
-  const {files} = await (await fetch('/inbox')).json();
-  const ul = document.getElementById('inbox');
-  ul.innerHTML = files.length ? '' : '<li>(empty)</li>';
-  for (const f of files) {
-    const li = document.createElement('li');
-    const name = document.createElement('span'); name.className = 'name'; name.textContent = f.name;
-    const size = document.createElement('span'); size.className = 'size'; size.textContent = (f.size / 1024).toFixed(1) + ' KB';
-    const btn = document.createElement('button'); btn.className = 'del'; btn.textContent = '✕';
-    btn.onclick = () => del(f.name);
-    li.append(name, size, btn);
-    ul.appendChild(li);
+  const {files, choir_text} = await (await fetch('/inbox')).json();
+  const ta = document.getElementById('choirText');
+  if (document.activeElement !== ta) ta.value = choir_text || '';
+  for (const kind of ['bulletin', 'sheet', 'confession']) {
+    const box = document.getElementById('files-' + kind);
+    const mine = files.filter(f => f.kind === kind);
+    box.innerHTML = mine.length ? '' : '<div class="none">아직 업로드 안 됨</div>';
+    for (const f of mine) box.appendChild(fileRow(f, 'div'));
   }
+  const sheets = files.filter(f => f.kind === 'sheet').length;
+  document.getElementById('sheetCount').textContent = sheets ? '✓ ' + sheets + '장' : '';
+  const others = files.filter(f => f.kind === 'other');
+  document.getElementById('otherWrap').hidden = !others.length;
+  const ul = document.getElementById('inbox');
+  ul.innerHTML = '';
+  for (const f of others) ul.appendChild(fileRow(f, 'li', '?'));
 }
 async function del(name) {
   await fetch('/inbox/' + encodeURIComponent(name), {method: 'DELETE'});
   loadInbox();
+}
+async function uploadSlot(input, kind) {
+  if (!input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append('files', f);
+  const r = await fetch('/upload/' + kind, {method: 'POST', body: fd});
+  const body = await r.json().catch(() => ({}));
+  document.getElementById('status').textContent = r.ok
+    ? 'Uploaded: ' + (body.saved || []).join(', ')
+    : 'Upload error: ' + (body.detail || r.status);
+  input.value = '';
+  loadInbox();
+}
+let _choirTimer;
+function choirChanged() {
+  document.getElementById('choirStatus').textContent = '…';
+  clearTimeout(_choirTimer);
+  _choirTimer = setTimeout(saveChoir, 800);
+}
+function flushChoir() {
+  if (!_choirTimer) return;
+  clearTimeout(_choirTimer);
+  saveChoir();
+}
+async function saveChoir() {
+  _choirTimer = null;
+  const text = document.getElementById('choirText').value;
+  const r = await fetch('/inbox/choir', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}),
+  });
+  document.getElementById('choirStatus').textContent = r.ok
+    ? (text.trim() ? '저장됨 ✓' : '비어 있음 — 저장 안 함') : '저장 오류: ' + r.status;
 }
 async function loadRuns() {
   const {runs} = await (await fetch('/runs')).json();
@@ -219,7 +324,6 @@ _REVIEW_HTML = """<!doctype html>
   .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; }
   textarea, input { width: 100%; font-size: 1rem; box-sizing: border-box; }
   textarea { min-height: 5rem; } input { padding: 0.5rem; margin: 0.25rem 0; }
-  .row button.sub { width: auto; padding: 0.5rem 0.9rem; font-size: 1rem; margin-top: 0.4rem; }
   .passage { white-space: pre-wrap; font-size: 0.95rem; }
   .hymngrid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
   .hymnthumb { position: relative; width: 30%; cursor: pointer; border: 2px solid #16a34a;
@@ -266,6 +370,7 @@ const pk = row => (row.part || '').replace(/\\s/g, '');
 const hasChoir = row => ((row.title || '') + (row.leader || '')).includes('성가대');
 const isOpening = row => pk(row) === '찬양' && !hasChoir(row);
 const isChoir = row => pk(row) === '찬양' && hasChoir(row);
+const isConfession = row => pk(row) === '고백의찬양';
 const isHymn = row => pk(row) === '봉헌';
 const isAnnounce = row => pk(row) === '교회소식';
 const isCtw = row => pk(row) === '예배의부름';
@@ -282,6 +387,7 @@ function render() {
     div.appendChild(head);
     if (isOpening(row)) renderMedley(div);
     else if (isChoir(row)) renderChoir(div);
+    else if (isConfession(row)) renderConfession(div);
     else if (isHymn(row)) renderHymn(div);
     else if (isAnnounce(row)) renderAnnounce(div);
     else if (isCtw(row)) renderPassage(div, run.call_to_worship_passage);
@@ -306,25 +412,30 @@ function renderMedley(div) {
   });
 }
 
-function renderChoir(div) {
-  const paste = document.createElement('textarea');
-  paste.id = 'choir'; paste.placeholder = '제목 / 작곡 줄 / 가사… 붙여넣기';
-  div.appendChild(paste);
-  const btn = document.createElement('button');
-  btn.type = 'button'; btn.className = 'sub'; btn.textContent = 'Parse & attach';
-  btn.onclick = attachChoir;
-  div.appendChild(btn);
-  const song = run.choir_song;
-  if (song && song.title) {
-    const sd = document.createElement('div'); sd.className = 'song';
-    const t = document.createElement('div'); t.className = 't';
-    t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
-    sd.appendChild(t);
-    const ta = document.createElement('textarea');
-    ta.dataset.kind = 'choir'; ta.value = (song.lines || []).join('\\n');
-    sd.appendChild(ta);
-    div.appendChild(sd);
+// Choir / confession lyrics arrive via the home-page inputs at assemble (#109); here the
+// operator only edits them (spacing/typos). Interior blank lines are stanza breaks (#101).
+function renderSong(div, song, kind, hint) {
+  if (!song || !song.title) {
+    const h = document.createElement('div'); h.className = 'hint'; h.textContent = hint;
+    div.appendChild(h);
+    return;
   }
+  const sd = document.createElement('div'); sd.className = 'song';
+  const t = document.createElement('div'); t.className = 't';
+  t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
+  sd.appendChild(t);
+  const ta = document.createElement('textarea');
+  ta.dataset.kind = kind; ta.value = (song.lines || []).join('\\n');
+  sd.appendChild(ta);
+  div.appendChild(sd);
+}
+
+function renderChoir(div) {
+  renderSong(div, run.choir_song, 'choir', '성가대 가사 없음 — 홈 화면에서 가사를 입력하고 다시 Assemble');
+}
+
+function renderConfession(div) {
+  renderSong(div, run.confession_song, 'confession', '고백의 찬양 가사 없음 — 홈 화면에서 악보를 업로드하고 다시 Assemble');
 }
 
 function mkInput(id, ph, val) {
@@ -393,13 +504,22 @@ function renderPassage(div, passage) {
 }
 
 const splitLines = v => v.split('\\n').map(s => s.trim()).filter(Boolean);
+// Keeps interior blank lines (stanza breaks, #101) — trims only leading/trailing ones.
+const splitKeepBlanks = v => {
+  const a = v.split('\\n').map(s => s.trim());
+  while (a.length && !a[0]) a.shift();
+  while (a.length && !a[a.length - 1]) a.pop();
+  return a;
+};
 
 function syncFromDom() {
   document.querySelectorAll('#order textarea[data-kind="worship"]').forEach(ta => {
     run.worship_songs[ta.dataset.i].lines = splitLines(ta.value);
   });
   const choirTa = document.querySelector('#order textarea[data-kind="choir"]');
-  if (choirTa && run.choir_song) run.choir_song.lines = splitLines(choirTa.value);
+  if (choirTa && run.choir_song) run.choir_song.lines = splitKeepBlanks(choirTa.value);
+  const confTa = document.querySelector('#order textarea[data-kind="confession"]');
+  if (confTa && run.confession_song) run.confession_song.lines = splitKeepBlanks(confTa.value);
   const annTa = document.querySelector('#order textarea[data-kind="ann"]');
   if (annTa) run.announcements = annTa.value.split(/\\n-{3,}\\n/).map(s => s.trim()).filter(Boolean);
   const hn = document.getElementById('hymnNumber');
@@ -415,16 +535,6 @@ function move(s, d) {
   if (j < 0 || j >= songs.length) return;
   [songs[s], songs[j]] = [songs[j], songs[s]];
   render();
-}
-
-async function attachChoir() {
-  const text = document.getElementById('choir').value;
-  const r = await fetch('/runs/' + date + '/choir', {
-    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}),
-  });
-  if (!r.ok) { document.getElementById('status').textContent = 'Choir error: ' + r.status; return; }
-  run = await r.json(); render();
-  document.getElementById('status').textContent = 'Choir attached.';
 }
 
 async function save() {
@@ -475,34 +585,82 @@ def index() -> str:
     return _INDEX_HTML
 
 
-@app.post("/upload", response_class=HTMLResponse)
-def upload(files: list[UploadFile] = File(...)) -> str:
-    dest = INBOX_DIR
-    dest.mkdir(parents=True, exist_ok=True)
+# Each required source has a dedicated upload slot (#109); slot identity is the reserved
+# inbox filename: bulletin.pdf, confession.<ext>, sheet-<origname>, choir.txt.
+def _kind(name: str) -> str:
+    if name == "bulletin.pdf":
+        return "bulletin"
+    if name.startswith("confession."):
+        return "confession"
+    if name.startswith("sheet-"):
+        return "sheet"
+    return "other"
+
+
+@app.post("/upload/{kind}")
+def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
+    """Save uploads into the slot's reserved inbox name (#109).
+
+    Single-file slots (bulletin, confession) replace the existing file; medley sheets keep
+    their original (sanitized) names behind a constant prefix so filename order is preserved.
+    Called by the home page's fetch-on-select JS, so it returns JSON, not a page.
+    """
+    if kind not in ("bulletin", "sheets", "confession"):
+        raise HTTPException(status_code=400, detail="unknown upload slot")
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
-    for f in files:
+    for f in files[: None if kind == "sheets" else 1]:
         name = Path(f.filename or "").name  # strip any path components (e.g. ../)
         if not name:
             continue
-        with (dest / name).open("wb") as out:
+        suffix = Path(name).suffix.lower()
+        if kind == "bulletin":
+            if suffix != ".pdf":
+                raise HTTPException(status_code=400, detail="bulletin must be a PDF")
+            name = "bulletin.pdf"
+        elif kind == "confession":
+            if suffix not in _IMAGE_SUFFIXES:
+                raise HTTPException(status_code=400, detail="confession sheet must be an image")
+            for old in INBOX_DIR.glob("confession.*"):  # replace — extension may change
+                old.unlink()
+            name = f"confession{suffix}"
+        else:
+            if suffix not in _IMAGE_SUFFIXES:
+                raise HTTPException(status_code=400, detail="sheets must be images")
+            name = f"sheet-{name}"
+        with (INBOX_DIR / name).open("wb") as out:
             shutil.copyfileobj(f.file, out)
         saved.append(name)
-    items = "".join(f"<li>{n}</li>" for n in saved) or "<li>(none)</li>"
-    return (
-        "<!doctype html><meta charset='utf-8'>"
-        "<meta name='viewport' content='width=device-width, initial-scale=1'>"
-        f"<h1>Saved {len(saved)} file(s)</h1><ul>{items}</ul>"
-        "<a href='/'>← Upload more</a>"
-    )
+    return {"saved": saved}
+
+
+@app.post("/inbox/choir")
+def save_choir_text(body: dict = Body(...)) -> dict:
+    """Write the 성가대 lyrics textarea into the inbox choir.txt (blank text clears it)."""
+    text = body.get("text", "")
+    target = INBOX_DIR / "choir.txt"
+    if text.strip():
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return {"saved": True}
+    if target.is_file():
+        target.unlink()
+    return {"saved": False}
 
 
 @app.get("/inbox")
 def inbox() -> dict:
-    """Current inbox contents (filename + size), so the operator can confirm/correct uploads."""
+    """Current inbox contents (filename + size + slot kind), plus the saved choir text.
+
+    choir.txt is excluded from `files` — the home-page textarea is its UI.
+    """
     if not INBOX_DIR.exists():
-        return {"files": []}
-    files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file())
-    return {"files": [{"name": p.name, "size": p.stat().st_size} for p in files]}
+        return {"files": [], "choir_text": ""}
+    files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name != "choir.txt")
+    return {
+        "files": [{"name": p.name, "size": p.stat().st_size, "kind": _kind(p.name)} for p in files],
+        "choir_text": _choir_text() or "",
+    }
 
 
 @app.delete("/inbox/{name}")
@@ -518,14 +676,29 @@ def delete_inbox_file(name: str) -> dict:
 
 
 def _bulletin_path() -> Path | None:
-    """First PDF in the inbox (the weekly bulletin), or None if none uploaded."""
-    pdfs = sorted(p for p in INBOX_DIR.glob("*.pdf") if p.is_file())
-    return pdfs[0] if pdfs else None
+    """The inbox bulletin PDF (fixed slot name), or None if none uploaded."""
+    pdf = INBOX_DIR / "bulletin.pdf"
+    return pdf if pdf.is_file() else None
 
 
 def _sheet_paths() -> list[Path]:
     """Band lead-sheet images in the inbox, in filename order (medley page order)."""
-    return sorted(p for p in INBOX_DIR.iterdir() if p.suffix.lower() in _IMAGE_SUFFIXES)
+    return sorted(p for p in INBOX_DIR.glob("sheet-*") if p.suffix.lower() in _IMAGE_SUFFIXES)
+
+
+def _confession_path() -> Path | None:
+    """The 고백의 찬양 sheet image in the inbox, or None if none uploaded."""
+    imgs = sorted(p for p in INBOX_DIR.glob("confession.*") if p.suffix.lower() in _IMAGE_SUFFIXES)
+    return imgs[0] if imgs else None
+
+
+def _choir_text() -> str | None:
+    """The saved 성가대 lyrics text from the inbox, or None if absent/blank."""
+    target = INBOX_DIR / "choir.txt"
+    if not target.is_file():
+        return None
+    text = target.read_text(encoding="utf-8")
+    return text if text.strip() else None
 
 
 def _assemble_async(service_date: str) -> None:
@@ -537,13 +710,41 @@ def _assemble_async(service_date: str) -> None:
     logger = obs.configure_logging()
     try:
         data = store.load(service_date)
+        warnings: list[str] = []  # missing-slot / best-effort failures; joined into the status
 
         _STATUS[service_date] = {"status": "running", "step": "transcribe", "error": None}
         # Skip re-transcription if the operator already hand-edited the medley (#105) — a
         # re-assemble must not clobber their line-break/order fixes.
         if "worship_songs" not in data.edited_fields:
+            if not _sheet_paths():
+                warnings.append("no 찬양 sheet images in inbox — medley not transcribed")
             songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
             data.worship_songs = [asdict(s) for s in songs]
+
+        # 고백의 찬양 (#109): transcribed from its dedicated sheet image. Best-effort like the
+        # hymn below — a transcription hiccup must not discard the rest of the assemble.
+        if "confession_song" not in data.edited_fields:
+            img = _confession_path()
+            if img is None:
+                warnings.append("no 고백의 찬양 sheet image in inbox")
+            else:
+                try:
+                    confession = lyrics_transcribe.transcribe(str(img))
+                    if confession:
+                        data.confession_song = asdict(confession[0])
+                    else:
+                        warnings.append("고백의 찬양 transcription found no lyrics")
+                except Exception:  # noqa: BLE001 - best-effort, surface as a warning
+                    logger.exception("고백의 찬양 transcription failed for %s", service_date)
+                    warnings.append("고백의 찬양 transcription failed — edit it in review")
+
+        # 성가대 (#109): parsed from the home-page choir text saved into the inbox.
+        if "choir_song" not in data.edited_fields:
+            text = _choir_text()
+            if text is None:
+                warnings.append("no 성가대 choir lyrics text in inbox")
+            else:
+                data.choir_song = asdict(parse_choir_text(text))
 
         _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
         if data.call_to_worship_ref:
@@ -555,7 +756,6 @@ def _assemble_async(service_date: str) -> None:
         # work above. On failure we record a warning and leave offering_hymn_images empty so
         # the operator can add the hymn manually.
         _STATUS[service_date] = {"status": "running", "step": "hymn", "error": None}
-        warning = None
         if data.offering_hymn_number:
             try:
                 pngs = hymn.fetch_hymn_slides(
@@ -566,10 +766,15 @@ def _assemble_async(service_date: str) -> None:
                 logger.exception(
                     "Hymn fetch failed for %s (hymn %s)", service_date, data.offering_hymn_number
                 )
-                warning = f"hymn {data.offering_hymn_number} download failed — add it manually"
+                warnings.append(f"hymn {data.offering_hymn_number} download failed — add it manually")
 
         store.save(service_date, data)
-        _STATUS[service_date] = {"status": "done", "step": None, "error": None, "warning": warning}
+        _STATUS[service_date] = {
+            "status": "done",
+            "step": None,
+            "error": None,
+            "warning": "\n".join(warnings) or None,
+        }
         logger.info("Assembled run for %s (%d song(s))", service_date, len(data.worship_songs))
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Assemble failed for %s", service_date)
@@ -585,7 +790,8 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
 
     Re-assembling a date that already has a run is destructive (#105): the fresh parse would
     wipe review edits. We warn first (return needs_confirm) unless `confirm`, then merge —
-    preserving pure-human fields (choir, hymn verses) and any operator-edited parsed fields.
+    preserving hymn verse picks, any operator-edited parsed fields, and carrying over
+    choir/confession (refreshed from the inbox only when unedited and the input exists).
     """
     pdf = _bulletin_path()
     if pdf is None:
@@ -607,7 +813,10 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
         }
     if existing is not None:
         data.edited_fields = list(existing.edited_fields)
-        data.choir_song = existing.choir_song  # pure human — never parsed
+        # Carry over choir/confession as the baseline; _assemble_async refreshes them from the
+        # inbox only when unedited and the inbox input exists.
+        data.choir_song = existing.choir_song
+        data.confession_song = existing.confession_song
         data.offering_hymn_verses = existing.offering_hymn_verses
         for f in existing.edited_fields:  # preserve operator-edited parsed fields
             setattr(data, f, getattr(existing, f))
@@ -668,30 +877,14 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     data = ServiceData(**{k: v for k, v in body.items() if k in known})
     data.offering_hymn_verses = [int(v) for v in data.offering_hymn_verses]
     # Record which parsed/transcribed fields the operator actually changed, so a later
-    # re-assemble preserves them instead of re-deriving them (#105). pure-human fields
-    # (choir_song, offering_hymn_verses) are always preserved, so they aren't tracked.
+    # re-assemble preserves them instead of re-deriving them (#105). The one pure-human
+    # field (offering_hymn_verses) is always preserved, so it isn't tracked.
     edited = set(existing.edited_fields) if existing else set()
     if existing:
         edited |= {f for f in _EDITABLE_PARSED if getattr(data, f) != getattr(existing, f)}
     data.edited_fields = sorted(edited)
     store.save(service_date, data)
     return {"saved": service_date}
-
-
-@app.post("/runs/{service_date}/choir")
-def attach_choir(service_date: str, body: dict = Body(...)) -> dict:
-    """Parse pasted 성가대 lyrics into the top-level choir_song field; return the updated run."""
-    try:
-        store.path_for(service_date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
-    try:
-        data = store.load(service_date)
-    except FileNotFoundError:
-        raise HTTPException(status_code=404, detail="no run for that date")
-    data.choir_song = asdict(parse_choir_text(body.get("text", "")))
-    store.save(service_date, data)
-    return asdict(data)
 
 
 @app.get("/runs/{service_date}/hymn")
