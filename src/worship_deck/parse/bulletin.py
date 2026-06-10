@@ -57,8 +57,10 @@ class ServiceData:
     # 찬양 medley — one Song-as-dict per song (the opening congregational 찬양 slot). Transcribed
     # from the band lead sheet at assemble; reordered / line-break-fixed in review.
     worship_songs: list[dict] = field(default_factory=list)
-    # 성가대 choir song (Song-as-dict); pasted as raw text in review. {} until pasted.
+    # 성가대 choir song (Song-as-dict); parsed from the inbox choir.txt at assemble. {} until set.
     choir_song: dict = field(default_factory=dict)
+    # 고백의 찬양 (Song-as-dict); transcribed from the uploaded sheet image at assemble (#109).
+    confession_song: dict = field(default_factory=dict)
     # 예배의 부름 / 말씀 verse passages — one Verse-as-dict each (개역한글 + ESV), looked up at assemble.
     call_to_worship_passage: list[dict] = field(default_factory=list)
     sermon_passage: list[dict] = field(default_factory=list)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, replace
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -23,65 +24,124 @@ def test_health_ok() -> None:
     assert resp.json() == {"status": "ok"}
 
 
-def test_index_serves_upload_form() -> None:
+def test_index_serves_upload_slots() -> None:
+    """One dedicated slot per required source (#109), plus the choir-text editor."""
     resp = client.get("/")
     assert resp.status_code == 200
     body = resp.text
-    assert 'enctype="multipart/form-data"' in body
-    assert 'type="file"' in body
+    # auto-upload on file select / auto-save choir text — no per-slot submit buttons
+    assert "uploadSlot(this, 'bulletin')" in body
+    assert "uploadSlot(this, 'sheets')" in body
+    assert "uploadSlot(this, 'confession')" in body
+    assert 'id="choirText"' in body
+    assert "choirChanged()" in body
+    # per-slot uploaded-file lists (✓ + name + delete) render inside each slot
+    assert 'id="files-bulletin"' in body
+    assert 'id="files-sheet"' in body
+    assert 'id="files-confession"' in body
 
 
-def test_upload_lands_in_inbox(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
-    resp = client.post("/upload", files={"files": ("bulletin.pdf", b"%PDF-data", "application/pdf")})
-    assert resp.status_code == 200
-    saved = tmp_path / "bulletin.pdf"
-    assert saved.read_bytes() == b"%PDF-data"
-
-
-def test_upload_multiple_files(tmp_path, monkeypatch) -> None:
+def test_upload_bulletin_saves_to_fixed_name(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     resp = client.post(
-        "/upload",
+        "/upload/bulletin", files={"files": ("주보-0531.pdf", b"%PDF-data", "application/pdf")}
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"saved": ["bulletin.pdf"]}
+    assert (tmp_path / "bulletin.pdf").read_bytes() == b"%PDF-data"
+    # a second upload replaces the slot
+    client.post("/upload/bulletin", files={"files": ("other.pdf", b"%PDF-2", "application/pdf")})
+    assert (tmp_path / "bulletin.pdf").read_bytes() == b"%PDF-2"
+
+
+def test_upload_sheets_keeps_name_order_behind_prefix(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    resp = client.post(
+        "/upload/sheets",
         files=[
-            ("files", ("bulletin.pdf", b"pdf", "application/pdf")),
-            ("files", ("sheet.png", b"png", "image/png")),
+            ("files", ("01-song.png", b"png1", "image/png")),
+            ("files", ("02-song.jpg", b"png2", "image/jpeg")),
         ],
     )
     assert resp.status_code == 200
-    assert (tmp_path / "bulletin.pdf").read_bytes() == b"pdf"
-    assert (tmp_path / "sheet.png").read_bytes() == b"png"
+    assert (tmp_path / "sheet-01-song.png").read_bytes() == b"png1"
+    assert (tmp_path / "sheet-02-song.jpg").read_bytes() == b"png2"
+
+
+def test_upload_confession_replaces_across_extensions(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    client.post("/upload/confession", files={"files": ("a.png", b"old", "image/png")})
+    client.post("/upload/confession", files={"files": ("b.jpg", b"new", "image/jpeg")})
+    assert not (tmp_path / "confession.png").exists()
+    assert (tmp_path / "confession.jpg").read_bytes() == b"new"
+
+
+def test_upload_rejects_wrong_type_per_slot(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    assert client.post(
+        "/upload/bulletin", files={"files": ("sheet.png", b"png", "image/png")}
+    ).status_code == 400
+    assert client.post(
+        "/upload/sheets", files={"files": ("bulletin.pdf", b"pdf", "application/pdf")}
+    ).status_code == 400
+    assert client.post(
+        "/upload/confession", files={"files": ("bulletin.pdf", b"pdf", "application/pdf")}
+    ).status_code == 400
+    assert client.post(
+        "/upload/nope", files={"files": ("a.png", b"png", "image/png")}
+    ).status_code == 400
 
 
 def test_upload_sanitizes_filename(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
-    resp = client.post("/upload", files={"files": ("../evil.pdf", b"x", "application/pdf")})
+    resp = client.post("/upload/sheets", files={"files": ("../evil.png", b"x", "image/png")})
     assert resp.status_code == 200
-    assert (tmp_path / "evil.pdf").read_bytes() == b"x"
+    assert (tmp_path / "sheet-evil.png").read_bytes() == b"x"
     # nothing escaped the inbox dir
-    assert not (tmp_path.parent / "evil.pdf").exists()
+    assert not (tmp_path.parent / "evil.png").exists()
+    assert not (tmp_path.parent / "sheet-evil.png").exists()
+
+
+def test_save_choir_text_writes_and_clears(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    text = "제목\n작곡자 작곡\n가사 한 줄"
+    assert client.post("/inbox/choir", json={"text": text}).json() == {"saved": True}
+    assert (tmp_path / "choir.txt").read_text(encoding="utf-8") == text
+    # blank text clears the slot
+    assert client.post("/inbox/choir", json={"text": "  \n"}).json() == {"saved": False}
+    assert not (tmp_path / "choir.txt").exists()
 
 
 # ── /inbox ───────────────────────────────────────────────────────────────────────
 
 
-def test_inbox_lists_files(tmp_path, monkeypatch) -> None:
+def test_inbox_lists_files_with_kind(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
-    (tmp_path / "sheet.png").write_bytes(b"pngdata")
+    (tmp_path / "confession.png").write_bytes(b"img")
+    (tmp_path / "sheet-1.png").write_bytes(b"pngdata")
     resp = client.get("/inbox")
     assert resp.status_code == 200
     assert resp.json() == {
         "files": [
-            {"name": "bulletin.pdf", "size": 4},
-            {"name": "sheet.png", "size": 7},
-        ]
+            {"name": "bulletin.pdf", "size": 4, "kind": "bulletin"},
+            {"name": "confession.png", "size": 3, "kind": "confession"},
+            {"name": "sheet-1.png", "size": 7, "kind": "sheet"},
+        ],
+        "choir_text": "",
     }
+
+
+def test_inbox_choir_text_excluded_from_files(tmp_path, monkeypatch) -> None:
+    """choir.txt has its own textarea UI — it round-trips via choir_text, not the file list."""
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    (tmp_path / "choir.txt").write_text("제목\n가사", encoding="utf-8")
+    assert client.get("/inbox").json() == {"files": [], "choir_text": "제목\n가사"}
 
 
 def test_inbox_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
-    assert client.get("/inbox").json() == {"files": []}
+    assert client.get("/inbox").json() == {"files": [], "choir_text": ""}
 
 
 def test_delete_inbox_file(tmp_path, monkeypatch) -> None:
@@ -144,7 +204,7 @@ def _assemble_env(tmp_path, monkeypatch):
     monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
     monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
     (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
-    (tmp_path / "sheet.png").write_bytes(b"png")
+    (tmp_path / "sheet-1.png").write_bytes(b"png")
     monkeypatch.setattr(app_module.parse, "parse", lambda _p: _fake_data())
     monkeypatch.setattr(
         app_module.verses, "lookup_verses",
@@ -220,6 +280,63 @@ def test_assemble_step_failure_surfaces_as_error(_assemble_env, monkeypatch) -> 
     assert "ollama down" in status["error"]
 
 
+def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe", lambda _p: [Song(title="찬양곡", lines=["x"])]
+    )
+    # interior blank line = stanza break (#101) — must survive into choir_song
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n1절 가사\n\n2절 가사", encoding="utf-8")
+    date = client.post("/assemble").json()["service_date"]
+    assert store.load(date).choir_song == {
+        "title": "제목",
+        "lines": ["1절 가사", "", "2절 가사"],
+        "composer": "작곡자 작곡",
+    }
+
+
+def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -> None:
+    (tmp_path / "confession.png").write_bytes(b"img")
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        # basename check — pytest's tmp_path itself contains the test name ("confession")
+        lambda p: [Song(title="아무것도 두려워말라" if Path(p).name.startswith("confession") else "찬양곡", lines=["x"])],
+    )
+    date = client.post("/assemble").json()["service_date"]
+    data = store.load(date)
+    assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": ""}
+    assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
+
+
+def test_assemble_warns_on_missing_slots(tmp_path, monkeypatch) -> None:
+    """Only the bulletin is required; the other empty slots warn but assemble still finishes."""
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
+    monkeypatch.setattr(app_module.parse, "parse", lambda _p: ServiceData(date="2026년 5월 31일"))
+    date = client.post("/assemble").json()["service_date"]
+    status = client.get(f"/assemble/{date}/status").json()
+    assert status["status"] == "done"
+    assert "찬양 sheet images" in status["warning"]
+    assert "고백의 찬양" in status["warning"]
+    assert "성가대" in status["warning"]
+
+
+def test_assemble_confession_failure_is_nonfatal(_assemble_env, monkeypatch, tmp_path) -> None:
+    (tmp_path / "confession.png").write_bytes(b"img")
+
+    def _transcribe(p):
+        if Path(p).name.startswith("confession"):
+            raise RuntimeError("ollama down")
+        return [Song(title="찬양곡", lines=["x"])]
+
+    monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", _transcribe)
+    date = client.post("/assemble").json()["service_date"]
+    status = client.get(f"/assemble/{date}/status").json()
+    assert status["status"] == "done"
+    assert "고백의 찬양" in status["warning"]
+    assert store.load(date).confession_song == {}
+
+
 def test_assemble_status_rejects_bad_date() -> None:
     assert client.get("/assemble/not-a-date/status").status_code == 400
 
@@ -254,38 +371,68 @@ def test_reassemble_existing_run_needs_confirm_and_preserves_store(_assemble_env
     assert store.path_for(date).read_text(encoding="utf-8") == before
 
 
-def test_reassemble_confirm_lists_kept_and_refreshed_sections(_assemble_env, monkeypatch) -> None:
+def test_reassemble_confirm_lists_kept_and_refreshed_sections(_assemble_env, monkeypatch, tmp_path) -> None:
     _fake_transcribe(monkeypatch, "song A")
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n가사 한 줄", encoding="utf-8")
     date = client.post("/assemble").json()["service_date"]
-    client.post(f"/runs/{date}/choir", json={"text": "제목\n작곡자 작곡\n가사 한 줄"})
     run = client.get(f"/runs/{date}").json()
     run["worship_songs"][0]["lines"] = ["operator edit"]
     run["offering_hymn_verses"] = [1, 3]
     client.put(f"/runs/{date}", json=run)
+    # the choir text is gone by re-assemble time → its parsed song is carried over, not refreshed
+    (tmp_path / "choir.txt").unlink()
 
     body = client.post("/assemble").json()
     kept, refresh = body["kept"], body["refresh"]
-    # kept lists exactly the operator's edits
+    # kept lists the operator's edits plus the input-less carry-overs
     assert "성가대 choir lyrics" in kept
     assert "봉헌 verse picks (1, 3)" in kept
     assert "찬양 songs (edited lyrics/order)" in kept
-    # refresh lists the not-edited sections, and never an edited one
+    # refresh lists the not-edited sections, and never an edited or input-less one
     assert "교회소식 announcements (re-parsed)" in refresh
     assert not any("songs" in r for r in refresh)  # 찬양 was edited → not refreshed
+    assert not any("성가대" in r for r in refresh)
+    assert not any("고백" in r for r in refresh)  # no confession image in inbox
 
 
-def test_reassemble_preserves_pure_human_fields(_assemble_env, monkeypatch) -> None:
+def test_reassemble_refreshes_unedited_choir_from_inbox_text(_assemble_env, monkeypatch, tmp_path) -> None:
     _fake_transcribe(monkeypatch, "song A")
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n가사 한 줄", encoding="utf-8")
     date = client.post("/assemble").json()["service_date"]
-    client.post(f"/runs/{date}/choir", json={"text": "제목\n작곡자 작곡\n가사 한 줄"})
+    assert store.load(date).choir_song["lines"] == ["가사 한 줄"]
+
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n고친 가사", encoding="utf-8")
+    body = client.post("/assemble").json()
+    assert "성가대 choir lyrics (re-parsed from inbox text)" in body["refresh"]
+    assert client.post("/assemble?confirm=1").status_code == 200
+    assert store.load(date).choir_song["lines"] == ["고친 가사"]
+
+
+def test_reassemble_carries_over_choir_when_inbox_text_gone(_assemble_env, monkeypatch, tmp_path) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n가사 한 줄", encoding="utf-8")
+    date = client.post("/assemble").json()["service_date"]
     run = client.get(f"/runs/{date}").json()
     run["offering_hymn_verses"] = [1, 3]
     client.put(f"/runs/{date}", json=run)
+    (tmp_path / "choir.txt").unlink()
 
     assert client.post("/assemble?confirm=1").status_code == 200
     saved = store.load(date)
     assert saved.choir_song["title"] == "제목"
     assert saved.offering_hymn_verses == [1, 3]
+
+
+def test_reassemble_preserves_edited_choir_despite_new_inbox_text(_assemble_env, monkeypatch, tmp_path) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n가사 한 줄", encoding="utf-8")
+    date = client.post("/assemble").json()["service_date"]
+    run = client.get(f"/runs/{date}").json()
+    run["choir_song"]["lines"] = ["operator edit"]  # marks choir_song edited
+    client.put(f"/runs/{date}", json=run)
+
+    assert client.post("/assemble?confirm=1").status_code == 200
+    assert store.load(date).choir_song["lines"] == ["operator edit"]
 
 
 def test_reassemble_preserves_edited_songs_refreshes_unedited(_assemble_env, monkeypatch) -> None:
@@ -417,17 +564,30 @@ def test_put_run_400_bad_date() -> None:
     assert client.put("/runs/not-a-date", json={}).status_code == 400
 
 
-def test_choir_paste_attaches_song(_runs) -> None:
-    store.save(_runs, _fake_run())
-    text = "주 하나님 지으신 모든 세계\n스튜어트 하인 작곡\n주 하나님 지으신 모든 세계"
-    resp = client.post(f"/runs/{_runs}/choir", json={"text": text})
-    assert resp.status_code == 200
+def test_put_run_tracks_choir_and_confession_edits(_runs) -> None:
+    store.save(_runs, replace(
+        _fake_run(),
+        choir_song={"title": "성가", "lines": ["a"], "composer": ""},
+        confession_song={"title": "고백", "lines": ["b"], "composer": ""},
+    ))
+    run = client.get(f"/runs/{_runs}").json()
+    run["choir_song"]["lines"] = ["a fixed"]
+    run["confession_song"]["lines"] = ["b fixed"]
+    client.put(f"/runs/{_runs}", json=run)
+    assert store.load(_runs).edited_fields == ["choir_song", "confession_song"]
 
-    assert store.load(_runs).choir_song == {
-        "title": "주 하나님 지으신 모든 세계",
-        "lines": ["주 하나님 지으신 모든 세계"],
-        "composer": "스튜어트 하인 작곡",
-    }
+
+def test_choir_paste_endpoint_removed(_runs) -> None:
+    store.save(_runs, _fake_run())
+    assert client.post(f"/runs/{_runs}/choir", json={"text": "제목\n가사"}).status_code == 404
+
+
+def test_review_page_has_confession_editor_and_no_paste_box() -> None:
+    body = client.get("/review/2026-05-31").text
+    assert "고백의찬양" in body  # confession row predicate
+    assert "renderConfession" in body
+    assert "붙여넣기" not in body  # the old choir paste box is gone
+    assert "attachChoir" not in body
 
 
 # ── /runs/{date}/hymn (봉헌 slide grid, #84/#108) ─────────────────────────────
