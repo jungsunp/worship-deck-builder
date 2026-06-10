@@ -876,6 +876,27 @@ def test_save_draft_live_produces_file(real_template_key: Path, tmp_path: Path) 
 
 
 @pytest.mark.local_only
+def test_save_draft_binds_open_doc_to_draft_not_template(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Regression (#98 fallout): after save_draft the open front document must be the DRAFT,
+    not the template — every fill mutates this open doc in place, and a crash before finalize
+    lets macOS autosave write it to disk. Bound to the draft that's harmless; the old
+    template-bound behavior silently corrupted master.key on every crashed build.
+    """
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+    open_path = subprocess.run(
+        ["osascript", "-e", 'tell application "Keynote" to return POSIX path of ((file of front document) as text)'],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    ).stdout.strip()
+    assert Path(open_path) == draft
+    assert Path(open_path) != real_template_key
+
+
+@pytest.mark.local_only
 def test_duplicate_slide_live_adds_exactly_n(real_template_key: Path, tmp_path: Path) -> None:
     """Each duplicate_slide call must grow the deck by exactly N slides."""
     draft = tmp_path / "draft.key"

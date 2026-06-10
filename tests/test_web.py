@@ -430,6 +430,65 @@ def test_choir_paste_attaches_song(_runs) -> None:
     }
 
 
+# ── /runs/{date}/hymn (봉헌 slide grid, #84/#108) ─────────────────────────────
+
+
+def _seed_hymn_pngs(tmp_path, monkeypatch, date, names) -> list[str]:
+    """Write fake hymn PNGs under HYMN_DIR/<date>/hymn/; return their full-path strings."""
+    monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
+    hymn_dir = tmp_path / "runs" / date / "hymn"
+    hymn_dir.mkdir(parents=True)
+    paths = []
+    for n in names:
+        p = hymn_dir / n
+        p.write_bytes(b"\x89PNG")
+        paths.append(str(p))
+    return paths
+
+
+def test_list_hymn_slides(_runs, tmp_path, monkeypatch) -> None:
+    paths = _seed_hymn_pngs(tmp_path, monkeypatch, _runs, ["slide-1.png", "slide-2.png", "slide-3.png"])
+    assert client.get(f"/runs/{_runs}/hymn").json() == {"images": paths}
+
+
+def test_list_hymn_slides_empty_when_no_dir(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
+    assert client.get(f"/runs/{_runs}/hymn").json() == {"images": []}
+
+
+def test_list_hymn_slides_400_bad_date() -> None:
+    assert client.get("/runs/not-a-date/hymn").status_code == 400
+
+
+def test_get_hymn_slide_serves_file(_runs, tmp_path, monkeypatch) -> None:
+    _seed_hymn_pngs(tmp_path, monkeypatch, _runs, ["slide-1.png"])
+    resp = client.get(f"/runs/{_runs}/hymn/slide-1.png")
+    assert resp.status_code == 200
+    assert resp.content == b"\x89PNG"
+
+
+def test_get_hymn_slide_blocks_traversal(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
+    (tmp_path / "runs" / _runs).mkdir(parents=True)
+    (tmp_path / "runs" / _runs / "secret.png").write_bytes(b"secret")  # one level above hymn/
+    # The single-segment {name} route + Path(name).name guard prevent escaping the hymn dir.
+    assert client.get(f"/runs/{_runs}/hymn/..%2fsecret.png").status_code != 200
+
+
+def test_get_hymn_slide_404_when_missing(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "HYMN_DIR", tmp_path / "runs")
+    assert client.get(f"/runs/{_runs}/hymn/nope.png").status_code == 404
+
+
+def test_put_run_persists_pruned_hymn_images(_runs, tmp_path, monkeypatch) -> None:
+    paths = _seed_hymn_pngs(tmp_path, monkeypatch, _runs, ["slide-1.png", "slide-2.png", "slide-3.png"])
+    store.save(_runs, replace(_fake_run(), offering_hymn_images=paths))
+    run = client.get(f"/runs/{_runs}").json()
+    run["offering_hymn_images"] = [paths[0], paths[2]]  # operator dropped slide-2
+    assert client.put(f"/runs/{_runs}", json=run).status_code == 200
+    assert store.load(_runs).offering_hymn_images == [paths[0], paths[2]]
+
+
 def test_review_page_served() -> None:
     resp = client.get("/review/2026-05-31")
     assert resp.status_code == 200

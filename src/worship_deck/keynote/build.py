@@ -125,12 +125,15 @@ def save_draft(template_key: str, out_key: str) -> str:
     Save-As leaves the template untouched. Later issues (#21, #13–16) extend this plumbing
     to duplicate slides and set native text.
 
-    Open-once/save-once (#117): this writes a pristine copy to out_key but the open document
-    STAYS BOUND TO THE TEMPLATE (`save … in` does not rebind it). Every later primitive mutates
-    that open `front document` in place (no per-call open/save), and `finalize_draft` saves it
-    once at the end of build() WITH the explicit out_key path (a bare save would overwrite the
-    template). Callers must therefore run `_ensure_keynote_ready()` first (zero open docs → front
-    document is unambiguously this draft) and `finalize_draft(out_key)` last.
+    Open-once/save-once (#117): this writes a pristine copy to out_key, then CLOSES the template
+    and reopens the copy so the open `front document` is bound to the DRAFT, not the template.
+    Every later primitive mutates that open document in place (no per-call open/save), and
+    `finalize_draft` saves it once at the end of build(). Binding the open doc to the draft is the
+    safety invariant: if a fill crashes before finalize, macOS autosave writes the open doc to
+    disk — with it bound to the draft that hits the draft, but the old template-bound behavior
+    silently corrupted master.key on every crashed build (#98 fallout). Callers must still run
+    `_ensure_keynote_ready()` first (zero open docs → front document is unambiguously this draft)
+    and `finalize_draft(out_key)` last.
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote save fails.
@@ -147,10 +150,11 @@ def finalize_draft(out_key: str) -> str:
 
     The mutating/reading primitives no longer open/save the deck per call — they edit the open
     `front document` opened by `save_draft` — so this single save persists all of the build's
-    edits (~55 disk cycles collapse to ~2). It MUST save with the explicit out_key: the open
-    document is still bound to the template, so a bare `save front document` would write the
-    week's edits into master.key and corrupt it. The draft is left open; the web app's post-build
-    `open path` just focuses it.
+    edits (~55 disk cycles collapse to ~2). `save_draft` reopened the draft copy, so the open
+    document is bound to the draft, so finalize.applescript does a plain in-place `save front
+    document` (not `save … in out_key`, which would desync autosave and trigger a "changed by
+    another application" warning on the still-open draft). out_key is passed for logging only —
+    the script ignores it. The draft is left open; the web app's post-build `open path` focuses it.
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote save fails.
