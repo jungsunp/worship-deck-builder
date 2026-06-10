@@ -1,14 +1,21 @@
-"""Transcribe Korean lyrics from band lead-sheet images — free, local, offline hybrid.
+"""Transcribe Korean lyrics from band lead-sheet images — online lookup, local fallback.
 
 The band runs the arrangement live from the physical sheets, so the deck only needs the
-*lyrics* present (not the red ×N / X-out / → arrangement marks). Two local stages, no API:
+*lyrics* present (not the red ×N / X-out / → arrangement marks). Pipeline per sheet:
 
-1. Apple Vision (``ocr_ko.swift``) reads the Korean text. High recall over busy musical
-   notation and it never crashes on big images — but it returns each note's syllable as a
-   separate fragment ("가 까 이"), so the lines need rebuilding.
-2. A local Ollama model (default ``qwen2.5:14b``, in *text* mode) reassembles the fragments
-   into clean lyric lines, in top-to-bottom page order. Running it as a text task sidesteps
-   the vision-runner crash we hit feeding images directly, and keeps it offline and free.
+1. Apple Vision (``ocr_ko.swift``) reads the Korean text with per-line heights. High
+   recall over busy musical notation and it never crashes on big images — but it returns
+   each note's syllable as a separate fragment ("가 까 이"), so the lines need rebuilding.
+2. The sheet's title — the tallest Hangul line near the top of the page — is detected
+   deterministically from the OCR heights (the bulletin names the band, not the songs,
+   so the sheet title is the only song identity; #110).
+3. Canonical lyrics are looked up on gasazip.com by that title, ranked against the OCR
+   fragments (``online.lookup``). A confident match wins: clean text, no note-split
+   syllables, no duplicated key-change repeats.
+4. Otherwise a local Ollama model (default ``qwen2.5:14b``, in *text* mode) reassembles
+   the fragments into clean lyric lines, in top-to-bottom page order — the original
+   free/offline path. Running it as a text task sidesteps the vision-runner crash we hit
+   feeding images directly.
 
 The model returns lyrics *flat* (one line per staff line, page order). It is **not** asked
 to regroup numbered hymn verses whose lyrics span two staff systems — that cross-staff
@@ -29,6 +36,8 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from worship_deck.lyrics import online
+
 # ── Data model ────────────────────────────────────────────────────────────────
 
 
@@ -47,8 +56,11 @@ class Song:
 _OCR_SCRIPT = Path(__file__).with_name("ocr_ko.swift")
 
 
-def _vision_ocr(image_path: str) -> list[str]:
-    """Run the Apple Vision OCR script, returning raw text lines top-to-bottom.
+def _vision_ocr(image_path: str) -> list[tuple[float, str]]:
+    """Run the Apple Vision OCR script, returning (height, text) lines top-to-bottom.
+
+    Height is the line's tallest bounding box as a fraction of image height — the
+    title-detection signal (the page title is the tallest Hangul line near the top).
 
     Raises:
         RuntimeError: if `swift` (Xcode Command Line Tools) is missing or OCR fails.
@@ -67,10 +79,54 @@ def _vision_ocr(image_path: str) -> list[str]:
         ) from e
     if result.returncode != 0:
         raise RuntimeError(f"Vision OCR failed for {image_path}: {result.stderr.strip()}")
-    return [ln for ln in result.stdout.splitlines() if ln.strip()]
+    lines = []
+    for ln in result.stdout.splitlines():
+        height, _, text = ln.partition("\t")
+        if text.strip():
+            lines.append((float(height), text.strip()))
+    return lines
 
 
-# ── Stage 2: filter to lyric fragments ────────────────────────────────────────
+# ── Stage 2: detect the sheet title ──────────────────────────────────────────
+
+_TITLE_REGION = 10  # OCR lines from the top of the page to consider
+_TITLE_MIN_HANGUL_RATIO = 0.5  # of non-space chars; handwriting mixes latin/digits in
+_TITLE_MAX_HANGUL = 16  # longer Hangul runs are note-split lyric lines, not titles
+
+
+def _detect_title(ocr_lines: list[tuple[float, str]]) -> str:
+    """Pick the sheet title: the tallest mostly-Hangul line near the top of the page.
+
+    Handwritten arrangement marks can be taller but are dominated by latin/digit/symbol
+    glyphs (e.g. ``드럼만 - ((83)``), so a line only qualifies when at least half its
+    non-space characters are Hangul; full lyric lines (continuation pages without their
+    own title) are excluded by the Hangul length cap. Stray non-Hangul tokens merged
+    into the title's baseline (e.g. a red "•all" mark) are trimmed off the edges.
+    Returns "" when nothing qualifies — the caller then skips the online lookup.
+    """
+    candidates = []
+    for height, text in ocr_lines[:_TITLE_REGION]:
+        if any(n in text for n in _NOISE):
+            continue
+        hangul = len(_HANGUL.findall(text))
+        nonspace = len(re.sub(r"\s", "", text))
+        if not hangul or hangul > _TITLE_MAX_HANGUL:
+            continue
+        if hangul / nonspace < _TITLE_MIN_HANGUL_RATIO:
+            continue
+        candidates.append((height, text))
+    if not candidates:
+        return ""
+    _, text = max(candidates, key=lambda c: c[0])
+    tokens = text.split()
+    while tokens and not _HANGUL.search(tokens[0]):
+        tokens.pop(0)
+    while tokens and not _HANGUL.search(tokens[-1]):
+        tokens.pop()
+    return " ".join(tokens)
+
+
+# ── Stage 3: filter to lyric fragments ────────────────────────────────────────
 
 _HANGUL = re.compile(r"[가-힣]")
 # Hangul-bearing lines that are NOT lyrics (credits/instructions/phonetic titles/watermark).
@@ -90,7 +146,7 @@ def _filter_lyric_fragments(lines: list[str]) -> list[str]:
     return out
 
 
-# ── Stage 3: reassemble fragments into lines via a local model ────────────────
+# ── Stage 4 (fallback): reassemble fragments into lines via a local model ─────
 
 _OLLAMA_FORMAT = {
     "type": "object",
@@ -132,23 +188,29 @@ _PROMPT = """\
 "Scored by"·영어·연도, 반복되는 가사는 title 이 아닙니다.
 7. 가사가 아닌 것은 제거: 코드, 마디 번호, 영어, 저작권/워터마크, 편곡 기호(V, C, B, 간주, \
 키업, ×2, →), 섹션 라벨(Verse/Chorus/Bridge/Intro/Outro).
-
-가사 조각들:
 """
 
 
-def _reassemble(fragments: list[str]) -> list[Song]:
-    """Ask the local Ollama model to rebuild fragments into clean lyric lines."""
+def _reassemble(fragments: list[str], title: str = "") -> list[Song]:
+    """Ask the local Ollama model to rebuild fragments into clean lyric lines.
+
+    When the sheet title was already detected from the OCR heights, it is given to the
+    model so rule 6 (title guessing) no longer applies to it.
+    """
     import httpx
 
     host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
     model = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
+    prompt = _PROMPT
+    if title:
+        prompt += f'이 악보의 곡 제목은 "{title}" 입니다. title 에 그대로 사용하세요.\n'
+    prompt += "\n가사 조각들:\n"
     try:
         response = httpx.post(
             f"{host}/api/generate",
             json={
                 "model": model,
-                "prompt": _PROMPT + "\n".join(fragments),
+                "prompt": prompt + "\n".join(fragments),
                 "stream": False,
                 "think": False,  # disable thinking; qwen3.5 etc. otherwise return empty
                 "format": _OLLAMA_FORMAT,
@@ -180,16 +242,26 @@ def _reassemble(fragments: list[str]) -> list[Song]:
 
 
 def transcribe(image_path: str) -> list[Song]:
-    """Read one band-sheet image into its songs' lyric lines (free local hybrid).
+    """Read one band-sheet image into its songs' lyric lines.
 
-    Apple Vision OCR -> Hangul-fragment filter -> local model line reassembly.
-    Returns one Song (title + ordered lyric lines) per song on the sheet.
+    Apple Vision OCR (with line heights) -> deterministic title detection -> canonical
+    lyrics lookup on gasazip ranked by the OCR fragments -> on a confident match, the
+    canonical text wins (a sheet page holds one song, possibly printed twice for a key
+    change). Otherwise falls back to local Ollama reassembly of the fragments, which
+    also handles the rare multi-song page.
 
     Raises:
-        RuntimeError: if `swift`/OCR fails or Ollama is unreachable.
+        RuntimeError: if `swift`/OCR fails, or the fallback is needed and Ollama is
+            unreachable.
     """
-    fragments = _filter_lyric_fragments(_vision_ocr(image_path))
-    return _reassemble(fragments)
+    ocr_lines = _vision_ocr(image_path)
+    title = _detect_title(ocr_lines)
+    fragments = _filter_lyric_fragments([text for _, text in ocr_lines])
+    if title:
+        match = online.lookup(title, fragments)
+        if match:
+            return [Song(title=match.title, lines=match.lines)]
+    return _reassemble(fragments, title=title)
 
 
 def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:

@@ -8,8 +8,9 @@ Each week the deck is rebuilt from a template using:
   and the 봉헌 offering-hymn 찬송가 number/title/verses),
 - **worship-band lead sheets** (images shared via Kakao) — often a multi-song medley with
   red arrangement marks (section order, ×N repeats, X-out skips, → segues); only the
-  **lyrics** are transcribed (a free local OCR + LLM hybrid), since the band runs the
-  arrangement live from the sheets,
+  **lyrics** are needed, since the band runs the arrangement live from the sheets. Each
+  sheet's title is detected from the OCR and canonical lyrics are fetched from
+  gasazip.com, falling back to a free local OCR + LLM hybrid when no confident match,
 - **성가대 choir lyrics** as raw text (pasted into the review app),
 - **봉헌 (offering) hymn slides** downloaded online as a 찬송가 PowerPoint per song,
 - occasional **last-minute text updates**.
@@ -39,7 +40,7 @@ flowchart TD
         bulletin["bulletin.pdf"] --> parse["parse/bulletin.py"]
         parse --> parsed["worship order, announcements,<br/>refs, title, 봉헌 hymn (찬 no./title/verses)"]
 
-        sheets["band lead sheets"] --> transcribe["lyrics/transcribe.py<br/>(Apple Vision OCR + local Ollama)"]
+        sheets["band lead sheets"] --> transcribe["lyrics/transcribe.py<br/>(Vision OCR → title → gasazip lookup;<br/>fallback: local Ollama reassembly)"]
         transcribe --> lyrics["lyric lines"]
 
         choir["choir lyrics (raw text)"] --> choirp["strip title/composer<br/>→ chunk into ≤2-line slides"]
@@ -119,7 +120,8 @@ dispatch test pins the anchors) and do an eyeball build to confirm.
 - **Keynote** installed, with Terminal/automation permission granted to control it.
 - **Xcode Command Line Tools** — `xcode-select --install`. Provides `swift`, used for the
   Apple Vision OCR step (`src/worship_deck/lyrics/ocr_ko.swift`).
-- **Ollama** running locally, for lyric reassembly (free, offline — no API key):
+- **Ollama** running locally, for the lyric-reassembly fallback when a sheet's song
+  isn't matched on gasazip.com (free, offline — no API key):
 
   ```bash
   brew install ollama
@@ -148,8 +150,9 @@ Fill in `.env` (git-ignored):
 | `WEB_HOST` / `WEB_PORT` | Mobile review/trigger web app bind address (defaults `127.0.0.1:8787`). |
 | `NTFY_TOPIC` | *(optional)* [ntfy.sh](https://ntfy.sh/) topic for phone push on failure — leave blank to disable. |
 
-No Anthropic/cloud key is needed — lyric transcription is fully local. 봉헌 (offering) hymn
-slides are downloaded online per song, so there is no local hymn directory to configure.
+No Anthropic/cloud key is needed — worship-song lyrics are fetched from gasazip.com (no
+key, no account) or transcribed fully locally on fallback. 봉헌 (offering) hymn slides are
+downloaded online per song, so there is no local hymn directory to configure.
 
 ## Privacy
 
