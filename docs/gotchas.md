@@ -22,6 +22,17 @@ Drive Keynote via `osascript <file.applescript>`, mirroring `lyrics/transcribe.p
 
 Lyric transcription is a **free local hybrid** (no API key): Apple Vision OCR via `swift src/worship_deck/lyrics/ocr_ko.swift <img>` (needs Xcode Command Line Tools; groups observations by baseline into whole lines) → a local Ollama model reassembles syllables into lyric lines. Set up: `brew install ollama && ollama serve && ollama pull qwen3.5:27b`. Env: `OLLAMA_MODEL` (default `qwen3.5:27b`), `OLLAMA_HOST` (default `http://127.0.0.1:11434`). Model bake-off on real sheets: `qwen3.5:27b` won (best recall/cleanest); `exaone3.5:7.8b` is a strong lighter pick; `qwen2.5vl:7b` was worst (truncates dense sheets). Reassembly is model-agnostic and sends `think: false` (qwen3.5 is a thinking model; output falls back to the `thinking` field). Feeding the image directly to the Ollama *vision* model crashed its runner on a real sheet — running reassembly as a **text** task on the Vision OCR output is why it's reliable.
 
+### Online canonical lyrics (gasazip.com, #110)
+
+Since #110 the Ollama path is the **fallback**: `transcribe()` first detects the sheet's title (tallest mostly-Hangul OCR line near the top — `ocr_ko.swift` prints `height<TAB>text` for this) and looks up canonical lyrics on gasazip.com (`lyrics/online.py`). Gotchas:
+
+- The bulletin names the **band**, not the songs (e.g. 마라나타) — the sheet title is the only song identity. Don't build anything on "bulletin title → lyrics" for the 찬양 medley.
+- gasazip needs a **browser User-Agent** (like bibletoppt). godpeople returns 403 to scrapers; CCLI's API is ~$1000/yr + NDA — both rejected during the #110 spike.
+- Titles are ambiguous (59 songs named "마라나타"), so `lookup()` fetches the top 5 candidates and ranks by **Hangul-bigram containment** against the OCR fragments (threshold 0.5). Wrong-song false positives score near 0; the right song near 1.0 even with note-split syllables, because normalization strips everything but Hangul.
+- Handwritten arrangement marks can OCR *taller* than the printed title and may contain Hangul ("드럼만 - ((83)"); the ≥50%-Hangul ratio filter rejects them. Continuation pages (no printed title — their tallest Hangul is a lyric line) are rejected by the 16-Hangul-char cap → no title → straight to the Ollama fallback. Misses fail safe: every network/parse/match failure returns `None` and the local path runs.
+- Some song pages embed a "제목 - 가수" header as the first lyric line — stripped only when both title and artist appear in it (a bare title-only first line can be a real lyric).
+- 2026-06-07 sheet eval: 3/5 pages matched canonical lyrics exactly (보좌 앞으로, 죄에서 자유를 얻게 함은, 세상 모든 민족이); 2/5 were continuation pages that fell back, with zero false positives.
+
 ## 봉헌 hymn slide conversion
 
 봉헌 hymn slide conversion (`hymn.pptx_to_pngs`) shells out to two **system** binaries (no pip deps): LibreOffice `soffice` (pptx → pdf) and poppler `pdftoppm` (pdf → png). Set up: `brew install --cask libreoffice && brew install poppler`. Gated behind `local_only` + `shutil.which` skips, so CI never needs them. bibletoppt requires a browser `User-Agent` (header-less → HTTP 403); the token is a ~5-min JWT, so request it immediately before the file GET.

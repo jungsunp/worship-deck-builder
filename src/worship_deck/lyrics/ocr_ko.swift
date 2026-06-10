@@ -3,10 +3,13 @@
 // Run (no compile step needed; requires Xcode Command Line Tools):
 //     swift ocr_ko.swift <image>
 //
-// Prints recognized text lines top-to-bottom, left-to-right (one observation per line).
-// Vision has high recall on Korean even over busy musical notation and never crashes on
-// large images — unlike a local vision LLM. Line *reassembly* is done downstream by the
-// text model in transcribe.py; this stage just extracts the raw text faithfully.
+// Prints recognized text lines top-to-bottom, left-to-right, one physical line per output
+// line as "height<TAB>text" — height is the tallest observation in the line as a fraction
+// of image height, so downstream can pick the page title (tallest Hangul line near the
+// top) deterministically. Vision has high recall on Korean even over busy musical
+// notation and never crashes on large images — unlike a local vision LLM. Line
+// *reassembly* is done downstream by the text model in transcribe.py; this stage just
+// extracts the raw text faithfully.
 
 import Foundation
 import Vision
@@ -34,10 +37,11 @@ try handler.perform([request])
 // Vision splits each note's syllable group into its own observation. Group observations
 // that share a baseline back into one physical line (sorted left-to-right), so downstream
 // gets whole lyric lines ("내 주 를 가까이 더욱 가까이") instead of scattered fragments.
-struct Box { let text: String; let midY: Double; let minX: Double }
+struct Box { let text: String; let midY: Double; let minX: Double; let height: Double }
 let boxes = (request.results ?? []).compactMap { o -> Box? in
     guard let t = o.topCandidates(1).first else { return nil }
-    return Box(text: t.string, midY: Double(o.boundingBox.midY), minX: Double(o.boundingBox.minX))
+    return Box(text: t.string, midY: Double(o.boundingBox.midY), minX: Double(o.boundingBox.minX),
+               height: Double(o.boundingBox.height))
 }
 
 let lineTolerance = 0.012   // fraction of image height; same line if midY within this
@@ -50,5 +54,7 @@ for b in boxes.sorted(by: { $0.midY > $1.midY }) {
     }
 }
 for line in lines {
-    print(line.sorted { $0.minX < $1.minX }.map { $0.text }.joined(separator: " "))
+    let height = line.map { $0.height }.max() ?? 0
+    let text = line.sorted { $0.minX < $1.minX }.map { $0.text }.joined(separator: " ")
+    print(String(format: "%.4f", height) + "\t" + text)
 }

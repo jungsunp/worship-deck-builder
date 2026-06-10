@@ -1,4 +1,4 @@
-"""Tests for worship_deck.lyrics.transcribe — Apple Vision + local Ollama hybrid."""
+"""Tests for worship_deck.lyrics.transcribe — title detection, online-first, fallback."""
 
 from __future__ import annotations
 
@@ -136,18 +136,96 @@ def test_reassemble_raises_when_ollama_unreachable(monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
-# transcribe — orchestration with both stages mocked
+# _detect_title — tallest Hangul line near the top, edge tokens trimmed
 # ---------------------------------------------------------------------------
 
-def test_transcribe_pipes_vision_through_filter_and_reassembly(
+def test_detect_title_real_sheet_shape() -> None:
+    # Shape of the real 보좌 앞으로 sheet: a taller handwritten mark with no Hangul,
+    # the title with a merged red "•all" mark, then watermark/credits and lyrics.
+    lines = [
+        (0.0634, 'vx3(aim) - VX3 (ky change "F")'),
+        (0.0474, "•all 보좌 앞으로"),
+        (0.0269, "blog.naver.com/x 주님의 보혈 의지하는 Words & Music by 민호기"),
+        (0.0318, "E B/D# C#m G#m/B"),
+        (0.0444, "V 주님의 보혈 . 의지하 는맘 .으로"),
+    ]
+    assert T._detect_title(lines) == "보좌 앞으로"
+
+
+def test_detect_title_skips_noise_and_handles_empty() -> None:
+    assert T._detect_title([]) == ""
+    assert T._detect_title([(0.05, "VX3 chords only")]) == ""
+    # Known Hangul noise (watermark phonetics) never becomes the title.
+    assert T._detect_title([(0.09, "아이자야씩스티원"), (0.04, "나는 예배하네")]) == "나는 예배하네"
+
+
+def test_detect_title_ignores_taller_handwritten_marks() -> None:
+    # Real sheet-2 shape: handwriting with some Hangul ("드럼만") out-talls the
+    # printed title but is mostly latin/digits — the ratio filter rejects it.
+    lines = [
+        (0.0380, "181-8182--82-Cnter.-v3-74-6x4 all"),
+        (0.0526, "드럼만 - ((83)"),
+        (0.0300, "죄에서 자유를 얻게 함은"),
+        (0.0237, "Hymn 268 • 천천히 L.E.Jones, 1889"),
+    ]
+    assert T._detect_title(lines) == "죄에서 자유를 얻게 함은"
+
+
+def test_detect_title_rejects_lyric_lines_on_continuation_pages() -> None:
+    # Continuation pages have no printed title; their tallest Hangul is a note-split
+    # lyric line, which the Hangul length cap rejects → "" → no online lookup.
+    lines = [
+        (0.0919, 'CX3-B-CXX-C (주의 보혈")'),
+        (0.0486, "포- 대를 향하여- 그리- 스도 예수안-에서- 부름 의상을-위하-여 달려가 - 노라-"),
+    ]
+    assert T._detect_title(lines) == ""
+
+
+# ---------------------------------------------------------------------------
+# transcribe — orchestration with all stages mocked
+# ---------------------------------------------------------------------------
+
+_OCR_LINES = [
+    (0.05, "내 주를 가까이"),  # tallest Hangul line → title
+    (0.02, "G"),
+    (0.03, "내 주 를"),
+    (0.03, "가까이"),
+    (0.02, "https://x"),
+]
+
+
+def test_transcribe_uses_online_match_when_confident(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worship_deck.lyrics import online
+
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
+    seen: dict = {}
+
+    def fake_lookup(title: str, fragments: list[str]) -> online.Candidate:
+        seen["title"], seen["fragments"] = title, fragments
+        return online.Candidate(
+            song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]
+        )
+
+    monkeypatch.setattr(online, "lookup", fake_lookup)
+    songs = transcribe("whatever.png")
+
+    assert songs == [Song(title="내 주를 가까이", lines=["내 주를 가까이 하게 함은"])]
+    assert seen["title"] == "내 주를 가까이"
+    # Lookup ranks against the filtered Hangul fragments only.
+    assert "https://x" not in seen["fragments"] and "G" not in seen["fragments"]
+
+
+def test_transcribe_falls_back_to_reassembly_with_detected_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import httpx
 
-    # Stage 1 (Vision) returns raw fragments incl. noise that the filter must drop.
-    monkeypatch.setattr(
-        T, "_vision_ocr", lambda p: ["G", "내 주 를", "가까이", "https://x"]
-    )
+    from worship_deck.lyrics import online
+
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: None)  # no online match
     seen: dict = {}
 
     def fake_post(url: str, **kw: object) -> _FakeResponse:
@@ -163,6 +241,8 @@ def test_transcribe_pipes_vision_through_filter_and_reassembly(
     # Only the Hangul fragments reach the model — chords/URLs filtered out.
     assert "내 주 를" in seen["prompt"] and "가까이" in seen["prompt"]
     assert "https://x" not in seen["prompt"] and "\nG\n" not in seen["prompt"]
+    # The deterministically detected title is handed to the model, not guessed.
+    assert '곡 제목은 "내 주를 가까이"' in seen["prompt"]
 
 
 # ---------------------------------------------------------------------------
