@@ -33,6 +33,7 @@ from worship_deck.hymn import fetch_hymn_slides  # noqa: E402
 from worship_deck.keynote.build import (  # noqa: E402
     fill_announcement_slides,
     fill_choir_slides,
+    fill_confession_slides,
     fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
@@ -156,6 +157,13 @@ def main() -> None:
     cp.add_argument("--at", type=int, default=77, help="first title-slide index (default: 77)")
     cp.add_argument("--text-file", help="raw pasted choir text (title + composer + lyric lines)")
 
+    fp = sub.add_parser(
+        "confession", parents=[common], help="fill 고백의 찬양 divider + banner + lyric block"
+    )
+    fp.add_argument("--at", type=int, default=57, help="divider-slide index (default: 57)")
+    fp.add_argument("--title", help="song title (default: sample)")
+    fp.add_argument("--line", action="append", dest="lines", help="a lyric line; repeatable")
+
     hp = sub.add_parser("hymn", parents=[common], help="fill 봉헌 hymn image block (downloaded PNGs)")
     hp.add_argument("--at", type=int, default=97, help="봉헌 section anchor; the hymn-page block is "
                     "auto-detected at/after it (default: 97)")
@@ -199,6 +207,19 @@ def main() -> None:
         n = fill_choir_slides(out, args.at, song, existing_lyric_count=17)
         first, last = args.at, args.at + n - 1
         print(f"Filled choir: {n} slides (2 title + {n - 2} lyric) — '{song.title}' / {song.composer}.")
+    elif args.section == "confession":
+        song = Song(
+            title=args.title or SAMPLE_SONG.title,
+            lines=args.lines or list(SAMPLE_SONG.lines),
+        )
+        # The 고백의 찬양 lyric block is a fixed 8 slides (60–67) in master.key — hardcoded for
+        # the same shared-`--existing` argparse-parents gotcha as choir above.
+        n = fill_confession_slides(out, args.at, song, existing_lyric_count=8)
+        first, last = args.at, args.at + n - 1
+        print(
+            f"Filled 고백의 찬양: {n} slides (divider + blank + banner + {n - 4} lyric + blank) "
+            f"— '{song.title}'."
+        )
     elif args.section == "announce":
         items = args.items or announcement_blocks(args.bulletin)
         n = fill_announcement_slides(out, args.at, items, existing_count=args.existing)

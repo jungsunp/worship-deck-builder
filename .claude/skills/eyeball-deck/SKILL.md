@@ -20,6 +20,7 @@ python .claude/skills/eyeball-deck/build_eyeball.py song            # sample wor
 python .claude/skills/eyeball-deck/build_eyeball.py verse           # sample 예배의 부름 verses
 python .claude/skills/eyeball-deck/build_eyeball.py announce        # 교회소식 from the sample bulletin
 python .claude/skills/eyeball-deck/build_eyeball.py hymn            # 봉헌 hymn 220 downloaded online
+python .claude/skills/eyeball-deck/build_eyeball.py confession      # 고백의 찬양 with a sample song
 ```
 
 Customize content / placement:
@@ -55,6 +56,9 @@ The script prints the slide range to review and opens the deck.
   Other songs in the sample template start at 19 and 37.
 - **Verses** — 예배의 부름: slide **48** (`--existing 1`); 말씀 (sermon): slides **129–132**
   (`--at 129 --existing 4`).
+- **고백의 찬양** — divider **57** ("고백의 찬양" heading + bracketed title), blank 58, title
+  banner 59, lyric slides 60–67, trailing blank 68 (`--at 57`; the 8-slide lyric block is
+  hardcoded like choir's).
 - **Announcements (교회소식)** — item slides **117–121** (`--at 117`, default `--existing 5`); each
   is one item, parsed from the bulletin (`announcement_blocks`: numbered title + reflowed detail).
   Slides 113–116 are section-title/motto headers (not touched); slide 122 is blank.

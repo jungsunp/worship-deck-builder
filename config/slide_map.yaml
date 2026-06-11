@@ -43,10 +43,15 @@ sections:
     render: native_text
 
   confession_song:          # 고백의 찬양
-    slides: []
-    automate: false
-    note: "title changes weekly (bulletin row); lyrics transcribed from the uploaded
-      sheet image at assemble (#109) — slide fill not yet automated"
+    slides:
+      divider: 57           # "고백의 찬양" heading + "[ <title> ]" (one box, 2 paragraphs)
+      title: 59             # lower-third title banner; 58/68 are blank-green separators
+      lyrics: [60, 67]      # <= 2-line lyric slides; expands per song
+    structure: "divider + blank + title banner + N lyric slides (<= 2 lines each) + blank"
+    title_source: confession_sheet_image   # title changes weekly; bulletin names the section only
+    lyrics_source: confession_sheet_image  # single sheet uploaded in its home-page slot (#109),
+    # transcribed at assemble (gasazip lookup, OCR+Ollama fallback) into ServiceData.confession_song
+    render: native_text
 
   choir_song:               # 찬양 (성가대)
     slides:

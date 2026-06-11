@@ -28,6 +28,9 @@ _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescr
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
 _SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
+_SET_CONFESSION_TITLE = (
+    Path(__file__).parent / "applescript" / "set_confession_title.applescript"
+)
 _SET_SERMON_TITLE = Path(__file__).parent / "applescript" / "set_sermon_title.applescript"
 _SET_OFFERING_HYMN_TITLE = (
     Path(__file__).parent / "applescript" / "set_offering_hymn_title.applescript"
@@ -632,6 +635,50 @@ def fill_choir_slides(
     return title_count + target
 
 
+def set_confession_title(key_path: str, slide_index: int, title: str) -> str:
+    """Set the 고백의 찬양 divider slide's bracketed song title, in place (#109).
+
+    The divider is ONE on-canvas box of 2 paragraphs in master.key — a static "고백의 찬양"
+    heading, then the bracketed song title — so it keeps paragraph 1 and writes the title into
+    paragraph 2 (paragraph font preserved), mirroring set_offering_hymn_title. The title line is
+    formatted here to match the template's existing style: "[ <title> ]". Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_CONFESSION_TITLE, key, str(slide_index), f"[ {title} ]").strip()
+
+
+def fill_confession_slides(
+    key_path: str,
+    divider_index: int,
+    song: Song,
+    *,
+    existing_lyric_count: int = 8,
+) -> int:
+    """Fill the 고백의 찬양 section: divider title + title banner + lyric slides (#109).
+
+    The section in master.key is divider (heading + bracketed title), blank-green separator,
+    lower-third title banner, `existing_lyric_count` ≤2-line lyric slides, trailing blank — the
+    banner + lyric block is exactly a worship-song unit, so after setting the divider's bracketed
+    title this delegates to `fill_song_slides` at divider_index + 2 (the banner), which chunks
+    the lyrics and resizes the lyric block. The blanks are left as-is. Returns the section's
+    resulting slide count (divider + blank + banner + N lyrics + trailing blank).
+
+    Note: resizing shifts the indices of all later slides by (chunks - existing_lyric_count); a
+    caller filling later sections must fill them first, or offset later indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    set_confession_title(key_path, divider_index, song.title)
+    used = fill_song_slides(
+        key_path, divider_index + 2, song, existing_lyric_count=existing_lyric_count
+    )
+    return 3 + used  # divider + leading blank + (banner + lyrics) + trailing blank
+
+
 # A worship-song unit in the template: 3 slides — a blank-green separator, a title slide,
 # and one lyric slide — at start_index, +1, +2. fill_song_slides expands the lyric slide.
 _WORSHIP_UNIT = 3
@@ -811,7 +858,7 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # of this week's data. Re-verify the 135/18 anchor whenever master.key is replaced (#98).
     delete_slides(out_key, 135, 18)
 
-    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 말씀 ref recap (127) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 예배의 부름 (48/47) -> 찬양 medley (6)
+    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 말씀 ref recap (127) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 고백의 찬양 (57) -> 예배의 부름 (48/47) -> 찬양 medley (6)
     # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse
     # fill resizes/shifts it (#90). Same title/ref the date slides carry.
     if data.sermon_title:
@@ -848,6 +895,12 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
 
     if data.choir_song:
         fill_choir_slides(out_key, 77, Song(**data.choir_song))
+
+    # 고백의 찬양 (57–68): divider (57) + blank + title banner (59) + ≤2-line lyric slides
+    # (60–67) + trailing blank. Absent confession_song (no sheet uploaded / transcription
+    # failed) keeps the template's slides for the operator to fix manually (#109).
+    if data.confession_song:
+        fill_confession_slides(out_key, 57, Song(**data.confession_song))
 
     # 예배의 부름: the ref-display slide (47) carries the bare Korean + bracketed English citation
     # boxes; the verse-body slide (48) holds the passage text. They are distinct — 47 must be

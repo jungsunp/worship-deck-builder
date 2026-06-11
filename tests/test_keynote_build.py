@@ -19,6 +19,7 @@ from worship_deck.keynote.build import (
     duplicate_slide,
     fill_announcement_slides,
     fill_choir_slides,
+    fill_confession_slides,
     fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
@@ -32,6 +33,7 @@ from worship_deck.keynote.build import (
     set_announcement_slide,
     set_call_to_worship_ref,
     set_choir_title,
+    set_confession_title,
     set_date_slides,
     set_offering_hymn_title_slide,
     set_sermon_ref_slide,
@@ -616,6 +618,56 @@ def test_fill_choir_slides_trims_when_template_has_surplus(
 
 
 # ---------------------------------------------------------------------------
+# set_confession_title / fill_confession_slides — mocked (CI-safe, no Mac)
+# ---------------------------------------------------------------------------
+
+
+def test_set_confession_title_passes_bracketed_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = set_confession_title("draft.key", 57, "주만 바라볼찌라")
+
+    assert result == "ok"
+    # the title line is formatted here to match the template's "[ <title> ]" style
+    assert captured["cmd"] == [
+        "osascript",
+        str(B._SET_CONFESSION_TITLE),
+        "draft.key",
+        "57",
+        "[ 주만 바라볼찌라 ]",
+    ]
+
+
+def test_fill_confession_slides_sets_divider_and_delegates(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: dict = {"title": [], "fill": []}
+    monkeypatch.setattr(
+        B, "set_confession_title", lambda k, i, t: calls["title"].append((i, t))
+    )
+
+    def fake_fill(k: str, idx: int, song: Song, existing_lyric_count: int = 1) -> int:
+        calls["fill"].append((idx, song.title, existing_lyric_count))
+        return 1 + len(chunk(song.lines))  # 1 banner + L lyric slides
+
+    monkeypatch.setattr(B, "fill_song_slides", fake_fill)
+    song = Song(title="주만 바라볼찌라", lines=["1", "2", "3"])  # 3 lines -> 2 chunks
+
+    n = fill_confession_slides("k", 57, song)
+
+    assert calls["title"] == [(57, "주만 바라볼찌라")]  # divider gets the bare title (bracketed inside)
+    # banner at divider+2 (58 is the blank separator); the template lyric block is 8 slides
+    assert calls["fill"] == [(59, "주만 바라볼찌라", 8)]
+    assert n == 6  # divider + blank + banner + 2 lyric chunks + trailing blank
+
+
+# ---------------------------------------------------------------------------
 # fill_worship_songs — mocked primitives (CI-safe, no Mac)
 # ---------------------------------------------------------------------------
 
@@ -1063,6 +1115,32 @@ def test_fill_choir_slides_live_fills_titles_composer_and_lyrics(
 
 
 @pytest.mark.local_only
+def test_fill_confession_slides_live_fills_divider_banner_and_lyrics(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """The 고백의 찬양 block is divider (57) + blank + title banner (59) + 8 lyric slides (60-67)
+    + trailing blank (68). Filling a 3-line song (2 chunks) must keep slide 57's static
+    '고백의 찬양' heading, set its bracketed title, set the banner, fill 2 lyric slides, and trim
+    the 6 surplus so the trailing blank (now slide 62) carries no leftover lyrics."""
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+
+    song = Song(title="테스트 고백", lines=["첫째 줄", "둘째 줄", "셋째 줄"])
+
+    n = fill_confession_slides(str(draft), 57, song, existing_lyric_count=8)
+    assert n == 6  # divider + blank + banner + 2 lyric chunks + trailing blank
+
+    s57 = _on_canvas_text(str(draft), 57)
+    assert "고백의 찬양" in s57 and "[ 테스트 고백 ]" in s57  # heading kept, bracketed title set
+    assert "테스트 고백" in _on_canvas_text(str(draft), 59)  # lower-third title banner
+    s60 = _on_canvas_text(str(draft), 60)
+    assert "첫째 줄" in s60 and "둘째 줄" in s60
+    assert "셋째 줄" in _on_canvas_text(str(draft), 61)
+    # the trailing blank right after the resized lyric block holds no leftover lyrics
+    assert "줄" not in _on_canvas_text(str(draft), 62)
+
+
+@pytest.mark.local_only
 def test_fill_announcement_slides_live_resizes_no_leftover(
     real_template_key: Path, tmp_path: Path
 ) -> None:
@@ -1251,6 +1329,7 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         "set_offering_hymn_title_slide",
         "fill_hymn_slides",
         "fill_choir_slides",
+        "fill_confession_slides",
         "set_call_to_worship_ref",
         "fill_worship_songs",
         "finalize_draft",
@@ -1269,6 +1348,7 @@ def _full_run() -> ServiceData:
         date="2026년 6월 7일",
         worship_songs=[{"title": "주 은혜임을", "lines": ["한 줄", "두 줄"], "composer": "작곡"}],
         choir_song={"title": "사랑은", "lines": ["사랑은", "오래참고"], "composer": "(윤학준 곡)"},
+        confession_song={"title": "주만 바라볼찌라", "lines": ["하나님의 사랑을"], "composer": ""},
         call_to_worship_passage=[{"number": 1, "korean": "보라 형제가", "english": "Behold"}],
         call_to_worship_ref="시 133:1-3",
         sermon_passage=[{"number": 1, "korean": "구름 같이", "english": "cloud"}],
@@ -1302,6 +1382,7 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
         "set_offering_hymn_title_slide",  # 봉헌 title @97 (count-neutral)
         "fill_hymn_slides",        # 봉헌 images @97
         "fill_choir_slides",       # 성가대 @77
+        "fill_confession_slides",  # 고백의 찬양 @57 (#109)
         "set_call_to_worship_ref",  # 예배의 부름 ref slide @47 (count-neutral, #107)
         "fill_verse_slides",       # 예배의 부름 @48
         "fill_worship_songs",      # 찬양 medley @6
@@ -1346,6 +1427,13 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
         "out.key",
         77,
         Song(title="사랑은", lines=["사랑은", "오래참고"], composer="(윤학준 곡)"),
+    )
+
+    confession = by_name["fill_confession_slides"]
+    assert confession[1] == (
+        "out.key",
+        57,
+        Song(title="주만 바라볼찌라", lines=["하나님의 사랑을"], composer=""),
     )
 
     medley = by_name["fill_worship_songs"]
