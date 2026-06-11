@@ -216,6 +216,49 @@ def test_chunk_verses_giant_verse_stands_alone() -> None:
     assert [len(c) for c in chunks] == [1, 1]
 
 
+def test_chunk_verses_matches_ideal_slide_46() -> None:
+    # Calibration anchor (#115): the operator-approved 2026-06-07 deck shows exactly these two
+    # verses on one 예배의 부름 slide (slide 46) at the target fonts — the ideal density. The
+    # model must reproduce that packing, and must spill once a third comparable verse is added.
+    verses = [
+        Verse(
+            19,
+            "지금부터는 아버지의 아들이라 일컬음을 감당치 못하겠나이다 나를 품꾼의 하나로 보소서 하리라 하고",
+            "I am no longer worthy to be called your son. Treat me as one of your hired servants.",
+        ),
+        Verse(
+            20,
+            "이에 일어나서 아버지께 돌아 가니라 아직도 상거가 먼데 아버지가 저를 보고 측은히 여겨 달려가 목을 안고 입을 맞추니",
+            "And he arose and came to his father. But while he was still a long way off, his "
+            "father saw him and felt compassion, and ran and embraced him and kissed him.",
+        ),
+    ]
+    assert len(_chunk_verses(verses, ko_box=_CTW_KO_BOX, en_box=_CTW_EN_BOX)) == 1
+    assert len(_chunk_verses(verses + verses[:1], ko_box=_CTW_KO_BOX, en_box=_CTW_EN_BOX)) == 2
+
+
+def test_fit_font_returns_target_for_fitting_chunk() -> None:
+    assert B._fit_font(
+        ["1. 짧은절"], _CTW_KO_BOX, B._CHAR_W_KO, B._LINE_H_KO, B._TARGET_FONT_KO, B._MIN_FONT_KO
+    ) == B._TARGET_FONT_KO
+
+
+def test_fit_font_shrinks_lone_giant_verse_to_fit() -> None:
+    font = B._fit_font(
+        ["1. " + "긴" * 160], _CTW_KO_BOX, B._CHAR_W_KO, B._LINE_H_KO,
+        B._TARGET_FONT_KO, B._MIN_FONT_KO,
+    )
+    assert B._MIN_FONT_KO <= font < B._TARGET_FONT_KO
+
+
+def test_fit_font_never_goes_below_floor() -> None:
+    font = B._fit_font(
+        ["1. " + "긴" * 2000], _CTW_KO_BOX, B._CHAR_W_KO, B._LINE_H_KO,
+        B._TARGET_FONT_KO, B._MIN_FONT_KO,
+    )
+    assert font == B._MIN_FONT_KO
+
+
 # ---------------------------------------------------------------------------
 # set_verse_slide — mocked osascript (CI-safe, no Mac)
 # ---------------------------------------------------------------------------
@@ -244,6 +287,8 @@ def test_set_verse_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
         "1. 가",
         "[Psalms 133:1-3, ESV]",
         "1. a",
+        str(B._TARGET_FONT_KO),  # explicit font (#115): consistent density across sections
+        str(B._TARGET_FONT_EN),
     ]
 
 
@@ -1003,6 +1048,25 @@ def test_fill_verse_slides_live_fills_call_to_worship(
     assert "1. 형제가 연합하여 동거함이" in text
     assert "1. Behold, how good and pleasant it is" in text
     assert "감사함으로 여호와께" not in text  # off-canvas {0,0} junk stays off-canvas
+
+    # #115: the body font is set explicitly to the target so density matches across sections.
+    script = (
+        'tell application "Keynote"\n'
+        "  set s to slide 48 of front document\n"
+        "  repeat with i from 1 to (count of text items of s)\n"
+        "    set t to text item i of s\n"
+        "    set p to position of t\n"
+        "    if (item 1 of p) is not 0 or (item 2 of p) is not 0 then\n"
+        '      set txt to (object text of t) as text\n'
+        '      if txt starts with "1. 형제가" then return (size of object text of t) as text\n'
+        "    end if\n"
+        "  end repeat\n"
+        "end tell\n"
+    )
+    size = subprocess.run(
+        ["osascript", "-e", script], capture_output=True, text=True, timeout=120
+    ).stdout.strip()
+    assert size == f"{B._TARGET_FONT_KO}.0"
 
 
 @pytest.mark.local_only

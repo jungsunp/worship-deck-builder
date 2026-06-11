@@ -5,6 +5,8 @@ on run argv
     set krText to item 4 of argv
     set enLabel to item 5 of argv
     set enText to item 6 of argv
+    set krFont to (item 7 of argv) as number
+    set enFont to (item 8 of argv) as number
     tell application "Keynote"
         set d to front document
         set s to slide slideIndex of d
@@ -44,6 +46,11 @@ on run argv
         set object text of krBody to krText
         set object text of enLabelItem to enLabel
         set object text of enBody to enText
+        -- Size AFTER object text: setting whole object text re-applies the box's base font
+        -- (#115). An explicit size makes density consistent across sections regardless of
+        -- what nominal font each template box carries (sermon boxes carried 120/76).
+        set size of object text of krBody to krFont
+        set size of object text of enBody to enFont
     end tell
     return "ok"
 end run

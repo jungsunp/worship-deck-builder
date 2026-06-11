@@ -41,14 +41,27 @@ _READ_TITLE_BOX = Path(__file__).parent / "applescript" / "read_title_box.apples
 _SET_CTW_REF = Path(__file__).parent / "applescript" / "set_ctw_ref.applescript"
 _SET_SERMON_REF = Path(__file__).parent / "applescript" / "set_sermon_ref.applescript"
 
-# --- verse-slide layout model (calibrated against master.key renders) ---------------------
-# Keynote exposes no autoshrink/effective-size info via AppleScript, so we estimate how much
-# text fits a verse box at a readable font and paginate to keep text from shrinking below it.
-_LINE_H = 1.2        # line height as a multiple of font size
-_CHAR_W_KO = 1.0     # avg glyph advance / font size — full-width Hangul
-_CHAR_W_EN = 0.5     # avg glyph advance / font size — proportional Latin
-_MIN_FONT_KO = 60    # readability floor (pt); calibrated so pagination matches master.key's
-_MIN_FONT_EN = 44    # slide counts (시 133:1-3 → 1 slide, 눅 22:14-24 → 4) at master's effective sizes
+# --- verse-slide layout model (#115: calibrated to the ideal 예배의 부름 slide) --------------
+# Verse body boxes are FIXED-height shrink-on-overflow boxes (height never changes when text
+# is set — verified on a master.key scratch copy), and Keynote exposes no effective (shrunk)
+# size via AppleScript. So we estimate wrapped lines, paginate to fill each box at the target
+# font, and SET that font explicitly (set_verse_slide) — every verse section then renders at
+# the same density. Before #115 the sermon boxes' nominal 120/76pt made long passages
+# autoshrink tiny while short ones sprawled. Overflow from estimation error only autoshrinks
+# slightly inside the box; the fixed bounds keep text clear of the labels below (no clutter).
+# Calibration: slide 46 of the operator-approved 2026-06-07 final deck (눅 15:19-20: KO 84pt
+# = 6 wrapped lines filling the 544pt box; EN 59pt = 5 lines in 298pt) and master.key slide
+# 48 (시 133:1-3: same 6/5-line fill at the same fonts). Constants below reproduce both.
+_LINE_H = 1.2        # title-model line height (see _fit_title); verses use the pair below
+_LINE_H_KO = 1.07    # verse line height / font (544pt box ÷ 6 lines @84pt ⇒ ≤1.079)
+_LINE_H_EN = 1.00    # verse line height / font (298pt box ÷ 5 lines @59pt ⇒ ≤1.010)
+_CHAR_W_KO = 0.83    # avg glyph advance / font — Hangul 1.0 minus space/punct share
+                     # (matches _TITLE_CHAR_W_KO; 0.9 wrongly splits 시 133:1-3 onto 2 slides)
+_CHAR_W_EN = 0.44    # avg glyph advance / font — proportional Latin incl. spaces
+_TARGET_FONT_KO = 84  # ideal sizes from slide 46; chunking packs to these, set explicitly
+_TARGET_FONT_EN = 59
+_MIN_FONT_KO = 60    # readability floor (pt): a verse too long for its own slide at the
+_MIN_FONT_EN = 44    # target shrinks down to this, never further
 
 # --- sermon-title fit model (#106 follow-up) ----------------------------------------------
 # The standalone 말씀 title box auto-grows to its content (no word-wrap/autoshrink via
@@ -226,9 +239,9 @@ def _verse_lines(text: str, box_w: int, font: int, char_w: float) -> int:
     return max(1, math.ceil(len(text) / chars_per_line))
 
 
-def _fit_lines(box_h: int, font: int) -> int:
-    """How many lines of `font` pt fit in a box `box_h` tall."""
-    return max(1, int(box_h / (font * _LINE_H)))
+def _fit_lines(box_h: int, font: int, line_h: float) -> int:
+    """How many lines of `font` pt (at `line_h` × font per line) fit in a box `box_h` tall."""
+    return max(1, int(box_h / (font * line_h)))
 
 
 def _wrap_balanced(text: str, lines: int) -> list[str]:
@@ -282,27 +295,28 @@ def _chunk_verses(
     *,
     ko_box: tuple[int, int],
     en_box: tuple[int, int],
-    ko_min_font: int = _MIN_FONT_KO,
-    en_min_font: int = _MIN_FONT_EN,
+    ko_font: int = _TARGET_FONT_KO,
+    en_font: int = _TARGET_FONT_EN,
 ) -> list[list[Verse]]:
-    """Group consecutive verses so each slide's text stays readable in both languages.
+    """Group consecutive verses so each slide fills well at the target font (#115).
 
-    For each body box (width, height) and its readability floor, estimate how many wrapped
-    lines fit; a verse starts a new slide when adding it would exceed EITHER language's line
-    budget (verses don't share a line). A verse that overflows on its own still gets its own
-    slide. This trades extra slides for never shrinking below the floor — the user's intent.
+    For each body box (width, available height), estimate how many wrapped lines fit at the
+    target font; a verse starts a new slide when adding it would exceed EITHER language's
+    line budget (verses don't share a line). Short verses pack >2 per slide, long ones spread
+    out — consistent density everywhere. A verse that overflows on its own still gets its own
+    slide (its font then shrinks via _fit_font, never below the floor).
     """
     ko_w, ko_h = ko_box
     en_w, en_h = en_box
-    ko_budget = _fit_lines(ko_h, ko_min_font)
-    en_budget = _fit_lines(en_h, en_min_font)
+    ko_budget = _fit_lines(ko_h, ko_font, _LINE_H_KO)
+    en_budget = _fit_lines(en_h, en_font, _LINE_H_EN)
 
     chunks: list[list[Verse]] = []
     current: list[Verse] = []
     ko_used = en_used = 0
     for v in verses:
-        ko_need = _verse_lines(f"{v.number}. {v.korean}", ko_w, ko_min_font, _CHAR_W_KO)
-        en_need = _verse_lines(f"{v.number}. {v.english}", en_w, en_min_font, _CHAR_W_EN)
+        ko_need = _verse_lines(f"{v.number}. {v.korean}", ko_w, ko_font, _CHAR_W_KO)
+        en_need = _verse_lines(f"{v.number}. {v.english}", en_w, en_font, _CHAR_W_EN)
         if current and (ko_used + ko_need > ko_budget or en_used + en_need > en_budget):
             chunks.append(current)
             current, ko_used, en_used = [], 0, 0
@@ -312,6 +326,24 @@ def _chunk_verses(
     if current:
         chunks.append(current)
     return chunks
+
+
+def _fit_font(
+    texts: list[str], box: tuple[int, int], char_w: float, line_h: float, target: int, floor: int
+) -> int:
+    """Largest font ≤ target at which `texts` (one wrapped paragraph each) fit `box` (#115).
+
+    Normal chunks fit at the target by construction (_chunk_verses packs to it), so this
+    returns `target`; only a verse too long for its own slide steps down, stopping at `floor`
+    even if the estimate says it still overflows (matching the old never-below-floor intent —
+    the box's own autoshrink absorbs the remainder).
+    """
+    box_w, box_h = box
+    for font in range(target, floor, -1):
+        need = sum(_verse_lines(t, box_w, font, char_w) for t in texts)
+        if need <= _fit_lines(box_h, font, line_h):
+            return font
+    return floor
 
 
 def read_verse_boxes(key_path: str, slide_index: int) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -361,20 +393,24 @@ def set_verse_slide(
     kr_text: str,
     en_label: str,
     en_text: str,
+    kr_font: int = _TARGET_FONT_KO,
+    en_font: int = _TARGET_FONT_EN,
 ) -> str:
     """Set the four on-canvas text items on one verse slide (#14), in place.
 
     A verse slide carries a 개역한글 label + body and an ESV label + body; off-canvas leftover
     items are ignored. Items are classified by content (개역한글/ESV) and y-position (Korean
     above English), never by index, since the order varies across slides. Bodies are
-    newline-joined verse text. Returns "ok".
+    newline-joined verse text set at an explicit font size (#115) so every verse section
+    renders at the same density regardless of the template box's nominal font. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
     out = _run_osascript(
-        _SET_VERSE_SLIDE, key, str(slide_index), kr_label, kr_text, en_label, en_text
+        _SET_VERSE_SLIDE, key, str(slide_index), kr_label, kr_text, en_label, en_text,
+        str(kr_font), str(en_font),
     )
     return out.strip()
 
@@ -387,16 +423,17 @@ def fill_verse_slides(
     verses: list[Verse],
     *,
     existing_count: int = 1,
-    ko_min_font: int = _MIN_FONT_KO,
-    en_min_font: int = _MIN_FONT_EN,
+    ko_font: int = _TARGET_FONT_KO,
+    en_font: int = _TARGET_FONT_EN,
 ) -> int:
-    """Fill a verse section starting at start_index, paginating to stay readable (#14).
+    """Fill a verse section starting at start_index at a consistent density (#14, #115).
 
-    Reads the section's body-box geometry, chunks `verses` so neither language shrinks below
-    its readability floor (overflow spills to more slides), resizes the section from its
-    template `existing_count` slides to the chunk count (trimming surplus or duplicating the
-    first slide), then fills each. Every slide shows the same full-passage label (matching the
-    deck). Returns the number of slides used.
+    Reads the section's body-box geometry, chunks `verses` to fill each slide at the target
+    fonts (overflow spills to more slides), resizes the section from its template
+    `existing_count` slides to the chunk count (trimming surplus or duplicating the first
+    slide), then fills each, setting the font explicitly so every verse section in the
+    service renders alike. Every slide shows the same full-passage label (matching the deck).
+    Returns the number of slides used.
 
     Note: resizing shifts the indices of all later slides by (slides_used - existing_count); a
     caller filling multiple verse sections should fill the later section first, or offset
@@ -406,18 +443,21 @@ def fill_verse_slides(
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
     """
     ko_box, en_box = read_verse_boxes(key_path, start_index)
-    chunks = _chunk_verses(
-        verses, ko_box=ko_box, en_box=en_box, ko_min_font=ko_min_font, en_min_font=en_min_font
-    )
+    chunks = _chunk_verses(verses, ko_box=ko_box, en_box=en_box, ko_font=ko_font, en_font=en_font)
     target = len(chunks)
     if existing_count > target:
         delete_slides(key_path, start_index + target, existing_count - target)
     elif target > existing_count:
         duplicate_slide(key_path, start_index, target - existing_count)
     for i, vchunk in enumerate(chunks):
-        kr_text = "\n".join(f"{v.number}. {v.korean}" for v in vchunk)
-        en_text = "\n".join(f"{v.number}. {v.english}" for v in vchunk)
-        set_verse_slide(key_path, start_index + i, kr_label, kr_text, en_label, en_text)
+        kr_lines = [f"{v.number}. {v.korean}" for v in vchunk]
+        en_lines = [f"{v.number}. {v.english}" for v in vchunk]
+        set_verse_slide(
+            key_path, start_index + i, kr_label, "\n".join(kr_lines), en_label,
+            "\n".join(en_lines),
+            kr_font=_fit_font(kr_lines, ko_box, _CHAR_W_KO, _LINE_H_KO, ko_font, _MIN_FONT_KO),
+            en_font=_fit_font(en_lines, en_box, _CHAR_W_EN, _LINE_H_EN, en_font, _MIN_FONT_EN),
+        )
     return target
 
 
