@@ -76,6 +76,10 @@ class ServiceData:
     # Ordered PNG paths for every hymn slide (hymn.fetch_hymn_slides); the
     # operator drops unwanted verse slides in the review app (#25).
     offering_hymn_images: list[str] = field(default_factory=list)
+    # Extra sermon refs typed in review (#114); looked up to parallel Verse-dict lists on save
+    # (PUT /runs). Not in the bulletin — pure-human fields, preserved across re-assembles.
+    sermon_extra_refs: list[str] = field(default_factory=list)
+    sermon_extra_passages: list[list[dict]] = field(default_factory=list)
     # Names of parsed/transcribed fields the operator has hand-edited in review; a re-assemble
     # preserves these instead of overwriting them (#105). Set by PUT /runs.
     edited_fields: list[str] = field(default_factory=list)

@@ -455,6 +455,22 @@ def test_reassemble_preserves_edited_songs_refreshes_unedited(_assemble_env, mon
     assert saved.announcements == ["1. new notice"]  # unedited → refreshed
 
 
+def test_reassemble_preserves_extra_sermon_refs(_assemble_env, monkeypatch) -> None:
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    run = client.get(f"/runs/{date}").json()
+    run["sermon_extra_refs"] = ["요 3:16"]  # looked up via the _assemble_env verses mock
+    client.put(f"/runs/{date}", json=run)
+
+    body = client.post("/assemble").json()
+    assert "추가 말씀 구절 (요 3:16)" in body["kept"]
+    assert client.post("/assemble?confirm=1").status_code == 200
+
+    saved = store.load(date)
+    assert saved.sermon_extra_refs == ["요 3:16"]
+    assert saved.sermon_extra_passages == [[{"number": 1, "korean": "한글", "english": "english"}]]
+
+
 def test_reassemble_preserves_edited_announcements_refreshes_songs(_assemble_env, monkeypatch) -> None:
     monkeypatch.setattr(
         app_module.parse, "parse", lambda _p: replace(_fake_data(), announcements=["1. orig"])
@@ -575,6 +591,63 @@ def test_put_run_tracks_choir_and_confession_edits(_runs) -> None:
     run["confession_song"]["lines"] = ["b fixed"]
     client.put(f"/runs/{_runs}", json=run)
     assert store.load(_runs).edited_fields == ["choir_song", "confession_song"]
+
+
+def test_put_run_looks_up_changed_extra_refs(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+    calls: list[str] = []
+
+    def _fake_lookup(ref):
+        calls.append(ref)
+        return [Verse(number=16, korean="한글", english="english")]
+
+    monkeypatch.setattr(app_module.verses, "lookup_verses", _fake_lookup)
+    run = client.get(f"/runs/{_runs}").json()
+    # whitespace/empties normalized, incl. typed spaces around ':' and '-' in ranges
+    run["sermon_extra_refs"] = ["요 3:16", " 롬 8:1-4 ", "시 4: 15 - 20", ""]
+    body = client.put(f"/runs/{_runs}", json=run).json()
+    assert "warnings" not in body
+    assert calls == ["요 3:16", "롬 8:1-4", "시 4:15-20"]
+
+    saved = store.load(_runs)
+    assert saved.sermon_extra_refs == ["요 3:16", "롬 8:1-4", "시 4:15-20"]
+    assert saved.sermon_extra_passages == [
+        [{"number": 16, "korean": "한글", "english": "english"}],
+        [{"number": 16, "korean": "한글", "english": "english"}],
+        [{"number": 16, "korean": "한글", "english": "english"}],
+    ]
+    # pure-human field (like offering_hymn_verses) — not tracked as an edit
+    assert saved.edited_fields == []
+
+    # saving again with unchanged refs makes no lookup calls and keeps the passages
+    calls.clear()
+    client.put(f"/runs/{_runs}", json=client.get(f"/runs/{_runs}").json())
+    assert calls == []
+    assert store.load(_runs).sermon_extra_passages == saved.sermon_extra_passages
+
+
+def test_put_run_failed_extra_ref_warns_and_saves(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+
+    def _fake_lookup(ref):
+        if ref == "요 99:1":
+            raise ValueError("no such chapter")
+        return [Verse(number=1, korean="한글", english="english")]
+
+    monkeypatch.setattr(app_module.verses, "lookup_verses", _fake_lookup)
+    run = client.get(f"/runs/{_runs}").json()
+    run["sermon_extra_refs"] = ["요 99:1", "요 3:16"]
+    resp = client.put(f"/runs/{_runs}", json=run)
+    assert resp.status_code == 200
+    warnings = resp.json()["warnings"]
+    assert len(warnings) == 1 and "요 99:1" in warnings[0]
+
+    # the failed ref keeps its slot with an empty passage (build skips it); the rest saved
+    saved = store.load(_runs)
+    assert saved.sermon_extra_passages == [
+        [],
+        [{"number": 1, "korean": "한글", "english": "english"}],
+    ]
 
 
 def test_choir_paste_endpoint_removed(_runs) -> None:
