@@ -94,6 +94,7 @@ The anchors (1-based slide numbers), as called in `build()`:
 |---|---|---|
 | 찬양 worship medley | `fill_worship_songs(…, 6, 41, …)` | start slide 6, section length 41 |
 | 예배의 부름 verses | `fill_verse_slides(…, 48, …, existing_count=1)` | |
+| 고백의 찬양 | `fill_confession_slides(…, 57, …)` | divider 57; title banner 59 + lyrics 60–67 (`existing_lyric_count=8` in the fn defaults) |
 | 성가대 choir | `fill_choir_slides(…, 77, …)` | also `title_count=2`, `existing_lyric_count=17` in the fn defaults |
 | 봉헌 hymn images | `fill_hymn_slides(…, 97, …)` | start slide only; the block size is detected at runtime |
 | 교회소식 announcements | `fill_announcement_slides(…, 117, …, existing_count=5)` | |
