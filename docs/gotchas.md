@@ -34,6 +34,10 @@ Since #110 the Ollama path is the **fallback**: `transcribe()` first detects the
 - Some song pages embed a "제목 - 가수" header as the first lyric line — stripped only when both title and artist appear in it (a bare title-only first line can be a real lyric).
 - 2026-06-07 sheet eval: 3/5 pages matched canonical lyrics exactly (보좌 앞으로, 죄에서 자유를 얻게 함은, 세상 모든 민족이); 2/5 were continuation pages that fell back, with zero false positives.
 
+### Phrase-aware line breaking (#126)
+
+`lyrics/linebreak.rebreak()` runs inside `transcribe()` on both paths: collapses adjacent repeated phrases to `… X N` (rule-based), then splits lines longer than `MAX_CHARS` (22 — measured lyric-banner geometry, see the module docstring) at a musical-phrase boundary via Ollama, falling back to a greedy space-split on any failure, so Ollama is never a hard dependency of the gasazip path. **The split task uses its own model**: env `OLLAMA_SPLIT_MODEL` (recommended `qwen3:14b`), falling back to `OLLAMA_MODEL`. 2026-06-11 bake-off on the five 2026-06-07 defect lines: `qwen3:14b` 5/5 valid phrase splits; `qwen2.5:14b` and `exaone3.5:7.8b` only 2/5 — both re-segmented content *across* the batched input lines (caught by per-line character-preservation validation). But `qwen3:14b` must not become `OLLAMA_MODEL`: on reassembly it renumbers every line `1.`–`8.` and inserts the title as a lyric line, where `qwen2.5:14b` reproduces the staff lines cleanly.
+
 ## 봉헌 hymn slide conversion
 
 봉헌 hymn slide conversion (`hymn.pptx_to_pngs`) shells out to two **system** binaries (no pip deps): LibreOffice `soffice` (pptx → pdf) and poppler `pdftoppm` (pdf → png). Set up: `brew install --cask libreoffice && brew install poppler`. Gated behind `local_only` + `shutil.which` skips, so CI never needs them. bibletoppt requires a browser `User-Agent` (header-less → HTTP 403); the token is a ~5-min JWT, so request it immediately before the file GET.

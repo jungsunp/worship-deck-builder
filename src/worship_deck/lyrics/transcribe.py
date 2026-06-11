@@ -36,7 +36,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from worship_deck.lyrics import online
+from worship_deck.lyrics import linebreak, online
 
 # ── Data model ────────────────────────────────────────────────────────────────
 
@@ -248,7 +248,9 @@ def transcribe(image_path: str) -> list[Song]:
     lyrics lookup on gasazip ranked by the OCR fragments -> on a confident match, the
     canonical text wins (a sheet page holds one song, possibly printed twice for a key
     change). Otherwise falls back to local Ollama reassembly of the fragments, which
-    also handles the rare multi-song page.
+    also handles the rare multi-song page. Either way the lines are re-broken to fit
+    the lyric banner (repeat collapse + phrase-boundary splits, ``linebreak.rebreak``,
+    #126) before they reach review.
 
     Raises:
         RuntimeError: if `swift`/OCR fails, or the fallback is needed and Ollama is
@@ -260,8 +262,11 @@ def transcribe(image_path: str) -> list[Song]:
     if title:
         match = online.lookup(title, fragments)
         if match:
-            return [Song(title=match.title, lines=match.lines)]
-    return _reassemble(fragments, title=title)
+            return [Song(title=match.title, lines=linebreak.rebreak(match.lines))]
+    songs = _reassemble(fragments, title=title)
+    for song in songs:
+        song.lines = linebreak.rebreak(song.lines)
+    return songs
 
 
 def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:

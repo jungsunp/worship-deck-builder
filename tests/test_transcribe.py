@@ -217,6 +217,34 @@ def test_transcribe_uses_online_match_when_confident(
     assert "https://x" not in seen["fragments"] and "G" not in seen["fragments"]
 
 
+def test_transcribe_rebreaks_overlong_online_lines_without_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An over-long gasazip line is re-broken (#126) even with no Ollama running."""
+    import httpx
+
+    from worship_deck.lyrics import online
+
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
+    long_line = "이전에 있는 것은 모두 잊어버리고 앞에 계신 그리스도께로 달려가 노라"
+    monkeypatch.setattr(
+        online,
+        "lookup",
+        lambda *a, **kw: online.Candidate(
+            song_id="1", title="내 주를 가까이", artist="x", lines=[long_line]
+        ),
+    )
+
+    def fake_post(*a: object, **kw: object) -> None:
+        raise httpx.ConnectError("refused")
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    (song,) = transcribe("whatever.png")
+
+    assert len(song.lines) > 1  # split, not passed through
+    assert " ".join(song.lines) == long_line  # rule-based fallback, text preserved
+
+
 def test_transcribe_falls_back_to_reassembly_with_detected_title(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
