@@ -461,6 +461,33 @@ def fill_verse_slides(
     return target
 
 
+def fill_sermon_extra_slides(
+    key_path: str, refs: list[str], passages: list[list[dict]]
+) -> None:
+    """Insert the ad-hoc extra sermon passages after the sermon title slide (#114).
+
+    Each looked-up extra ref (reviewed in the web app) becomes its own labelled verse-slide
+    run in the region the build just emptied (the deleted 135–152 special block). Refs are
+    processed in REVERSE order: every iteration seeds a pristine copy of the sermon
+    verse-slide template (129, not yet filled at this point in `build()`) at the fixed 135
+    anchor, pushing previously inserted refs later — so the final deck order matches the
+    input order with no offset arithmetic. All insertions land at index ≥135, leaving the
+    later back-to-front fills (134, 129, 127, …) at their template anchors. An empty passage
+    (lookup failed at save) is skipped; the operator adds it manually.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    for ref, passage in reversed(list(zip(refs, passages))):
+        if not passage:
+            continue
+        duplicate_block(key_path, 129, 1, 134, 1)
+        kr_label, en_label = verse_labels(ref)
+        fill_verse_slides(
+            key_path, 135, kr_label, en_label, [Verse(**v) for v in passage], existing_count=1
+        )
+
+
 def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
     """Set every on-canvas text item on a slide to `text`, in place (#15).
 
@@ -890,13 +917,19 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
 
     # 말씀 ad-hoc special block (135–152, 18 slides): last week's pastor-requested slides
     # (extra songs, message/poem cards) that sit between the sermon-title slide (134) and the
-    # recurring 파송의 노래/축도/주기도문 closing. They never recur, so a fresh deck must drop them
-    # — the operator adds this week's specials manually in review (#97). Deleted FIRST because it
-    # is the highest-index count-changing op in the build: the template anchor 135 is still exact
-    # here, every later fill runs at a LOWER index (so this deletion can't shift their anchors,
-    # nor they this one). Unconditional — the block is always present in the template, regardless
-    # of this week's data. Re-verify the 135/18 anchor whenever master.key is replaced (#98).
+    # recurring 파송의 노래/축도/주기도문 closing. They never recur, so a fresh deck must drop them.
+    # Deleted FIRST because it is the highest-index count-changing op in the build: the template
+    # anchor 135 is still exact here, every later fill runs at a LOWER index (so this deletion
+    # can't shift their anchors, nor they this one). Unconditional — the block is always present
+    # in the template, regardless of this week's data. Re-verify the 135/18 anchor whenever
+    # master.key is replaced (#98).
     delete_slides(out_key, 135, 18)
+
+    # This week's extra sermon verses (#114) regenerate into the just-emptied region; anything
+    # beyond verse slides (songs, poem cards) the operator still adds manually (#97). Runs while
+    # 135 is exact and inserts only at ≥135, so the back-to-front fills below are unaffected.
+    if data.sermon_extra_refs:
+        fill_sermon_extra_slides(out_key, data.sermon_extra_refs, data.sermon_extra_passages)
 
     # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 말씀 ref recap (127) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 고백의 찬양 (57) -> 예배의 부름 (48/47) -> 찬양 medley (6)
     # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse

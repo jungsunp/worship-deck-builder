@@ -7,6 +7,7 @@ a PDF preview of the draft. This is the human-in-the-loop checkpoint.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from dataclasses import asdict, fields
@@ -75,6 +76,8 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
         kept.append("고백의 찬양 lyrics")
     if existing.offering_hymn_verses:
         kept.append("봉헌 verse picks (" + ", ".join(str(v) for v in existing.offering_hymn_verses) + ")")
+    if existing.sermon_extra_refs:
+        kept.append("추가 말씀 구절 (" + ", ".join(existing.sermon_extra_refs) + ")")
     kept += [_EDIT_LABELS[f] for f in existing.edited_fields if f in _EDIT_LABELS]
     return kept
 
@@ -391,7 +394,7 @@ function render() {
     else if (isHymn(row)) renderHymn(div);
     else if (isAnnounce(row)) renderAnnounce(div);
     else if (isCtw(row)) renderPassage(div, run.call_to_worship_passage);
-    else if (isSermon(row)) renderPassage(div, run.sermon_passage);
+    else if (isSermon(row)) renderSermon(div);
     order.appendChild(div);
   });
 }
@@ -503,6 +506,24 @@ function renderPassage(div, passage) {
   div.appendChild(p);
 }
 
+// Main passage + the ad-hoc extra refs the pastor will cite (#114). Refs are looked up
+// server-side on save, so the passage previews below reflect the LAST save, not unsaved edits.
+function renderSermon(div) {
+  renderPassage(div, run.sermon_passage);
+  const ta = document.createElement('textarea');
+  ta.dataset.kind = 'extrarefs';
+  ta.placeholder = '추가 말씀 구절 — 한 줄에 하나 (예: 요 3:16, 시 4:15-20)';
+  ta.value = (run.sermon_extra_refs || []).join('\\n');
+  div.appendChild(ta);
+  (run.sermon_extra_passages || []).forEach((p, i) => {
+    const ref = (run.sermon_extra_refs || [])[i] || '';
+    const h = document.createElement('div'); h.className = 'meta';
+    h.textContent = ref + (p.length ? '' : ' — 조회 실패');
+    div.appendChild(h);
+    renderPassage(div, p);
+  });
+}
+
 const splitLines = v => v.split('\\n').map(s => s.trim()).filter(Boolean);
 // Keeps interior blank lines (stanza breaks, #101) — trims only leading/trailing ones.
 const splitKeepBlanks = v => {
@@ -526,6 +547,8 @@ function syncFromDom() {
   if (hn) run.offering_hymn_number = hn.value.trim();
   const ht = document.getElementById('hymnTitle');
   if (ht) run.offering_hymn_title = ht.value.trim();
+  const exTa = document.querySelector('#order textarea[data-kind="extrarefs"]');
+  if (exTa) run.sermon_extra_refs = splitLines(exTa.value);
 }
 
 function move(s, d) {
@@ -542,8 +565,12 @@ async function save() {
   const r = await fetch('/runs/' + date, {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(run),
   });
-  document.getElementById('status').textContent = r.ok ? 'Saved.' : 'Save error: ' + r.status;
-  return r.ok;
+  if (!r.ok) { document.getElementById('status').textContent = 'Save error: ' + r.status; return false; }
+  const body = await r.json();
+  document.getElementById('status').textContent =
+    'Saved.' + (body.warnings ? ' ' + body.warnings.join(' · ') : '');
+  await load();  // re-render so freshly looked-up extra sermon verses preview (#114)
+  return true;
 }
 
 let _buildTimer;
@@ -818,6 +845,8 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
         data.choir_song = existing.choir_song
         data.confession_song = existing.confession_song
         data.offering_hymn_verses = existing.offering_hymn_verses
+        data.sermon_extra_refs = existing.sermon_extra_refs
+        data.sermon_extra_passages = existing.sermon_extra_passages
         for f in existing.edited_fields:  # preserve operator-edited parsed fields
             setattr(data, f, getattr(existing, f))
 
@@ -876,15 +905,33 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     existing = store.load(service_date) if store.exists(service_date) else None
     data = ServiceData(**{k: v for k, v in body.items() if k in known})
     data.offering_hymn_verses = [int(v) for v in data.offering_hymn_verses]
+    # Extra sermon refs (#114) are looked up on save, not at build: a typo'd ref fails here
+    # with a visible warning instead of a minute into the Keynote build, and the review page
+    # can preview the verses. Only changed refs hit the network; a failed lookup stores an
+    # empty passage (build skips it) and the save still succeeds.
+    warnings: list[str] = []
+    # Operator-typed refs: trim, and collapse stray spaces around ':' and '-' ("시 4: 15-20" →
+    # "시 4:15-20") so parse_ref accepts them and the slide label shows the clean form.
+    data.sermon_extra_refs = [
+        re.sub(r"\s*([:-])\s*", r"\1", r.strip()) for r in data.sermon_extra_refs if r.strip()
+    ]
+    if data.sermon_extra_refs != (existing.sermon_extra_refs if existing else []):
+        data.sermon_extra_passages = []
+        for ref in data.sermon_extra_refs:
+            try:
+                data.sermon_extra_passages.append([asdict(v) for v in verses.lookup_verses(ref)])
+            except Exception:  # noqa: BLE001 - bad ref or lookup hiccup; keep the other edits
+                data.sermon_extra_passages.append([])
+                warnings.append(f"추가 말씀 구절 '{ref}' 조회 실패 — 확인 후 다시 저장")
     # Record which parsed/transcribed fields the operator actually changed, so a later
-    # re-assemble preserves them instead of re-deriving them (#105). The one pure-human
-    # field (offering_hymn_verses) is always preserved, so it isn't tracked.
+    # re-assemble preserves them instead of re-deriving them (#105). The pure-human fields
+    # (offering_hymn_verses, sermon_extra_*) are always preserved, so they aren't tracked.
     edited = set(existing.edited_fields) if existing else set()
     if existing:
         edited |= {f for f in _EDITABLE_PARSED if getattr(data, f) != getattr(existing, f)}
     data.edited_fields = sorted(edited)
     store.save(service_date, data)
-    return {"saved": service_date}
+    return {"saved": service_date, "warnings": warnings} if warnings else {"saved": service_date}
 
 
 @app.get("/runs/{service_date}/hymn")

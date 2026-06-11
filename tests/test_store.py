@@ -24,6 +24,8 @@ def _sample() -> ServiceData:
         sermon_ref="눅 24:1-12",
         offering_hymn_number="70",
         offering_hymn_title="피난처 있으니",
+        sermon_extra_refs=["요 3:16"],
+        sermon_extra_passages=[[{"number": 16, "korean": "한글", "english": "english"}]],
     )
 
 

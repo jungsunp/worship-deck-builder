@@ -328,6 +328,39 @@ def test_delete_slides_passes_args_and_returns_count(monkeypatch: pytest.MonkeyP
 # ---------------------------------------------------------------------------
 
 
+def test_fill_sermon_extra_slides_inserts_reversed_at_fixed_anchors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#114: each extra ref seeds a copy of the pristine 129 verse slide after 134 and fills
+    it at 135; refs run in REVERSE so the deck ends up in input order with fixed anchors.
+    An empty passage (lookup failed at save) is skipped entirely."""
+    calls: list[tuple] = []
+    monkeypatch.setattr(
+        B, "duplicate_block",
+        lambda key, src, src_len, dest, times: calls.append(("dup", src, src_len, dest, times)),
+    )
+    monkeypatch.setattr(
+        B, "fill_verse_slides",
+        lambda key, idx, kr, en, verses, **kw: calls.append(
+            ("fill", idx, kr, en, [v.number for v in verses], kw["existing_count"])
+        ),
+    )
+    refs = ["요 3:16", "롬 8:1-4", "잘못된 구절"]
+    passages = [
+        [{"number": 16, "korean": "한", "english": "en"}],
+        [{"number": 1, "korean": "한", "english": "en"}, {"number": 2, "korean": "한", "english": "en"}],
+        [],  # skipped before any label parsing or slide op
+    ]
+    B.fill_sermon_extra_slides("deck.key", refs, passages)
+
+    assert calls == [
+        ("dup", 129, 1, 134, 1),
+        ("fill", 135, "[롬 8:1-4, 개역한글]", "[Romans 8:1-4, ESV]", [1, 2], 1),
+        ("dup", 129, 1, 134, 1),
+        ("fill", 135, "[요 3:16, 개역한글]", "[John 3:16, ESV]", [16], 1),
+    ]
+
+
 def test_set_slide_text_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict = {}
 
