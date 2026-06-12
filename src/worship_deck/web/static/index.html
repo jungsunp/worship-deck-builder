@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Worship Deck — Upload</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  input[type=file] { display: block; width: 100%; margin: 0.5rem 0; font-size: 1rem; }
+  button { width: 100%; padding: 1rem; font-size: 1.1rem; border: 0;
+           border-radius: var(--radius); background: var(--blue); color: #fff; }
+  #assemble { background: var(--green); margin-top: 0.5rem; }
+  #status { margin-top: 1rem; font-size: 1rem; white-space: pre-wrap; }
+  .slot { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.75rem; margin: 0.5rem 0; }
+  .slot .label { font-weight: 600; }
+  .slot .hint { color: var(--gray-600); font-size: 0.85rem; margin: 0.25rem 0; }
+  .slot .count { color: var(--green); font-size: 0.9rem; }
+  .slot .none { color: var(--gray-400); font-size: 0.9rem; margin: 0.25rem 0; }
+  textarea { width: 100%; min-height: 6rem; font-size: 1rem; box-sizing: border-box; }
+  .filerow { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0;
+             font-size: 1rem; }
+  .filerow .ok { color: var(--green); font-weight: 700; flex: none; }
+  .filerow .ok.warn { color: var(--amber); }
+  .filerow .name { flex: 1; word-break: break-all; }
+  .filerow .size { color: var(--gray-600); font-size: 0.85rem; flex: none; }
+  .filerow .del { width: auto; flex: none; padding: 0.4rem 0.7rem; font-size: 1rem;
+                  background: var(--red); }
+  #inbox { list-style: none; padding: 0; margin: 0; }
+  #inbox li { border-bottom: 1px solid var(--gray-100); }
+  #runs { list-style: none; padding: 0; margin: 0; }
+  #runs li { padding: 0.5rem 0; border-bottom: 1px solid var(--gray-100); font-size: 1rem; }
+  #runs a { color: var(--blue); text-decoration: none; }
+</style>
+</head>
+<body>
+<h1>주보 / 악보 업로드</h1>
+<div class="slot">
+  <div class="label">주보 (PDF)</div>
+  <div class="files" id="files-bulletin"></div>
+  <input type="file" accept=".pdf" onchange="uploadSlot(this, 'bulletin')">
+</div>
+<div class="slot">
+  <div class="label">찬양 악보 (이미지) <span class="count" id="sheetCount"></span></div>
+  <div class="hint">파일명 순서 = 메들리 순서</div>
+  <div class="files" id="files-sheet"></div>
+  <input type="file" multiple accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'sheets')">
+</div>
+<div class="slot">
+  <div class="label">고백의 찬양 악보 (이미지 1장)</div>
+  <div class="files" id="files-confession"></div>
+  <input type="file" accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'confession')">
+</div>
+<div class="slot">
+  <div class="label">성가대 가사 (텍스트)</div>
+  <div class="hint">제목 / 작곡 줄 / 가사 — 절 사이 빈 줄 유지 · 자동 저장</div>
+  <textarea id="choirText" oninput="choirChanged()" onblur="flushChoir()"></textarea>
+  <div class="hint" id="choirStatus"></div>
+</div>
+<div id="otherWrap" hidden>
+  <h2>기타 파일</h2>
+  <div class="hint" style="color:#888;font-size:0.85rem">슬롯으로 인식되지 않아 빌드에 사용되지 않는
+    파일 — 삭제 후 위 슬롯으로 다시 업로드</div>
+  <ul id="inbox"></ul>
+</div>
+<button id="assemble" type="button" onclick="assemble()">Assemble inbox</button>
+<div id="status"></div>
+<h2>Review a run</h2>
+<ul id="runs"></ul>
+<script>
+let _timer;
+function fileRow(f, tag, mark) {
+  const row = document.createElement(tag); row.className = 'filerow';
+  const ok = document.createElement('span'); ok.className = mark ? 'ok warn' : 'ok';
+  ok.textContent = mark || '✓';
+  const name = document.createElement('span'); name.className = 'name'; name.textContent = f.name;
+  const size = document.createElement('span'); size.className = 'size'; size.textContent = (f.size / 1024).toFixed(1) + ' KB';
+  const btn = document.createElement('button'); btn.className = 'del'; btn.textContent = '✕';
+  btn.onclick = () => del(f.name);
+  row.append(ok, name, size, btn);
+  return row;
+}
+async function loadInbox() {
+  const {files, choir_text} = await (await fetch('/inbox')).json();
+  const ta = document.getElementById('choirText');
+  if (document.activeElement !== ta) ta.value = choir_text || '';
+  for (const kind of ['bulletin', 'sheet', 'confession']) {
+    const box = document.getElementById('files-' + kind);
+    const mine = files.filter(f => f.kind === kind);
+    box.innerHTML = mine.length ? '' : '<div class="none">아직 업로드 안 됨</div>';
+    for (const f of mine) box.appendChild(fileRow(f, 'div'));
+  }
+  const sheets = files.filter(f => f.kind === 'sheet').length;
+  document.getElementById('sheetCount').textContent = sheets ? '✓ ' + sheets + '장' : '';
+  const others = files.filter(f => f.kind === 'other');
+  document.getElementById('otherWrap').hidden = !others.length;
+  const ul = document.getElementById('inbox');
+  ul.innerHTML = '';
+  for (const f of others) ul.appendChild(fileRow(f, 'li', '?'));
+}
+async function del(name) {
+  await fetch('/inbox/' + encodeURIComponent(name), {method: 'DELETE'});
+  loadInbox();
+}
+async function uploadSlot(input, kind) {
+  if (!input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append('files', f);
+  const r = await fetch('/upload/' + kind, {method: 'POST', body: fd});
+  const body = await r.json().catch(() => ({}));
+  document.getElementById('status').textContent = r.ok
+    ? 'Uploaded: ' + (body.saved || []).join(', ')
+    : 'Upload error: ' + (body.detail || r.status);
+  input.value = '';
+  loadInbox();
+}
+let _choirTimer;
+function choirChanged() {
+  document.getElementById('choirStatus').textContent = '…';
+  clearTimeout(_choirTimer);
+  _choirTimer = setTimeout(saveChoir, 800);
+}
+function flushChoir() {
+  if (!_choirTimer) return;
+  clearTimeout(_choirTimer);
+  saveChoir();
+}
+async function saveChoir() {
+  _choirTimer = null;
+  const text = document.getElementById('choirText').value;
+  const r = await fetch('/inbox/choir', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}),
+  });
+  document.getElementById('choirStatus').textContent = r.ok
+    ? (text.trim() ? '저장됨 ✓' : '비어 있음 — 저장 안 함') : '저장 오류: ' + r.status;
+}
+async function loadRuns() {
+  const {runs} = await (await fetch('/runs')).json();
+  const ul = document.getElementById('runs');
+  ul.innerHTML = runs.length ? '' : '<li>(none yet — assemble a bulletin first)</li>';
+  for (const d of runs) {
+    const li = document.createElement('li');
+    const a = document.createElement('a'); a.href = '/review/' + d; a.textContent = d + ' — Review →';
+    li.appendChild(a);
+    ul.appendChild(li);
+  }
+}
+loadInbox();
+loadRuns();
+async function assemble(confirm) {
+  document.getElementById('status').textContent = 'Starting…';
+  const r = await fetch('/assemble' + (confirm ? '?confirm=1' : ''), {method: 'POST'});
+  const body = await r.json();
+  if (!r.ok) { document.getElementById('status').textContent = 'Error: ' + (body.detail || r.status); return; }
+  if (body.needs_confirm) {
+    const bullets = (items, empty) => items && items.length
+      ? items.map(k => ' • ' + k).join('\n') : ' • ' + empty;
+    const msg = 'A run for ' + body.service_date + ' already exists. Re-assembling will:\n\n'
+      + '↻ Refresh (overwrite from the bulletin):\n'
+      + bullets(body.refresh, '(nothing)') + '\n\n'
+      + '✓ Keep (your review edits):\n'
+      + bullets(body.kept, '(none — no review edits saved yet)') + '\n\n'
+      + 'Continue?';
+    if (window.confirm(msg)) return assemble(true);
+    document.getElementById('status').textContent = 'Cancelled.';
+    return;
+  }
+  poll(body.status_url, body.service_date);
+}
+function poll(url, date) {
+  clearInterval(_timer);
+  _timer = setInterval(async () => {
+    const s = await (await fetch(url)).json();
+    const st = document.getElementById('status');
+    st.textContent = date + ': ' + s.status + (s.step ? ' (' + s.step + ')' : '') + (s.error ? '\n' + s.error : '') + (s.warning ? '\n⚠ ' + s.warning : '');
+    if (s.status === 'done') st.innerHTML += ' <a href="/review/' + date + '">Review →</a>';
+    if (s.status === 'done' || s.status === 'error') clearInterval(_timer);
+  }, 2000);
+}
+</script>
+</body>
+</html>
