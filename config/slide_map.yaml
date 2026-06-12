@@ -5,6 +5,11 @@
 # describe section structure — sections like worship-song lyrics and announcements
 # EXPAND based on how much content there is that week.
 #
+# HUMAN REFERENCE ONLY (#98): build() no longer hard-codes these numbers — it derives
+# every anchor at build time from the deck's landmark text (keynote/anchors.py), failing
+# loud if a landmark is missing. This file documents the reference positions; it is not
+# read by code.
+#
 # render: how the slide is produced. The church builds slides as NATIVE Keynote text
 # boxes (not flattened images), so the builder edits text in place.
 #   native_text     = set the slide's native text runs; duplicate the slide per item
@@ -92,7 +97,8 @@ sections:
         말씀 title slide and the 파송의 노래/축도/주기도문 closing. Never recur, so build() drops
         them, then regenerates this week's extra sermon verse slides there from the refs typed
         in review (sermon_extra_refs, #114); other specials (songs, cards) the operator still
-        adds manually. Re-verify range on master.key replacement (#98)."
+        adds manually. Range detected at build time: sermon title + 1 up to the blank before
+        the first closing landmark (#98)."
       render: manual
 
   ending_date:

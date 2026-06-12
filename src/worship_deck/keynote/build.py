@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from worship_deck.bible.verses import Verse, english_ref, verse_labels
+from worship_deck.keynote.anchors import detect_anchors
 from worship_deck.lyrics.transcribe import Song, chunk
 from worship_deck.parse.bulletin import ServiceData
 
@@ -40,6 +41,7 @@ _HYMN_IMAGE_BLOCK = Path(__file__).parent / "applescript" / "hymn_image_block.ap
 _READ_TITLE_BOX = Path(__file__).parent / "applescript" / "read_title_box.applescript"
 _SET_CTW_REF = Path(__file__).parent / "applescript" / "set_ctw_ref.applescript"
 _SET_SERMON_REF = Path(__file__).parent / "applescript" / "set_sermon_ref.applescript"
+_DUMP_SLIDE_TEXTS = Path(__file__).parent / "applescript" / "dump_slide_texts.applescript"
 
 # --- verse-slide layout model (#115: calibrated to the ideal 예배의 부름 slide) --------------
 # Verse body boxes are FIXED-height shrink-on-overflow boxes (height never changes when text
@@ -375,6 +377,32 @@ def read_title_box(key_path: str, slide_index: int) -> tuple[int, int, int]:
     return w, h, font
 
 
+def dump_slide_texts(key_path: str) -> list[list[str]]:
+    """Return each slide's text lines from the open front document (#98).
+
+    One read-only pass over the whole deck: index i of the result holds slide i+1's lines.
+    Each slide carries stacked + off-canvas {0,0} duplicate text boxes, so identical lines
+    are deduped per slide (order preserved); blank lines are dropped. Feeds
+    `anchors.detect_anchors`, which derives the section anchors from landmark text instead
+    of hard-coded indices.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    out = _run_osascript(_DUMP_SLIDE_TEXTS, str(Path(key_path).expanduser()))
+    slides: list[list[str]] = []
+    lines: list[str] | None = None
+    for raw in out.splitlines():
+        if raw.startswith("###SLIDE "):
+            lines = []
+            slides.append(lines)
+            continue
+        line = raw.strip()
+        if lines is not None and line and line not in lines:
+            lines.append(line)
+    return slides
+
+
 def delete_slides(key_path: str, start_index: int, count: int) -> int:
     """Delete `count` consecutive slides starting at 1-based start_index. Returns new total.
 
@@ -462,18 +490,24 @@ def fill_verse_slides(
 
 
 def fill_sermon_extra_slides(
-    key_path: str, refs: list[str], passages: list[list[dict]]
+    key_path: str,
+    refs: list[str],
+    passages: list[list[dict]],
+    *,
+    verse_seed: int,
+    title_index: int,
 ) -> None:
     """Insert the ad-hoc extra sermon passages after the sermon title slide (#114).
 
     Each looked-up extra ref (reviewed in the web app) becomes its own labelled verse-slide
-    run in the region the build just emptied (the deleted 135–152 special block). Refs are
-    processed in REVERSE order: every iteration seeds a pristine copy of the sermon
-    verse-slide template (129, not yet filled at this point in `build()`) at the fixed 135
-    anchor, pushing previously inserted refs later — so the final deck order matches the
-    input order with no offset arithmetic. All insertions land at index ≥135, leaving the
-    later back-to-front fills (134, 129, 127, …) at their template anchors. An empty passage
-    (lookup failed at save) is skipped; the operator adds it manually.
+    run in the region the build just emptied (the deleted ad-hoc special block, #97). Refs
+    are processed in REVERSE order: every iteration seeds a pristine copy of the sermon
+    verse-slide template (`verse_seed`, not yet filled at this point in `build()`) right
+    after the sermon title slide (`title_index`), pushing previously inserted refs later —
+    so the final deck order matches the input order with no offset arithmetic. All
+    insertions land after `title_index`, leaving the later back-to-front fills at their
+    template anchors. An empty passage (lookup failed at save) is skipped; the operator
+    adds it manually.
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
@@ -481,10 +515,15 @@ def fill_sermon_extra_slides(
     for ref, passage in reversed(list(zip(refs, passages))):
         if not passage:
             continue
-        duplicate_block(key_path, 129, 1, 134, 1)
+        duplicate_block(key_path, verse_seed, 1, title_index, 1)
         kr_label, en_label = verse_labels(ref)
         fill_verse_slides(
-            key_path, 135, kr_label, en_label, [Verse(**v) for v in passage], existing_count=1
+            key_path,
+            title_index + 1,
+            kr_label,
+            en_label,
+            [Verse(**v) for v in passage],
+            existing_count=1,
         )
 
 
@@ -892,12 +931,15 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     """Build the weekly draft deck from the template and the reviewed run store (#29).
 
     Saves a copy of the template, then fills each section's native text from `data`'s top-level
-    section fields (worship_songs / choir_song / *_passage / announcements / sermon_*). Sections
-    are filled BACK-TO-FRONT by slide anchor: every expanding fill (verses/announcements/medley)
-    shifts the indices of all later slides, so filling the latest section first keeps every
-    still-unfilled earlier section at its template anchor. `set_date_slides` is count-neutral
-    (in-place text) so it runs first, then the ad-hoc 말씀 special block is dropped (#97) before
-    any section fill. Each section is skipped when its content is absent.
+    section fields (worship_songs / choir_song / *_passage / announcements / sermon_*). Section
+    anchors are not hard-coded: one read-only pass dumps every slide's text and
+    `anchors.detect_anchors` derives them from the deck's landmark text, failing loud before any
+    edit if the template drifted (#98). Sections are filled BACK-TO-FRONT by slide anchor: every
+    expanding fill (verses/announcements/medley) shifts the indices of all later slides, so
+    filling the latest section first keeps every still-unfilled earlier section at its template
+    anchor. `set_date_slides` is count-neutral (in-place text) so it runs first, then the ad-hoc
+    말씀 special block is dropped (#97) before any section fill. Each section is skipped when its
+    content is absent.
 
     Open-once/save-once (#117): `save_draft` opens the template once and save-as'es it into the
     open draft; every fill mutates that open `front document` in place; `finalize_draft` saves it
@@ -912,84 +954,116 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     _ensure_keynote_ready()  # clear stale open docs first, else `open` returns missing value (-1700)
     save_draft(template_key, out_key)
 
+    # Derive every section anchor from the pristine draft's landmark text (#98). Raises (before
+    # any slide is touched) if the template no longer matches the expected landmarks, instead of
+    # silently editing the wrong slides. Reference positions live in config/slide_map.yaml.
+    a = detect_anchors(dump_slide_texts(out_key))
+
     sermon_bracket = f"[{data.sermon_ref}]" if data.sermon_ref else ""
     set_date_slides(out_key, data.date, data.sermon_title, sermon_bracket)
 
-    # 말씀 ad-hoc special block (135–152, 18 slides): last week's pastor-requested slides
-    # (extra songs, message/poem cards) that sit between the sermon-title slide (134) and the
-    # recurring 파송의 노래/축도/주기도문 closing. They never recur, so a fresh deck must drop them.
-    # Deleted FIRST because it is the highest-index count-changing op in the build: the template
-    # anchor 135 is still exact here, every later fill runs at a LOWER index (so this deletion
-    # can't shift their anchors, nor they this one). Unconditional — the block is always present
-    # in the template, regardless of this week's data. Re-verify the 135/18 anchor whenever
-    # master.key is replaced (#98).
-    delete_slides(out_key, 135, 18)
+    # 말씀 ad-hoc special block: last week's pastor-requested slides (extra songs, message/poem
+    # cards) that sit between the sermon-title slide and the recurring 파송의 노래/축도/주기도문
+    # closing. They never recur, so a fresh deck must drop them. Deleted FIRST because it is the
+    # highest-index count-changing op in the build: the detected anchors are still exact here,
+    # every later fill runs at a LOWER index (so this deletion can't shift their anchors, nor
+    # they this one). Skipped only when the template carries no slides there (#97).
+    if a.special_count:
+        delete_slides(out_key, a.special_start, a.special_count)
 
     # This week's extra sermon verses (#114) regenerate into the just-emptied region; anything
     # beyond verse slides (songs, poem cards) the operator still adds manually (#97). Runs while
-    # 135 is exact and inserts only at ≥135, so the back-to-front fills below are unaffected.
+    # the special-block anchor is exact and inserts only after the sermon title, so the
+    # back-to-front fills below are unaffected.
     if data.sermon_extra_refs:
-        fill_sermon_extra_slides(out_key, data.sermon_extra_refs, data.sermon_extra_passages)
+        fill_sermon_extra_slides(
+            out_key,
+            data.sermon_extra_refs,
+            data.sermon_extra_passages,
+            verse_seed=a.sermon_verse_start,
+            title_index=a.sermon_title,
+        )
 
-    # --- back-to-front: 말씀 title (134) -> 말씀 verses (129) -> 말씀 ref recap (127) -> 교회소식 (117) -> 봉헌 (97) -> 성가대 (77) -> 고백의 찬양 (57) -> 예배의 부름 (48/47) -> 찬양 medley (6)
-    # 말씀 title slide (134): white title box + gold scripture-ref box, before the 129 verse
-    # fill resizes/shifts it (#90). Same title/ref the date slides carry.
+    # --- back-to-front: 말씀 title -> 말씀 verses -> 말씀 ref recap -> 교회소식 -> 봉헌 -> 성가대 -> 고백의 찬양 -> 예배의 부름 -> 찬양 medley
+    # 말씀 title slide: white title box + gold scripture-ref box, before the verse fill
+    # resizes/shifts it (#90). Same title/ref the date slides carry.
     if data.sermon_title:
-        set_sermon_title_slide(out_key, 134, data.sermon_title, sermon_bracket)
+        set_sermon_title_slide(out_key, a.sermon_title, data.sermon_title, sermon_bracket)
 
     if data.sermon_passage:
         kr_label, en_label = verse_labels(data.sermon_ref)
         verses = [Verse(**v) for v in data.sermon_passage]
-        fill_verse_slides(out_key, 129, kr_label, en_label, verses, existing_count=4)
+        fill_verse_slides(
+            out_key,
+            a.sermon_verse_start,
+            kr_label,
+            en_label,
+            verses,
+            existing_count=a.sermon_verse_count,
+        )
 
-    # 말씀 scripture-ref recap slide (127): the bare-Korean + bracketed-English ref boxes shown
-    # before the sermon reading, distinct from the verse-body slides — must be updated separately
-    # or it keeps last week's reference (#107). 127 < 129, so this count-neutral write and the
-    # expanding verse fill don't shift each other.
+    # 말씀 scripture-ref recap slide: the bare-Korean + bracketed-English ref boxes shown before
+    # the sermon reading, distinct from the verse-body slides — must be updated separately or it
+    # keeps last week's reference (#107). It precedes the verse block, so this count-neutral
+    # write and the expanding verse fill don't shift each other.
     if data.sermon_ref:
-        set_sermon_ref_slide(out_key, 127, data.sermon_ref)
+        set_sermon_ref_slide(out_key, a.sermon_ref, data.sermon_ref)
 
     if data.announcements:
-        fill_announcement_slides(out_key, 117, data.announcements, existing_count=5)
+        fill_announcement_slides(
+            out_key, a.announcements_start, data.announcements, existing_count=a.announcements_count
+        )
 
-    # 봉헌 offering-hymn images: replace last week's pages (detected at/after slide 97, after the
-    # section's title/intro slides) with this week's. An empty list (failed/absent download) keeps
+    # 봉헌 offering-hymn images: replace last week's pages (detected after the section's
+    # title/intro slides) with this week's. An empty list (failed/absent download) keeps
     # the template's pages for the operator to fix manually rather than replacing them with none.
-    # 봉헌 title slide (97): rewrite the bracketed hymn title + "(찬 N장)" number from this week's
+    # 봉헌 title slide: rewrite the bracketed hymn title + "(찬 N장)" number from this week's
     # parsed values, else it keeps last week's text (#106). Count-neutral (in-place paragraph text),
     # and separate from the image fill so the title updates even when the download returned no pages.
     if data.offering_hymn_number or data.offering_hymn_title:
         set_offering_hymn_title_slide(
-            out_key, 97, data.offering_hymn_number, data.offering_hymn_title
+            out_key, a.offering_title, data.offering_hymn_number, data.offering_hymn_title
         )
 
     if data.offering_hymn_images:
-        fill_hymn_slides(out_key, 97, data.offering_hymn_images)
+        fill_hymn_slides(out_key, a.offering_title, data.offering_hymn_images)
 
     if data.choir_song:
-        fill_choir_slides(out_key, 77, Song(**data.choir_song))
+        fill_choir_slides(
+            out_key,
+            a.choir_title,
+            Song(**data.choir_song),
+            existing_lyric_count=a.choir_lyric_count,
+        )
 
-    # 고백의 찬양 (57–68): divider (57) + blank + title banner (59) + ≤2-line lyric slides
-    # (60–67) + trailing blank. Absent confession_song (no sheet uploaded / transcription
-    # failed) keeps the template's slides for the operator to fix manually (#109).
+    # 고백의 찬양: divider + blank + title banner + ≤2-line lyric slides + trailing blank.
+    # Absent confession_song (no sheet uploaded / transcription failed) keeps the template's
+    # slides for the operator to fix manually (#109).
     if data.confession_song:
-        fill_confession_slides(out_key, 57, Song(**data.confession_song))
+        fill_confession_slides(
+            out_key,
+            a.confession_divider,
+            Song(**data.confession_song),
+            existing_lyric_count=a.confession_lyric_count,
+        )
 
-    # 예배의 부름: the ref-display slide (47) carries the bare Korean + bracketed English citation
-    # boxes; the verse-body slide (48) holds the passage text. They are distinct — 47 must be
-    # updated separately or it keeps last week's reference (#107). 47 < 48, so the count-neutral
-    # ref write and the expanding verse fill don't shift each other.
+    # 예배의 부름: the ref-display slide carries the bare Korean + bracketed English citation
+    # boxes; the verse-body slide holds the passage text. They are distinct — the ref slide must
+    # be updated separately or it keeps last week's reference (#107). It precedes the verse
+    # slide, so the count-neutral ref write and the expanding verse fill don't shift each other.
     if data.call_to_worship_ref:
-        set_call_to_worship_ref(out_key, 47, data.call_to_worship_ref)
+        set_call_to_worship_ref(out_key, a.call_ref, data.call_to_worship_ref)
 
     if data.call_to_worship_passage:
         kr_label, en_label = verse_labels(data.call_to_worship_ref)
         verses = [Verse(**v) for v in data.call_to_worship_passage]
-        fill_verse_slides(out_key, 48, kr_label, en_label, verses, existing_count=1)
+        fill_verse_slides(
+            out_key, a.call_verse, kr_label, en_label, verses, existing_count=a.call_verse_count
+        )
 
     if data.worship_songs:
         songs = [Song(**s) for s in data.worship_songs]
-        fill_worship_songs(out_key, 6, 41, songs)
+        fill_worship_songs(out_key, a.worship_start, a.worship_len, songs)
 
     # Persist every in-place edit with a single save (#117): save_draft opened the deck once and
     # the section fills mutated the open front document; this is the one save that writes them.
