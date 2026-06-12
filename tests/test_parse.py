@@ -8,6 +8,8 @@ import pytest
 
 from worship_deck.parse import parse
 from worship_deck.parse.bulletin import (
+    _announcement_blocks,
+    _expand_list_paren,
     _find_row,
     _parse_offering_hymn,
     _part_cell,
@@ -89,6 +91,40 @@ def test_announcement_blocks_keeps_bullets_as_separate_lines() -> None:
     detail = vbs.split("\n\n", 1)[1].split("\n")
     assert "· 영유아부: 8/3-8/4 (월-화) 9am-12pm" in detail
     assert "· 초등부: 8/5-8/7 (수-금) 9am-3pm" in detail
+
+
+def test_expand_list_paren_splits_korean_label_list() -> None:
+    line = "(피택 시무장로: 손성호, 피택 안수집사: 범시훈, 피택시무권사: 김현진, 이옥례)"
+    assert _expand_list_paren(line) == [
+        "· 피택 시무장로: 손성호",
+        "· 피택 안수집사: 범시훈",
+        "· 피택시무권사: 김현진, 이옥례",
+    ]
+
+
+def test_expand_list_paren_leaves_prose_unchanged() -> None:
+    assert _expand_list_paren("그룹 리더분들의 안내에 따라.") == ["그룹 리더분들의 안내에 따라."]
+    # bullet line with mid-word paren: not a whole-line paren, must be left alone
+    assert _expand_list_paren("· 영유아부: 8/3-8/4 (월-화) 9am-12pm") == [
+        "· 영유아부: 8/3-8/4 (월-화) 9am-12pm"
+    ]
+    # paren with commas but no colons → no split
+    assert _expand_list_paren("(단독 설명, 괄호만)") == ["(단독 설명, 괄호만)"]
+    # only one label:value item → fewer than 2 parts → no split
+    assert _expand_list_paren("(피택 시무장로: 손성호)") == ["(피택 시무장로: 손성호)"]
+
+
+def test_announcement_blocks_expands_list_paren() -> None:
+    anns = [{"number": "3", "title": "임직식", "detail": [
+        "(피택 시무장로: 손성호, 피택 안수집사: 범시훈, 피택시무권사: 김현진, 이옥례)"
+    ]}]
+    block = _announcement_blocks(anns)[0]
+    lines = block.split("\n")
+    assert lines[0] == "3. 임직식"
+    assert lines[1] == ""
+    assert "· 피택 시무장로: 손성호" in lines
+    assert "· 피택 안수집사: 범시훈" in lines
+    assert "· 피택시무권사: 김현진, 이옥례" in lines
 
 
 def test_parse_bible_refs_and_sermon_title() -> None:

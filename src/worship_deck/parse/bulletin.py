@@ -247,16 +247,42 @@ def _extract_announcements(page) -> list[dict]:
     return anns
 
 
+def _expand_list_paren(line: str) -> list[str]:
+    """Expand a parenthetical Korean label:value list into bullet lines, or return [line].
+
+    Matches only when the entire line is `(...)` containing 2+ items of the form
+    `Korean text: value` separated by commas. Splits only at commas followed by a new
+    Korean label, so trailing commas inside values (e.g. "김현진, 이옥례") are preserved.
+    """
+    m = re.fullmatch(r"\((.+)\)", line.strip())
+    if not m:
+        return [line]
+    inner = m.group(1)
+    parts = re.split(r",\s*(?=[가-힣][\w\s]*:)", inner)
+    if len(parts) < 2 or not all(":" in p for p in parts):
+        return [line]
+    return ["· " + p.strip() for p in parts]
+
+
 def _announcement_blocks(anns: list[dict]) -> list[str]:
     """Render extracted announcements as slide-ready strings: "N. title" + blank line + detail.
 
     One string per 교회소식 item, ready for keynote.build.fill_announcement_slides — paragraph 1
     (the numbered title) renders gold and the detail paragraphs render white.
+
+    Detail lines that are a parenthetical list of Korean label:value items (e.g. 임직식 nominees)
+    are expanded into one bullet per item for readability.
     """
     blocks = []
     for a in anns:
         title = f"{a['number']}. {a['title']}"
-        blocks.append(title + ("\n\n" + "\n".join(a["detail"]) if a["detail"] else ""))
+        if a["detail"]:
+            expanded: list[str] = []
+            for line in a["detail"]:
+                expanded.extend(_expand_list_paren(line))
+            blocks.append(title + "\n\n" + "\n".join(expanded))
+        else:
+            blocks.append(title)
     return blocks
 
 
