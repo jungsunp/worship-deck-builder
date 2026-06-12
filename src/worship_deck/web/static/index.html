@@ -30,6 +30,7 @@
   #runs { list-style: none; padding: 0; margin: 0; }
   #runs li { padding: 0.5rem 0; border-bottom: 1px solid var(--gray-100); font-size: 1rem; }
   #runs a { color: var(--blue); text-decoration: none; }
+  .more { font-size: 0.9rem; font-weight: 400; color: var(--blue); text-decoration: none; }
 </style>
 </head>
 <body>
@@ -92,7 +93,7 @@
   <ul id="inbox"></ul>
 </div>
 
-<h2>지난 실행</h2>
+<h2>지난 실행 <a class="more" href="/history">전체 보기 →</a></h2>
 <ul id="runs"></ul>
 
 <div class="stickybar">
@@ -234,7 +235,7 @@ async function loadRuns() {
   const {runs} = await (await fetch('/runs')).json();
   const ul = document.getElementById('runs');
   ul.innerHTML = runs.length ? '' : '<li class="hint">(아직 없음 — 먼저 Assemble 하세요)</li>';
-  for (const d of runs) {
+  for (const d of runs.slice(0, 3)) {  // short list — full history lives at /history
     const li = document.createElement('li');
     const a = document.createElement('a'); a.href = '/review/' + d; a.textContent = d + ' — 검토 →';
     li.appendChild(a);

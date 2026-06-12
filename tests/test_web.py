@@ -732,6 +732,12 @@ def test_index_links_to_review() -> None:
     assert "/review/" in client.get("/").text
 
 
+def test_history_page_served() -> None:
+    resp = client.get("/history")
+    assert resp.status_code == 200
+    assert 'id="history"' in resp.text
+
+
 # ── /runs/{date}/build (Generate) ────────────────────────────────────────────
 # pipeline.run drives real Keynote (local_only); monkeypatch it + the `open` so these run on CI.
 # Starlette's TestClient runs the BackgroundTask before returning, so status is terminal.
