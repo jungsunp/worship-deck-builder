@@ -1517,7 +1517,9 @@ def _full_run() -> ServiceData:
 def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_fills(monkeypatch)
 
-    assert build(_full_run(), "tpl.key", "out.key") == "out.key"
+    path, steps = build(_full_run(), "tpl.key", "out.key")
+    assert path == "out.key"
+    assert isinstance(steps, dict)
 
     names = [c[0] for c in calls]
     # save_draft first, then date (count-neutral), then the ad-hoc 말씀 special-block delete

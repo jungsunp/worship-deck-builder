@@ -26,7 +26,7 @@ def run(service_date: str) -> str:
         RuntimeError: if TEMPLATE_KEY is unset, or a Keynote script fails (not on a Mac, etc.).
     """
     logger = obs.configure_logging()
-    with obs.run_record(service_date):
+    with obs.run_record(service_date, phase="build") as timer:
         logger.info("Starting deck build for %s", service_date)
         data = store.load(service_date)
         template = os.environ.get("TEMPLATE_KEY")
@@ -34,4 +34,6 @@ def run(service_date: str) -> str:
             raise RuntimeError("TEMPLATE_KEY is not set — point it at the master .key template.")
         # Absolute path: Keynote's `save ... in (POSIX file ...)` throws -609 on a relative path.
         out = str(Path(f"data/drafts/draft-{service_date}.key").resolve())
-        return keynote_build.build(data, template, out)
+        path, build_steps = keynote_build.build(data, template, out)
+        timer._steps.update(build_steps)
+        return path

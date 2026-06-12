@@ -235,7 +235,7 @@ def _assemble_env(tmp_path, monkeypatch):
 def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
-        lambda _p: [Song(title="주 은혜임을", lines=["1절", "2절"])],
+        lambda _p, **kw: [Song(title="주 은혜임을", lines=["1절", "2절"])],
     )
     resp = client.post("/assemble")
     assert resp.status_code == 200
@@ -259,7 +259,7 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
 def test_assemble_hymn_failure_is_nonfatal(_assemble_env, monkeypatch) -> None:
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
-        lambda _p: [Song(title="주 은혜임을", lines=["1절"])],
+        lambda _p, **kw: [Song(title="주 은혜임을", lines=["1절"])],
     )
 
     def _boom(number, work_dir, **kw):
@@ -284,7 +284,7 @@ def test_assemble_no_bulletin_is_400(tmp_path, monkeypatch) -> None:
 
 
 def test_assemble_step_failure_surfaces_as_error(_assemble_env, monkeypatch) -> None:
-    def _boom(_p):
+    def _boom(_p, **kwargs):
         raise RuntimeError("ollama down")
 
     monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", _boom)
@@ -298,7 +298,7 @@ def test_assemble_step_failure_surfaces_as_error(_assemble_env, monkeypatch) -> 
 
 def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
-        app_module.lyrics_transcribe, "transcribe", lambda _p: [Song(title="찬양곡", lines=["x"])]
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
     )
     # interior blank line = stanza break (#101) — must survive into choir_song
     (tmp_path / "choir.txt").write_text("제목\n작곡자 작곡\n1절 가사\n\n2절 가사", encoding="utf-8")
@@ -315,7 +315,7 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
         # basename check — pytest's tmp_path itself contains the test name ("confession")
-        lambda p: [Song(title="아무것도 두려워말라" if Path(p).name.startswith("confession") else "찬양곡", lines=["x"])],
+        lambda p, **kw: [Song(title="아무것도 두려워말라" if Path(p).name.startswith("confession") else "찬양곡", lines=["x"])],
     )
     date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
@@ -340,7 +340,7 @@ def test_assemble_warns_on_missing_slots(tmp_path, monkeypatch) -> None:
 def test_assemble_confession_failure_is_nonfatal(_assemble_env, monkeypatch, tmp_path) -> None:
     (tmp_path / "confession.png").write_bytes(b"img")
 
-    def _transcribe(p):
+    def _transcribe(p, **kwargs):
         if Path(p).name.startswith("confession"):
             raise RuntimeError("ollama down")
         return [Song(title="찬양곡", lines=["x"])]
@@ -363,7 +363,7 @@ def test_assemble_status_rejects_bad_date() -> None:
 def _fake_transcribe(monkeypatch, *titles) -> None:
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
-        lambda _p: [Song(title=t, lines=["x"]) for t in titles],
+        lambda _p, **kw: [Song(title=t, lines=["x"]) for t in titles],
     )
 
 

@@ -17,16 +17,20 @@
   .runrow .badge { flex: none; font-size: 0.9rem; }
   .badge.err { color: var(--red); font-weight: 700; }
   .badge.none { color: var(--gray-500); }
-  /* Secondary line per run — future home of #118 per-step timings and #102 PDF preview. */
   .runrow .sub { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.25rem; }
   .runrow .sub:empty { display: none; }
+  .nav { display: flex; gap: 1rem; align-items: center; }
 </style>
 </head>
 <body>
-<a href="/">← 홈</a>
+<div class="nav"><a href="/">← 홈</a><a href="/perf">성능 →</a></div>
 <h1>지난 실행</h1>
 <ul id="history"></ul>
 <script>
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m ? m + '분 ' + sec + '초' : sec + '초';
+}
 // Outcome from the in-memory status endpoints; both report "unknown" after a server
 // restart, so older runs show '—' (the run itself is still reviewable).
 function outcome(asm, build) {
@@ -45,7 +49,17 @@ async function fillBadge(d, badge) {
   badge.className = 'badge ' + cls;
 }
 async function load() {
-  const {runs} = await (await fetch('/runs')).json();
+  const [{runs}, perfData] = await Promise.all([
+    fetch('/runs').then(r => r.json()),
+    fetch('/api/perf').then(r => r.json()).catch(() => ({runs: []})),
+  ]);
+  // Build a lookup: date → {assemble: latestRecord, build: latestRecord}
+  const perfByDate = {};
+  for (const rec of (perfData.runs || [])) {
+    const d = rec.service_date, ph = rec.phase || 'build';
+    if (!perfByDate[d]) perfByDate[d] = {};
+    if (!perfByDate[d][ph]) perfByDate[d][ph] = rec;  // first = newest (reversed list)
+  }
   const ul = document.getElementById('history');
   ul.innerHTML = runs.length ? '' : '<li class="hint">(아직 없음 — 먼저 Assemble 하세요)</li>';
   for (const d of runs) {
@@ -57,6 +71,11 @@ async function load() {
     badge.textContent = '…';
     a.append(date, badge);
     const sub = document.createElement('div'); sub.className = 'sub';
+    const p = perfByDate[d] || {};
+    const parts = [];
+    if (p.assemble?.seconds) parts.push('Assemble: ' + fmtDur(p.assemble.seconds));
+    if (p.build?.seconds) parts.push('Build: ' + fmtDur(p.build.seconds));
+    if (parts.length) sub.textContent = parts.join(' • ');
     li.append(a, sub);
     ul.appendChild(li);
     fillBadge(d, badge);

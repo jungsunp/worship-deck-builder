@@ -50,20 +50,68 @@ def notify(message: str, title: str = "Worship Deck") -> None:
     )
 
 
-@contextmanager
-def run_record(service_date: str):
-    """Time a weekly run, append a JSON record, and notify the phone on failure."""
+class StepTimer:
+    """Collect per-step durations via context manager."""
+
+    def __init__(self) -> None:
+        self._steps: dict[str, float] = {}
+
+    @contextmanager
+    def step(self, name: str):  # type: ignore[override]
+        t = time.monotonic()
+        try:
+            yield
+        finally:
+            self._steps[name] = round(time.monotonic() - t, 1)
+
+    def to_dict(self) -> dict[str, float]:
+        return dict(self._steps)
+
+
+def write_run_record(
+    service_date: str,
+    phase: str,
+    ok: bool,
+    seconds: float,
+    steps: dict[str, float] | None = None,
+    error: str | None = None,
+) -> None:
+    """Append one JSON record to logs/runs.jsonl (called directly for assemble phase)."""
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    start = time.time()
-    rec: dict = {"service_date": service_date, "ok": False}
+    rec: dict = {"service_date": service_date, "phase": phase, "ok": ok, "seconds": seconds}
+    if steps:
+        rec["steps"] = steps
+    if error:
+        rec["error"] = error
+    with (LOG_DIR / "runs.jsonl").open("a") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+@contextmanager
+def run_record(service_date: str, phase: str = "build"):
+    """Time a weekly run, append a JSON record, and notify the phone on failure.
+
+    Yields a StepTimer — the caller may use `timer.step("name")` to record sub-step
+    durations; they are written into the record's `steps` field automatically.
+    """
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    start = time.monotonic()
+    timer = StepTimer()
+    ok = False
+    error: str | None = None
     try:
-        yield rec
-        rec["ok"] = True
+        yield timer
+        ok = True
     except Exception as e:  # noqa: BLE001 - record then re-raise
-        rec["error"] = repr(e)
+        error = repr(e)
         notify(f"Deck build FAILED for {service_date}: {e}")
         raise
     finally:
-        rec["seconds"] = round(time.time() - start, 1)
-        with (LOG_DIR / "runs.jsonl").open("a") as f:
-            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+        write_run_record(
+            service_date,
+            phase,
+            ok,
+            round(time.monotonic() - start, 1),
+            timer.to_dict() or None,
+            error,
+        )

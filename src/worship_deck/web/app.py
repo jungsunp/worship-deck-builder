@@ -7,9 +7,11 @@ a PDF preview of the draft. This is the human-in-the-loop checkpoint.
 
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
+import time
 from dataclasses import asdict, fields
 from pathlib import Path
 
@@ -274,6 +276,8 @@ def _assemble_async(service_date: str) -> None:
     and recorded in `_STATUS` so the page reports them instead of the worker crashing.
     """
     logger = obs.configure_logging()
+    t0 = time.monotonic()
+    steps: dict[str, float] = {}
     try:
         data = store.load(service_date)
         warnings: list[str] = []  # missing-slot / best-effort failures; joined into the status
@@ -284,7 +288,13 @@ def _assemble_async(service_date: str) -> None:
         if "worship_songs" not in data.edited_fields:
             if not _sheet_paths():
                 warnings.append("no 찬양 sheet images in inbox — medley not transcribed")
-            songs = [s for img in _sheet_paths() for s in lyrics_transcribe.transcribe(str(img))]
+            songs = []
+            for i, img in enumerate(_sheet_paths()):
+                sheet_steps: dict[str, float] = {}
+                result = lyrics_transcribe.transcribe(str(img), steps=sheet_steps)
+                songs.extend(result)
+                for k, v in sheet_steps.items():
+                    steps[f"{k}_sheet_{i}"] = v
             data.worship_songs = [asdict(s) for s in songs]
 
         # 고백의 찬양 (#109): transcribed from its dedicated sheet image. Best-effort like the
@@ -295,7 +305,10 @@ def _assemble_async(service_date: str) -> None:
                 warnings.append("no 고백의 찬양 sheet image in inbox")
             else:
                 try:
-                    confession = lyrics_transcribe.transcribe(str(img))
+                    confession_steps: dict[str, float] = {}
+                    confession = lyrics_transcribe.transcribe(str(img), steps=confession_steps)
+                    for k, v in confession_steps.items():
+                        steps[f"{k}_confession"] = v
                     if confession:
                         data.confession_song = asdict(confession[0])
                     else:
@@ -313,15 +326,18 @@ def _assemble_async(service_date: str) -> None:
                 data.choir_song = asdict(parse_choir_text(text))
 
         _STATUS[service_date] = {"status": "running", "step": "verses", "error": None}
+        tb = time.monotonic()
         if data.call_to_worship_ref:
             data.call_to_worship_passage = [asdict(v) for v in verses.lookup_verses(data.call_to_worship_ref)]
         if data.sermon_ref:
             data.sermon_passage = [asdict(v) for v in verses.lookup_verses(data.sermon_ref)]
+        steps["bible"] = round(time.monotonic() - tb, 1)
 
         # Best-effort: a failed/forbidden hymn download must not discard the transcribe/verses
         # work above. On failure we record a warning and leave offering_hymn_images empty so
         # the operator can add the hymn manually.
         _STATUS[service_date] = {"status": "running", "step": "hymn", "error": None}
+        th = time.monotonic()
         if data.offering_hymn_number:
             try:
                 pngs = hymn.fetch_hymn_slides(
@@ -333,18 +349,25 @@ def _assemble_async(service_date: str) -> None:
                     "Hymn fetch failed for %s (hymn %s)", service_date, data.offering_hymn_number
                 )
                 warnings.append(f"hymn {data.offering_hymn_number} download failed — add it manually")
+        steps["hymn"] = round(time.monotonic() - th, 1)
 
         store.save(service_date, data)
+        total = round(time.monotonic() - t0, 1)
         _STATUS[service_date] = {
             "status": "done",
             "step": None,
             "error": None,
             "warning": "\n".join(warnings) or None,
+            "seconds": total,
+            "steps": steps,
         }
-        logger.info("Assembled run for %s (%d song(s))", service_date, len(data.worship_songs))
+        obs.write_run_record(service_date, "assemble", True, total, steps)
+        logger.info("Assembled run for %s (%d song(s)) in %.1fs", service_date, len(data.worship_songs), total)
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Assemble failed for %s", service_date)
-        _STATUS[service_date] = {"status": "error", "step": None, "error": repr(e)}
+        total = round(time.monotonic() - t0, 1)
+        _STATUS[service_date] = {"status": "error", "step": None, "error": repr(e), "seconds": total, "steps": steps}
+        obs.write_run_record(service_date, "assemble", False, total, steps, repr(e))
 
 
 @app.post("/assemble")
@@ -415,6 +438,30 @@ def review(service_date: str) -> FileResponse:
 @app.get("/history")
 def history() -> FileResponse:
     return FileResponse(STATIC_DIR / "runs.html")
+
+
+@app.get("/perf")
+def perf_page() -> FileResponse:
+    return FileResponse(STATIC_DIR / "perf.html")
+
+
+@app.get("/api/perf")
+def perf_data() -> dict:
+    """All run records from logs/runs.jsonl, newest first, for the performance dashboard."""
+    runs_file = obs.LOG_DIR / "runs.jsonl"
+    if not runs_file.is_file():
+        return {"runs": []}
+    records = []
+    with runs_file.open(encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                try:
+                    records.append(json.loads(line))
+                except json.JSONDecodeError:
+                    pass
+    records.reverse()
+    return {"runs": records}
 
 
 @app.get("/runs")
@@ -523,16 +570,18 @@ def _build_async(service_date: str) -> None:
     PDF preview is a follow-up (#26 split): for now the operator reviews the opened deck.
     """
     logger = obs.configure_logging()
+    t0 = time.monotonic()
     try:
         path = pipeline.run(service_date)
         # Open the draft in Keynote on the Mac (operator is at the machine). Best-effort:
         # the build already succeeded, so a failed `open` shouldn't flip the status to error.
         subprocess.run(["open", path], check=False)
-        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "error": None}
-        logger.info("Built draft for %s at %s", service_date, path)
+        total = round(time.monotonic() - t0, 1)
+        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "error": None, "seconds": total}
+        logger.info("Built draft for %s at %s in %.1fs", service_date, path, total)
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Build failed for %s", service_date)
-        _BUILD_STATUS[service_date] = {"status": "error", "path": None, "error": repr(e)}
+        _BUILD_STATUS[service_date] = {"status": "error", "path": None, "error": repr(e), "seconds": round(time.monotonic() - t0, 1)}
 
 
 @app.post("/runs/{service_date}/build")

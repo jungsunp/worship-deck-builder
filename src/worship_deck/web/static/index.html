@@ -108,6 +108,10 @@
   <button type="button" id="assemble" onclick="ctaClick()" disabled>Assemble</button>
 </div>
 <script>
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m ? m + '분 ' + sec + '초' : sec + '초';
+}
 let _timer, _choirTimer;
 let _phase = 'idle';   // idle | running | done — drives the CTA and stepper
 let _doneDate = null;  // service date of the finished assemble (CTA → review link)
@@ -317,7 +321,8 @@ function poll(url, date) {
     if (s.status === 'done') {
       _phase = 'done'; _doneDate = date;
       setStep('assemble', 'done'); setStep('review', 'active');
-      showStatus('✓ ' + date + ' assemble 완료 — 검토로 이동하세요');
+      const dur = s.seconds ? ' • ' + fmtDur(s.seconds) : '';
+      showStatus('✓ ' + date + ' assemble 완료' + dur + ' — 검토로 이동하세요');
       updateCta();
     } else if (s.status === 'error') {
       _phase = 'idle';

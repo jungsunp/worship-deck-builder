@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worship Deck — 성능</title>
+<link rel="icon" href="/static/favicon.svg">
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  a { color: var(--blue); }
+  .nav { display: flex; gap: 1rem; align-items: center; }
+  .hint { color: var(--gray-600); font-size: 0.85rem; }
+  .run-group { margin-bottom: 1.5rem; }
+  .run-group h2 { font-size: 1rem; font-weight: 600; margin: 0 0 0.5rem; }
+  .phase-card { background: var(--gray-50, #f9f9f9); border: 1px solid var(--gray-100);
+                border-radius: var(--radius); padding: 0.75rem; margin-bottom: 0.5rem; }
+  .phase-header { display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem; }
+  .phase-badge { font-size: 0.8rem; font-weight: 700; padding: 0.2rem 0.5rem;
+                 border-radius: 4px; text-transform: uppercase; }
+  .phase-badge.assemble { background: #dbeafe; color: #1d4ed8; }
+  .phase-badge.build { background: #dcfce7; color: #15803d; }
+  .phase-badge.err { background: #fee2e2; color: #b91c1c; }
+  .phase-total { font-size: 0.95rem; font-weight: 600; }
+  .phase-ts { font-size: 0.8rem; color: var(--gray-600); margin-left: auto; }
+  .bar { display: flex; height: 18px; border-radius: 4px; overflow: hidden;
+         background: var(--gray-200); gap: 1px; }
+  .bar-seg { height: 100%; min-width: 2px; position: relative; cursor: default; }
+  .bar-seg:hover::after {
+    content: attr(data-tip);
+    position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.8); color: #fff; font-size: 0.75rem; white-space: nowrap;
+    padding: 2px 6px; border-radius: 3px; pointer-events: none; z-index: 10;
+  }
+  .steps-legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem;
+                  margin-top: 0.4rem; font-size: 0.78rem; color: var(--gray-700); }
+  .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+                margin-right: 3px; vertical-align: middle; }
+  .err-msg { color: var(--red); font-size: 0.85rem; margin-top: 0.25rem; }
+</style>
+</head>
+<body>
+<div class="nav"><a href="/">← 홈</a><a href="/history">지난 실행</a></div>
+<h1>성능 대시보드</h1>
+<div id="content"><p class="hint">불러오는 중…</p></div>
+<script>
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m ? m + '분 ' + sec + '초' : sec + '초';
+}
+
+// Step color palette — keyed by step name prefix
+const COLORS = {
+  ocr:        '#3b82f6',  // blue
+  gasazip:    '#06b6d4',  // cyan
+  ollama:     '#f97316',  // orange
+  bible:      '#22c55e',  // green
+  hymn:       '#a855f7',  // purple
+  startup:    '#94a3b8',  // slate
+  save_draft: '#64748b',
+  anchor:     '#475569',
+  date_slides:'#64748b',
+  delete:     '#94a3b8',
+  sermon:     '#f43f5e',  // rose
+  announcement:'#fb923c',
+  hymn_title: '#c084fc',
+  hymn_slides:'#a855f7',
+  choir:      '#ec4899',  // pink
+  confession: '#f472b6',
+  ctw:        '#818cf8',  // indigo
+  worship:    '#ef4444',  // red
+  finalize:   '#64748b',
+};
+
+function stepColor(name) {
+  for (const [prefix, color] of Object.entries(COLORS)) {
+    if (name.startsWith(prefix)) return color;
+  }
+  return '#cbd5e1';
+}
+
+function renderBar(steps, totalSec) {
+  const bar = document.createElement('div'); bar.className = 'bar';
+  const legend = document.createElement('div'); legend.className = 'steps-legend';
+  const entries = Object.entries(steps).sort((a, b) => b[1] - a[1]);
+  const known = totalSec || entries.reduce((s, [, v]) => s + v, 0) || 1;
+  for (const [name, sec] of entries) {
+    const pct = Math.max(1, (sec / known) * 100);
+    const color = stepColor(name);
+    const seg = document.createElement('div');
+    seg.className = 'bar-seg';
+    seg.style.cssText = 'flex:0 0 ' + pct + '%;background:' + color;
+    seg.dataset.tip = name + ': ' + fmtDur(sec);
+    bar.appendChild(seg);
+    const dot = document.createElement('span'); dot.className = 'legend-dot';
+    dot.style.background = color;
+    const item = document.createElement('span');
+    item.append(dot, name + ' ' + fmtDur(sec));
+    legend.appendChild(item);
+  }
+  return {bar, legend};
+}
+
+function renderPhase(rec) {
+  const card = document.createElement('div'); card.className = 'phase-card';
+  const hdr = document.createElement('div'); hdr.className = 'phase-header';
+  const badge = document.createElement('span');
+  const ph = rec.phase || 'build';
+  badge.className = 'phase-badge ' + (rec.ok ? ph : 'err');
+  badge.textContent = ph === 'assemble' ? 'Assemble' : 'Build';
+  const total = document.createElement('span'); total.className = 'phase-total';
+  total.textContent = rec.seconds != null ? fmtDur(rec.seconds) : '—';
+  hdr.append(badge, total);
+  card.appendChild(hdr);
+  if (!rec.ok && rec.error) {
+    const err = document.createElement('div'); err.className = 'err-msg';
+    err.textContent = rec.error;
+    card.appendChild(err);
+  }
+  if (rec.steps && Object.keys(rec.steps).length) {
+    const {bar, legend} = renderBar(rec.steps, rec.seconds);
+    card.appendChild(bar);
+    card.appendChild(legend);
+  }
+  return card;
+}
+
+async function load() {
+  const data = await fetch('/api/perf').then(r => r.json()).catch(() => ({runs: []}));
+  const el = document.getElementById('content');
+  if (!data.runs || !data.runs.length) {
+    el.innerHTML = '<p class="hint">기록 없음 — Assemble 또는 Build를 먼저 실행하세요.</p>';
+    return;
+  }
+  el.innerHTML = '';
+  // Group by service_date (records arrive newest-first from the API)
+  const groups = {};
+  const order = [];
+  for (const rec of data.runs) {
+    const d = rec.service_date;
+    if (!groups[d]) { groups[d] = []; order.push(d); }
+    groups[d].push(rec);
+  }
+  for (const d of order) {
+    const grp = document.createElement('div'); grp.className = 'run-group';
+    const h2 = document.createElement('h2'); h2.textContent = d;
+    grp.appendChild(h2);
+    for (const rec of groups[d]) grp.appendChild(renderPhase(rec));
+    el.appendChild(grp);
+  }
+}
+load();
+</script>
+</body>
+</html>
