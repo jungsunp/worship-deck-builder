@@ -93,7 +93,7 @@ def test_reassemble_sends_model_and_format(monkeypatch: pytest.MonkeyPatch) -> N
         captured["json"] = kw.get("json", {})
         return _FakeResponse(_ollama_payload([]))
 
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3.5:27b")
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:14b")
     monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
     monkeypatch.setattr(httpx, "post", fake_post)
 
@@ -101,9 +101,9 @@ def test_reassemble_sends_model_and_format(monkeypatch: pytest.MonkeyPatch) -> N
 
     assert captured["url"] == "http://127.0.0.1:11434/api/generate"
     body = captured["json"]
-    assert body["model"] == "qwen3.5:27b"
+    assert body["model"] == "qwen3:14b"
     assert body["stream"] is False
-    assert body["think"] is False                       # thinking models else return empty
+    assert body["think"] is True                        # better recall/spacing on qwen3:14b
     assert body["format"]["required"] == ["songs"]      # structured JSON output
     assert body["options"]["temperature"] == 0
 

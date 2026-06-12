@@ -106,7 +106,7 @@ def test_rebreak_uses_valid_model_split(monkeypatch: pytest.MonkeyPatch) -> None
     assert L.rebreak(["짧은 줄", _LONG]) == ["짧은 줄", *_GOOD_SPLIT]
     assert len(calls) == 1  # one batched call, over-long lines only
     assert _LONG in calls[0]["prompt"]
-    assert "짧은 줄" not in calls[0]["prompt"].split("가사 줄들:")[1]
+    assert "짧은 줄" not in calls[0]["prompt"].split("다음과 같습니다:")[1]
 
 
 def test_rebreak_falls_back_when_model_alters_text(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -127,10 +127,9 @@ def test_rebreak_falls_back_when_ollama_unreachable(monkeypatch: pytest.MonkeyPa
     assert all(len(p) <= L.MAX_CHARS for p in parts)
 
 
-def test_rebreak_uses_split_model_override(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Splitting and reassembly need different models (see docs/gotchas.md #126).
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen2.5:14b")
-    monkeypatch.setenv("OLLAMA_SPLIT_MODEL", "qwen3:14b")
+def test_rebreak_uses_ollama_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    # One model serves both lyric tasks (2026-06-11 bake-off, docs/gotchas.md).
+    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:14b")
     seen: dict = {}
 
     def _post(url: str, *, json: dict, timeout: int) -> _FakeResponse:  # noqa: A002
