@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Worship Deck — 검토</title>
+<link rel="icon" href="/static/favicon.svg">
 <link rel="stylesheet" href="/static/app.css">
 <style>
   body { padding-bottom: calc(6rem + var(--safe-bottom)); }  /* keep content above stickybar */
@@ -24,13 +25,23 @@
   .secbody { padding: 0 var(--space-3) var(--space-3); }
   .song { border-top: 1px solid var(--gray-100); margin-top: 0.5rem; padding-top: 0.5rem; }
   .song .hd { display: flex; align-items: center; gap: 0.5rem; }
-  .song .hd .t, .song .t { flex: 1; font-weight: 500; }
+  .song .hd input { flex: 1; width: auto; min-width: 0; }
   .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; border: 0;
                      border-radius: var(--radius); background: var(--blue); color: #fff; }
+  /* 찬양 medley: one tab per song, panels stay in DOM (hidden) so save sees all edits. */
+  .tabs { display: flex; gap: 0.4rem; overflow-x: auto; -webkit-overflow-scrolling: touch;
+          margin-top: 0.5rem; }
+  .tab { flex: none; max-width: 12em; overflow: hidden; text-overflow: ellipsis;
+         white-space: nowrap; padding: 0.45rem 0.8rem; font-size: 0.95rem;
+         border: 1px solid var(--gray-200); border-radius: 999px; background: #fff; }
+  .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
   textarea, input { width: 100%; font-size: 1rem; box-sizing: border-box; }
   textarea { min-height: 3.5rem; overflow: hidden; resize: none; }  /* auto-grow (#112) */
   input { padding: 0.5rem; margin: 0.25rem 0; }
-  .passage { white-space: pre-wrap; font-size: 0.95rem; }
+  .passage { white-space: pre-wrap; font-size: 0.95rem; margin-bottom: 0.5rem; }
+  .vlabel { color: var(--gray-600); font-size: 0.8rem; font-weight: 600; margin-top: 0.5rem; }
+  .subhd { font-weight: 600; margin-top: 0.75rem; border-top: 1px solid var(--gray-100);
+           padding-top: 0.5rem; }
   .hymngrid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
   .hymnthumb { position: relative; width: 30%; cursor: pointer; border: 2px solid var(--green);
                border-radius: 6px; overflow: hidden; }
@@ -229,18 +240,41 @@ document.getElementById('order').addEventListener('input', e => {
   if (e.target.tagName === 'TEXTAREA') autogrow(e.target);
 });
 
+// One tab per song; only the active song's editor shows. All panels stay in the DOM
+// (hidden) so syncFromDom round-trips every song's edits regardless of the active tab.
+let medleyTab = 0;
 function renderMedley(div) {
-  (run.worship_songs || []).forEach((song, s) => {
+  const songs = run.worship_songs || [];
+  if (!songs.length) return;
+  if (medleyTab >= songs.length) medleyTab = 0;
+  const tabs = document.createElement('div'); tabs.className = 'tabs';
+  div.appendChild(tabs);
+  const panels = [];
+  songs.forEach((song, s) => {
+    const tab = document.createElement('button'); tab.type = 'button';
+    tab.className = 'tab' + (s === medleyTab ? ' active' : '');
+    tab.textContent = song.title || '(제목 없음)';
+    tab.onclick = () => {
+      medleyTab = s;
+      tabs.querySelectorAll('.tab').forEach((t, i) => t.classList.toggle('active', i === s));
+      panels.forEach((p, i) => { p.hidden = i !== s; });
+      panels[s].querySelectorAll('textarea').forEach(autogrow);  // scrollHeight was 0 while hidden
+    };
+    tabs.appendChild(tab);
     const sd = document.createElement('div'); sd.className = 'song';
+    sd.hidden = s !== medleyTab;
     const hd = document.createElement('div'); hd.className = 'hd';
-    const t = document.createElement('span'); t.className = 't';
-    t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
+    const ti = document.createElement('input');
+    ti.dataset.kind = 'worship-title'; ti.dataset.i = s;
+    ti.placeholder = '곡 제목'; ti.value = song.title || '';
+    ti.addEventListener('input', () => { tab.textContent = ti.value || '(제목 없음)'; });
     const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(s, -1);
     const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(s, 1);
-    hd.append(t, up, dn); sd.appendChild(hd);
+    hd.append(ti, up, dn); sd.appendChild(hd);
     const ta = document.createElement('textarea');
     ta.dataset.kind = 'worship'; ta.dataset.i = s; ta.value = (song.lines || []).join('\n');
     sd.appendChild(ta);
+    panels.push(sd);
     div.appendChild(sd);
   });
 }
@@ -254,9 +288,13 @@ function renderSong(div, song, kind, hint) {
     return;
   }
   const sd = document.createElement('div'); sd.className = 'song';
-  const t = document.createElement('div'); t.className = 't';
-  t.textContent = song.title + (song.composer ? ' — ' + song.composer : '');
-  sd.appendChild(t);
+  const ti = document.createElement('input');
+  ti.dataset.kind = kind + '-title'; ti.placeholder = '곡 제목'; ti.value = song.title || '';
+  sd.appendChild(ti);
+  if (song.composer) {
+    const c = document.createElement('div'); c.className = 'meta'; c.textContent = song.composer;
+    sd.appendChild(c);
+  }
   const ta = document.createElement('textarea');
   ta.dataset.kind = kind; ta.value = (song.lines || []).join('\n');
   sd.appendChild(ta);
@@ -330,17 +368,26 @@ function renderAnnounce(div) {
   div.appendChild(ta);
 }
 
+// Korean block first, then English — reviewing each translation as one run of text is
+// easier than interleaved ko/en lines.
 function renderPassage(div, passage) {
   if (!passage || !passage.length) return;
-  const p = document.createElement('div'); p.className = 'passage';
-  p.textContent = passage.map(v => v.number + '. ' + v.korean + ' / ' + v.english).join('\n');
-  div.appendChild(p);
+  [['한글', 'korean'], ['English', 'english']].forEach(([label, field]) => {
+    const lines = passage.filter(v => v[field]).map(v => v.number + '. ' + v[field]);
+    if (!lines.length) return;
+    const l = document.createElement('div'); l.className = 'vlabel'; l.textContent = label;
+    const p = document.createElement('div'); p.className = 'passage';
+    p.textContent = lines.join('\n');
+    div.append(l, p);
+  });
 }
 
 // Main passage + the ad-hoc extra refs the pastor will cite (#114). Refs are looked up
 // server-side on save, so the passage previews below reflect the LAST save, not unsaved edits.
 function renderSermon(div) {
   renderPassage(div, run.sermon_passage);
+  const sub = document.createElement('div'); sub.className = 'subhd'; sub.textContent = '추가 구절';
+  div.appendChild(sub);
   const ta = document.createElement('textarea');
   ta.dataset.kind = 'extrarefs';
   ta.placeholder = '추가 말씀 구절 — 한 줄에 하나 (예: 요 3:16, 시 4:15-20)';
@@ -368,10 +415,17 @@ function syncFromDom() {
   document.querySelectorAll('#order textarea[data-kind="worship"]').forEach(ta => {
     run.worship_songs[ta.dataset.i].lines = splitLines(ta.value);
   });
+  document.querySelectorAll('#order input[data-kind="worship-title"]').forEach(ti => {
+    run.worship_songs[ti.dataset.i].title = ti.value.trim();
+  });
   const choirTa = document.querySelector('#order textarea[data-kind="choir"]');
   if (choirTa && run.choir_song) run.choir_song.lines = splitKeepBlanks(choirTa.value);
+  const choirTi = document.querySelector('#order input[data-kind="choir-title"]');
+  if (choirTi && run.choir_song) run.choir_song.title = choirTi.value.trim();
   const confTa = document.querySelector('#order textarea[data-kind="confession"]');
   if (confTa && run.confession_song) run.confession_song.lines = splitKeepBlanks(confTa.value);
+  const confTi = document.querySelector('#order input[data-kind="confession-title"]');
+  if (confTi && run.confession_song) run.confession_song.title = confTi.value.trim();
   const annTa = document.querySelector('#order textarea[data-kind="ann"]');
   if (annTa) run.announcements = annTa.value.split(/\n-{3,}\n/).map(s => s.trim()).filter(Boolean);
   const hn = document.getElementById('hymnNumber');
@@ -388,6 +442,7 @@ function move(s, d) {
   const j = s + d;
   if (j < 0 || j >= songs.length) return;
   [songs[s], songs[j]] = [songs[j], songs[s]];
+  medleyTab = j;  // moved song stays the active tab
   edited.opening = true;
   render();
 }
