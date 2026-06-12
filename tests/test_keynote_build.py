@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,12 +10,14 @@ import pytest
 
 from worship_deck.bible.verses import Verse
 from worship_deck.keynote import build as B
+from worship_deck.keynote.anchors import detect_anchors
 from worship_deck.keynote.build import (
     _chunk_verses,
     _fit_title,
     _wrap_balanced,
     build,
     delete_slides,
+    dump_slide_texts,
     duplicate_block,
     duplicate_slide,
     fill_announcement_slides,
@@ -47,6 +50,11 @@ from worship_deck.parse.bulletin import ServiceData
 # Body-box geometry from master.key (width, height), used to drive the chunk model in tests.
 _CTW_KO_BOX, _CTW_EN_BOX = (1844, 544), (1836, 298)   # call-to-worship (slide 48)
 _SERMON_KO_BOX, _SERMON_EN_BOX = (1837, 533), (1822, 332)  # sermon (slide 129)
+
+# Sanitized per-slide text dump of master.key (#98): build() detects its section anchors from
+# this at run time, so the orchestration tests stub dump_slide_texts with it and let the real
+# detection produce the reference anchors (6/41, 47/48, 57, 77, 97, 117, 127/129/134, 135/18).
+_SLIDE_TEXTS_FIXTURE = Path(__file__).parent / "fixtures" / "master_slide_texts.json"
 
 # ---------------------------------------------------------------------------
 # save_draft — mocked osascript (CI-safe, no Mac)
@@ -323,6 +331,30 @@ def test_delete_slides_passes_args_and_returns_count(monkeypatch: pytest.MonkeyP
     assert captured["cmd"] == ["osascript", str(B._DELETE_SLIDES), "draft.key", "132", "3"]
 
 
+def test_dump_slide_texts_parses_markers_and_dedupes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """#98: ###SLIDE n### markers split the dump per slide; the stacked/off-canvas duplicate
+    boxes collapse (identical lines deduped, blanks dropped, order kept)."""
+    captured: dict = {}
+    stdout = (
+        "###SLIDE 1###\n예배의 부름\n예배의 부름\n[ 시 133:1-3 ]\n"
+        "###SLIDE 2###\n\n"
+        "###SLIDE 3###\n둘째 줄\n첫째 줄\n둘째 줄\n"
+    )
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout=stdout)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    assert dump_slide_texts("draft.key") == [
+        ["예배의 부름", "[ 시 133:1-3 ]"],
+        [],
+        ["둘째 줄", "첫째 줄"],
+    ]
+    assert captured["cmd"] == ["osascript", str(B._DUMP_SLIDE_TEXTS), "draft.key"]
+
+
 # ---------------------------------------------------------------------------
 # set_slide_text / fill_song_slides — mocked (CI-safe, no Mac)
 # ---------------------------------------------------------------------------
@@ -331,9 +363,10 @@ def test_delete_slides_passes_args_and_returns_count(monkeypatch: pytest.MonkeyP
 def test_fill_sermon_extra_slides_inserts_reversed_at_fixed_anchors(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#114: each extra ref seeds a copy of the pristine 129 verse slide after 134 and fills
-    it at 135; refs run in REVERSE so the deck ends up in input order with fixed anchors.
-    An empty passage (lookup failed at save) is skipped entirely."""
+    """#114: each extra ref seeds a copy of the pristine verse-seed slide (129) after the
+    sermon title (134) and fills it at title+1 (135); refs run in REVERSE so the deck ends up
+    in input order with fixed anchors. An empty passage (lookup failed at save) is skipped
+    entirely. The anchors arrive from detect_anchors via build() (#98)."""
     calls: list[tuple] = []
     monkeypatch.setattr(
         B, "duplicate_block",
@@ -351,7 +384,7 @@ def test_fill_sermon_extra_slides_inserts_reversed_at_fixed_anchors(
         [{"number": 1, "korean": "한", "english": "en"}, {"number": 2, "korean": "한", "english": "en"}],
         [],  # skipped before any label parsing or slide op
     ]
-    B.fill_sermon_extra_slides("deck.key", refs, passages)
+    B.fill_sermon_extra_slides("deck.key", refs, passages, verse_seed=129, title_index=134)
 
     assert calls == [
         ("dup", 129, 1, 134, 1),
@@ -1006,6 +1039,24 @@ def test_save_draft_live_produces_file(real_template_key: Path, tmp_path: Path) 
 
 
 @pytest.mark.local_only
+def test_detect_anchors_live_on_real_template(real_template_key: Path, tmp_path: Path) -> None:
+    """#98: the template-drift check — run this after every master.key replacement.
+
+    Detection deriving every anchor from the real template's landmark text without raising is
+    the whole guarantee: a swapped master.key that breaks a landmark fails HERE (and at build
+    time) instead of silently editing the wrong slides. No equality with today's numbers is
+    asserted — a new template legitimately moves them; detect_anchors itself validates
+    ordering and non-empty sections.
+    """
+    draft = tmp_path / "draft-anchors.key"
+    save_draft(str(real_template_key), str(draft))
+
+    anchors = detect_anchors(dump_slide_texts(str(draft)))
+
+    assert anchors.worship_start < anchors.call_ref < anchors.sermon_title
+
+
+@pytest.mark.local_only
 def test_save_draft_binds_open_doc_to_draft_not_template(
     real_template_key: Path, tmp_path: Path
 ) -> None:
@@ -1435,6 +1486,11 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     # Stubbed silently (not recorded): build() calls it before save_draft to clear stale docs;
     # it would otherwise launch Keynote and isn't part of the section-dispatch sequence.
     monkeypatch.setattr(B, "_ensure_keynote_ready", lambda *a, **k: None)
+    # Also silent: the anchor-detection dump (#98). Returns the sanitized master.key fixture so
+    # detect_anchors runs for real and yields the reference anchors the assertions below expect.
+    monkeypatch.setattr(
+        B, "dump_slide_texts", lambda *a, **k: json.loads(_SLIDE_TEXTS_FIXTURE.read_text())
+    )
     return calls
 
 

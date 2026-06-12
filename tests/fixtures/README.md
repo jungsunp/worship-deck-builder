@@ -7,6 +7,9 @@ CI runs against anonymized stand-ins:
 - `sample_bulletin.pdf` — a fake bulletin with the same layout, dummy names/numbers
 - `sample_sheet.png` — a fake lyric sheet
 - `sample_template.key` — a tiny dummy Keynote (used only by `local_only` tests on a Mac)
+- `master_slide_texts.json` — the per-slide text dump of a real `master.key`
+  (`keynote.build.dump_slide_texts` output) with member names swapped for dummies; drives
+  the anchor-detection tests (#98)
 
 These let the parser, renderer, and Bible/lyrics logic be tested in CI without exposing
 anyone's data.
