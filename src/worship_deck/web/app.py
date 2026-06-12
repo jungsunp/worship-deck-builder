@@ -400,6 +400,11 @@ def review(service_date: str) -> FileResponse:
     return FileResponse(STATIC_DIR / "review.html")
 
 
+@app.get("/history")
+def history() -> FileResponse:
+    return FileResponse(STATIC_DIR / "runs.html")
+
+
 @app.get("/runs")
 def list_runs() -> dict:
     """Assembled runs by service date, newest first, for the home page to link to review."""

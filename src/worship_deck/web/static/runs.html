@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worship Deck — 지난 실행</title>
+<link rel="stylesheet" href="/static/app.css">
+<style>
+  a { color: var(--blue); }
+  .hint { color: var(--gray-600); font-size: 0.85rem; }
+  #history { list-style: none; padding: 0; margin: 0; }
+  #history li { padding: 0.6rem 0; border-bottom: 1px solid var(--gray-100); }
+  .runrow .main { display: flex; align-items: center; gap: 0.5rem; text-decoration: none;
+                  min-height: 44px; }
+  .runrow .date { flex: 1; font-size: 1rem; }
+  .runrow .badge { flex: none; font-size: 0.9rem; }
+  .badge.err { color: var(--red); font-weight: 700; }
+  .badge.none { color: var(--gray-500); }
+  /* Secondary line per run — future home of #118 per-step timings and #102 PDF preview. */
+  .runrow .sub { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.25rem; }
+  .runrow .sub:empty { display: none; }
+</style>
+</head>
+<body>
+<a href="/">← 홈</a>
+<h1>지난 실행</h1>
+<ul id="history"></ul>
+<script>
+// Outcome from the in-memory status endpoints; both report "unknown" after a server
+// restart, so older runs show '—' (the run itself is still reviewable).
+function outcome(asm, build) {
+  if (build.status === 'done') return ['빌드 완료', 'ok'];
+  if (build.status === 'error' || asm.status === 'error') return ['오류', 'err'];
+  if (asm.status === 'unknown' && build.status === 'unknown') return ['—', 'none'];
+  return ['검토 중', 'edit'];
+}
+async function fillBadge(d, badge) {
+  const [asm, build] = await Promise.all([
+    fetch('/assemble/' + d + '/status').then(r => r.json()),
+    fetch('/runs/' + d + '/build/status').then(r => r.json()),
+  ]);
+  const [text, cls] = outcome(asm, build);
+  badge.textContent = text;
+  badge.className = 'badge ' + cls;
+}
+async function load() {
+  const {runs} = await (await fetch('/runs')).json();
+  const ul = document.getElementById('history');
+  ul.innerHTML = runs.length ? '' : '<li class="hint">(아직 없음 — 먼저 Assemble 하세요)</li>';
+  for (const d of runs) {
+    const li = document.createElement('li'); li.className = 'runrow';
+    const a = document.createElement('a'); a.className = 'main'; a.href = '/review/' + d;
+    const date = document.createElement('span'); date.className = 'date';
+    date.textContent = d + ' — 검토 →';
+    const badge = document.createElement('span'); badge.className = 'badge none';
+    badge.textContent = '…';
+    a.append(date, badge);
+    const sub = document.createElement('div'); sub.className = 'sub';
+    li.append(a, sub);
+    ul.appendChild(li);
+    fillBadge(d, badge);
+  }
+}
+load();
+</script>
+</body>
+</html>
