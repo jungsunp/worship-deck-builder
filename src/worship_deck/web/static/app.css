@@ -30,3 +30,49 @@ body {
 h1 { font-size: 1.3rem; }
 h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
 input, textarea { font-size: 16px; }  /* below 16px iOS Safari zooms on focus */
+
+/* ── Shared components (Phase 1 #132; Phase 2 reuses these on the review page) ── */
+
+.card { border: 1px solid var(--gray-200); border-radius: var(--radius);
+        padding: var(--space-3); margin: var(--space-2) 0; }
+.card.warn { border-color: var(--amber); color: var(--amber); white-space: pre-wrap; }
+.card.err { border-color: var(--red); color: var(--red); white-space: pre-wrap; }
+
+/* Checklist slot card: .empty = whole card is the file-pick target (tap-hint keeps it
+   well past 44px); .filled shows ✓ + file rows + replace/add; .error = rejected upload. */
+.slotcard.empty { cursor: pointer; }
+.slotcard.error { border-color: var(--red); }
+.slotcard .slothead { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; }
+.slotcard .mark { flex: none; }
+.slotcard.filled .mark { color: var(--green); }
+.slotcard .tap-hint { color: var(--gray-400); padding: var(--space-3) 0 var(--space-1); }
+.slotcard.filled .tap-hint { display: none; }
+.slotcard.empty .when-filled { display: none; }
+.slotcard .sloterr { color: var(--red); font-size: 0.9rem; margin-top: var(--space-1); }
+
+/* 4-step pipeline stepper; dot glyphs set by JS: ○ empty / ◐ active / ● done / ✕ error. */
+.stepper { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-3) 0; }
+.stepper .step { display: inline-flex; align-items: center; gap: var(--space-1);
+                 font-size: 0.85rem; color: var(--gray-500); white-space: nowrap; }
+.stepper .step.active { color: var(--blue); font-weight: 600; }
+.stepper .step.done { color: var(--green); }
+.stepper .step.error { color: var(--red); font-weight: 600; }
+.stepper .sep { flex: 1; min-width: var(--space-2); border-top: 1px solid var(--gray-200); }
+
+/* Sticky bottom action bar (thumb zone, §1.4). Pages must pad <body> bottom to match. */
+.stickybar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+             display: flex; gap: var(--space-2); box-sizing: border-box;
+             background: #fff; border-top: 1px solid var(--gray-200);
+             padding: var(--space-3) var(--space-4) calc(var(--space-3) + var(--safe-bottom)); }
+.stickybar button { flex: 1; min-height: 44px; padding: var(--space-3); font-size: 1.1rem;
+                    border: 0; border-radius: var(--radius);
+                    background: var(--green); color: #fff; }
+.stickybar button:disabled { background: var(--gray-400); }
+.stickybar .secondary { flex: 0 1 auto; background: #fff; color: var(--green);
+                        border: 1px solid var(--green); }
+
+/* Status badges (✓ ready / ✎ edited / ⚠ missing) — variant classes only, so the
+   review page's scoped .hymnthumb .badge keeps its own look. */
+.badge.ok { color: var(--green); font-weight: 700; }
+.badge.edit { color: var(--blue); font-weight: 700; }
+.badge.warn { color: var(--amber); font-weight: 700; }
