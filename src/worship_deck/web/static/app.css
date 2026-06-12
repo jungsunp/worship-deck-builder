@@ -1,0 +1,32 @@
+/* Shared design tokens + base styles (UI revamp #123, Phase 0 #131).
+   Both pages link this before their own <style>, so page rules override shared ones.
+   Spacing tokens are px and meant for new components in later phases — existing rem
+   paddings stay rem (they track user font scaling). */
+:root {
+  --blue: #2563eb;    /* upload / links */
+  --green: #16a34a;   /* assemble / save / ok */
+  --purple: #7c3aed;  /* build */
+  --red: #dc2626;     /* delete / error */
+  --amber: #d97706;   /* warning */
+  --gray-100: #eee;   /* light borders */
+  --gray-200: #ddd;   /* borders */
+  --gray-400: #aaa;   /* empty-state text */
+  --gray-500: #999;   /* dropped/disabled badge */
+  --gray-600: #888;   /* hints, secondary text */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-6: 24px;
+  --radius: 8px;
+  --safe-bottom: env(safe-area-inset-bottom);
+}
+body {
+  font-family: -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  margin: 0;
+  padding: 1.5rem;
+  word-break: keep-all;  /* Korean: never break mid-word */
+}
+h1 { font-size: 1.3rem; }
+h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
+input, textarea { font-size: 16px; }  /* below 16px iOS Safari zooms on focus */

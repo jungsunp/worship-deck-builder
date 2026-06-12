@@ -36,7 +36,7 @@ uvicorn worship_deck.web.app:app --host 0.0.0.0 --port 8787  # LAN/phone access:
 
 Section structure, content sources, and render modes are declared in `config/slide_map.yaml`.
 
-The web app (`web/app.py`) is intentionally template-free: pages are inline HTML strings; dynamic content uses small JSON endpoints + `fetch`-based JS (e.g. assemble polling, inbox list). Match this — don't add Jinja2.
+The web app (`web/app.py`) is API-only: pages are static HTML/CSS/JS files under `web/static/` served by FastAPI (no template engine — `review.html` reads its date from `location.pathname`); dynamic content uses small JSON endpoints + `fetch`-based JS, with shared design tokens in `web/static/app.css`. Match this — don't add Jinja2 or a JS build step.
 
 The run is two-phase and web-driven: **assemble** (`web/app.py._assemble_async`: parse → lyric transcription → Bible verse lookup, persisted to the per-run `store.py`) → **human review** (inline editors in the web app) → **build** (`pipeline.run` loads the reviewed `ServiceData` from the store and drives Keynote). All five steps are implemented; `parse`, `bible`, `lyrics.chunk()`, and the `keynote` builder all shipped (#62–#95).
 
