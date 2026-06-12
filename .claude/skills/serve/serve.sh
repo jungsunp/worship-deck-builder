@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Start the worship-deck review/build web app with the project env loaded.
 #
-# Solves the recurring "ESV_API_KEY not set" / "Ollama is using the 27B model and
-# eating 24 GB" bug: uvicorn FREEZES its environment at launch and does NOT auto-load
-# .env, so the env must be exported into this shell *before* exec'ing uvicorn. Editing
-# .env after the server is up does nothing until you stop it and run this again.
+# Solves the recurring "ESV_API_KEY not set" / wrong-OLLAMA_MODEL bug: uvicorn FREEZES
+# its environment at launch and does NOT auto-load .env, so the env must be exported
+# into this shell *before* exec'ing uvicorn. Editing .env after the server is up does
+# nothing until you stop it and run this again.
 #
 # Usage:  .claude/skills/serve/serve.sh [extra uvicorn args, e.g. --reload]
 set -euo pipefail
@@ -28,7 +28,7 @@ fi
   exit 1
 }
 echo "✓ ESV_API_KEY loaded"
-echo "✓ OLLAMA_MODEL=${OLLAMA_MODEL:-<unset → uvicorn defaults to qwen3.5:27b, the 24GB hog>}"
+echo "✓ OLLAMA_MODEL=${OLLAMA_MODEL:-<unset → code default qwen3:14b>}"
 
 # 3. Ollama powers lyric transcription (the assemble step). Warn but don't block —
 #    reviewing/building an already-assembled run doesn't need it.

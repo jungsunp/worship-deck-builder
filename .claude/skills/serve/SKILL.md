@@ -1,6 +1,6 @@
 ---
 name: serve
-description: Start the worship-deck review/build web app (FastAPI/uvicorn) with the project .env loaded, so Bible lookups and lyric transcription actually work and an iPhone can reach it over Wi-Fi/Tailscale. Use whenever the user wants to "start/run the server", or after an assemble fails with "ESV_API_KEY not set" or Ollama using the wrong (24GB) model.
+description: Start the worship-deck review/build web app (FastAPI/uvicorn) with the project .env loaded, so Bible lookups and lyric transcription actually work and an iPhone can reach it over Wi-Fi/Tailscale. Use whenever the user wants to "start/run the server", or after an assemble fails with "ESV_API_KEY not set" or Ollama using the wrong model.
 ---
 
 # Start the web app
@@ -34,8 +34,8 @@ where:
 
 - `ESV_API_KEY` is empty → assemble dies with `RuntimeError: ESV_API_KEY environment variable is
   not set` at the Bible-verse step;
-- `OLLAMA_MODEL` is unset → lyric transcription falls back to the default `qwen3.5:27b` (27B,
-  ~24 GB RAM, slow) instead of the lighter `exaone3.5:7.8b`.
+- a non-default `OLLAMA_MODEL`/`OLLAMA_HOST` set in `.env` is silently ignored — lyric
+  transcription uses the code default (`qwen3:14b`) instead.
 
 Editing `.env` while the server is already up changes nothing — you must stop it and start again.
 The launcher exports the whole `.env` (`set -a; source .env; set +a`) **before** exec'ing uvicorn,
@@ -45,8 +45,8 @@ responding.
 ## Prerequisites (one-time)
 
 - `pip install -e ".[dev]"` into the project venv (the script prefers `.venv/bin/uvicorn`).
-- `.env` filled in (`ESV_API_KEY`, `TEMPLATE_KEY`; `OLLAMA_MODEL=exaone3.5:7.8b` recommended).
-- Ollama running for the assemble step: `ollama serve` + `ollama pull exaone3.5:7.8b`. The script
+- `.env` filled in (`ESV_API_KEY`, `TEMPLATE_KEY`; `OLLAMA_MODEL` defaults to `qwen3:14b`).
+- Ollama running for the assemble step: `ollama serve` + `ollama pull qwen3:14b`. The script
   only warns if it's down — reviewing/building an already-assembled run doesn't need it.
 - For phone access: macOS firewall set to "Allow" for the Python/uvicorn process; same Wi-Fi, or
   Tailscale when off-network.
