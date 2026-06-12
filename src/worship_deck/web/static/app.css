@@ -76,3 +76,14 @@ input, textarea { font-size: 16px; }  /* below 16px iOS Safari zooms on focus */
 .badge.ok { color: var(--green); font-weight: 700; }
 .badge.edit { color: var(--blue); font-weight: 700; }
 .badge.warn { color: var(--amber); font-weight: 700; }
+
+/* Section-jump chips (Phase 2 #133): sticky pill row, one horizontal scroll line.
+   Bleeds over the body's 1.5rem padding so content scrolls under it edge-to-edge. */
+.chips { position: sticky; top: 0; z-index: 9; display: flex; gap: var(--space-2);
+         overflow-x: auto; -webkit-overflow-scrolling: touch;
+         margin: 0 -1.5rem; padding: var(--space-2) 1.5rem;
+         background: #fff; border-bottom: 1px solid var(--gray-100); }
+.chips:empty { display: none; }
+.chip { flex: none; padding: 0.45rem 0.9rem; font-size: 0.95rem;
+        border: 1px solid var(--gray-200); border-radius: 999px;
+        background: #fff; color: var(--blue); }

@@ -2,19 +2,34 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Worship Deck — Review</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worship Deck — 검토</title>
 <link rel="stylesheet" href="/static/app.css">
 <style>
-  .row { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.75rem; margin: 0.5rem 0; }
-  .part { font-weight: 600; } .meta { color: var(--gray-600); font-size: 0.85rem; }
+  body { padding-bottom: calc(6rem + var(--safe-bottom)); }  /* keep content above stickybar */
   .hint { color: var(--gray-600); font-size: 0.85rem; margin: 0.25rem 0 0.75rem; }
+  /* Worship-order rows that carry no editor (기도, 축도, …) stay as plain compact rows. */
+  .row { border: 1px solid var(--gray-100); border-radius: var(--radius);
+         padding: 0.5rem 0.75rem; margin: 0.5rem 0; }
+  .part { font-weight: 600; } .meta { color: var(--gray-600); font-size: 0.85rem; }
+  /* Collapsible section card: whole header is the ≥44px toggle target. */
+  .seccard { padding: 0; scroll-margin-top: 60px; }  /* clear the sticky chips on jump */
+  .sechead { display: flex; align-items: center; gap: 0.5rem; min-height: 44px;
+             box-sizing: border-box; padding: var(--space-2) var(--space-3); cursor: pointer; }
+  .sechead .caret { color: var(--gray-500); font-size: 0.8rem; flex: none; }
+  .sechead .part { flex: none; }
+  .sechead .meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+                   white-space: nowrap; }
+  .sechead .badge { flex: none; }
+  .secbody { padding: 0 var(--space-3) var(--space-3); }
   .song { border-top: 1px solid var(--gray-100); margin-top: 0.5rem; padding-top: 0.5rem; }
   .song .hd { display: flex; align-items: center; gap: 0.5rem; }
   .song .hd .t, .song .t { flex: 1; font-weight: 500; }
-  .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; }
+  .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; border: 0;
+                     border-radius: var(--radius); background: var(--blue); color: #fff; }
   textarea, input { width: 100%; font-size: 1rem; box-sizing: border-box; }
-  textarea { min-height: 5rem; } input { padding: 0.5rem; margin: 0.25rem 0; }
+  textarea { min-height: 3.5rem; overflow: hidden; resize: none; }  /* auto-grow (#112) */
+  input { padding: 0.5rem; margin: 0.25rem 0; }
   .passage { white-space: pre-wrap; font-size: 0.95rem; }
   .hymngrid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
   .hymnthumb { position: relative; width: 30%; cursor: pointer; border: 2px solid var(--green);
@@ -25,32 +40,65 @@
                       font-size: 0.75rem; color: #fff; background: var(--green); }
   .hymnthumb.dropped .badge { background: var(--gray-500); }
   .hymncount { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.4rem; }
-  button { padding: 0.8rem; font-size: 1.05rem; border: 0; border-radius: var(--radius);
-           background: var(--blue); color: #fff; }
-  #save { width: 100%; background: var(--green); margin-top: 1rem; }
-  #generate { width: 100%; background: var(--purple); margin-top: 0.5rem; }
-  #generate:disabled { background: #c4b5fd; }
-  #status { margin-top: 0.75rem; font-size: 1rem; white-space: pre-wrap; }
+  #status { color: var(--gray-600); white-space: pre-wrap; }
+  #status.err { color: var(--red); border-color: var(--red); }
+  .stickybar #generate { background: var(--purple); }
+  .stickybar #generate:disabled { background: #c4b5fd; }
   a { color: var(--blue); }
 </style>
 </head>
 <body>
-<a href="/">← Home</a>
-<h1>Review <span id="date"></span></h1>
+<a href="/">← 홈</a>
+<h1><span id="date"></span> 검토</h1>
+<div class="stepper">
+  <span class="step" data-step="upload"><span class="dot">○</span>업로드</span>
+  <span class="sep"></span>
+  <span class="step" data-step="assemble"><span class="dot">○</span>Assemble</span>
+  <span class="sep"></span>
+  <span class="step" data-step="review"><span class="dot">○</span>검토</span>
+  <span class="sep"></span>
+  <span class="step" data-step="build"><span class="dot">○</span>빌드</span>
+</div>
+<div class="chips" id="chips"></div>
+<div class="card" id="status" hidden></div>
+<div class="card warn" id="warnCard" hidden></div>
 <p class="hint">전체 예배 순서대로 — 성가대 · 봉헌 · 광고는 해당 순서 자리에서 편집합니다.</p>
 <div id="order"></div>
 
-<button id="save" type="button" onclick="save()">Save</button>
-<button id="generate" type="button" onclick="generate()">Generate deck</button>
-<div id="status"></div>
+<div class="stickybar">
+  <button type="button" class="secondary" id="save" onclick="save()">저장</button>
+  <button type="button" id="generate" onclick="generate()">덱 생성</button>
+</div>
 <script>
 const date = location.pathname.split('/').pop();
-document.getElementById('date').textContent = date;
+const dm = date.match(/^\d{4}-(\d{2})-(\d{2})$/);
+document.getElementById('date').textContent = dm ? Number(dm[1]) + '월 ' + Number(dm[2]) + '일' : date;
 let run = null;
+
+const DOTS = {empty: '○', active: '◐', done: '●', error: '✕'};
+function setStep(name, state) {
+  const el = document.querySelector('.step[data-step="' + name + '"]');
+  el.className = 'step' + (state === 'empty' ? '' : ' ' + state);
+  el.querySelector('.dot').textContent = DOTS[state];
+}
+setStep('upload', 'done'); setStep('assemble', 'done'); setStep('review', 'active');
+
+function showStatus(text, isErr) {
+  const el = document.getElementById('status');
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle('err', !!isErr);
+}
+function showWarn(text) {
+  const el = document.getElementById('warnCard');
+  el.hidden = false;
+  el.textContent = text.split('\n').map(w => '⚠ ' + w).join('\n');
+  el.scrollIntoView({behavior: 'smooth', block: 'center'});
+}
 
 async function load() {
   const r = await fetch('/runs/' + date);
-  if (!r.ok) { document.getElementById('status').textContent = 'Load error: ' + r.status; return; }
+  if (!r.ok) { showStatus('✕ 불러오기 오류: ' + r.status, true); return; }
   run = await r.json();
   render();
 }
@@ -67,25 +115,119 @@ const isAnnounce = row => pk(row) === '교회소식';
 const isCtw = row => pk(row) === '예배의부름';
 const isSermon = row => pk(row) === '말씀';
 
+// Section cards (#133): chip label, default-expanded (editors the operator likely needs),
+// and the "no content" predicate behind the ⚠ badge. Missing sections always start expanded.
+const SECTIONS = [
+  {key: 'opening', chip: '찬양', match: isOpening, render: renderMedley, open: true,
+   missing: () => !(run.worship_songs || []).length},
+  {key: 'ctw', chip: '부름', match: isCtw, open: false,
+   render: d => renderPassage(d, run.call_to_worship_passage),
+   missing: () => !(run.call_to_worship_passage || []).length},
+  {key: 'confession', chip: '고백', match: isConfession, render: renderConfession, open: false,
+   missing: () => !(run.confession_song && run.confession_song.title)},
+  {key: 'choir', chip: '성가대', match: isChoir, render: renderChoir, open: false,
+   missing: () => !(run.choir_song && run.choir_song.title)},
+  {key: 'hymn', chip: '봉헌', match: isHymn, render: renderHymn, open: true,
+   missing: () => !run.offering_hymn_number && !(run.offering_hymn_images || []).length},
+  {key: 'announce', chip: '소식', match: isAnnounce, render: renderAnnounce, open: false,
+   missing: () => !(run.announcements || []).length},
+  {key: 'sermon', chip: '말씀', match: isSermon, render: renderSermon, open: false,
+   missing: () => !(run.sermon_passage || []).length},
+];
+const edited = {};     // key → operator touched the section this visit (✎ badge)
+const collapsed = {};  // key → card collapsed; seeded on first render, then operator-owned
+
+function rowMeta(row) { return [row.title, row.leader, row.ref].filter(Boolean).join(' · '); }
+
 function render() {
   const order = document.getElementById('order');
   order.innerHTML = '';
   run.worship_order.forEach((row) => {
-    const div = document.createElement('div'); div.className = 'row';
-    const head = document.createElement('div');
-    head.innerHTML = '<span class="part">' + (row.part || '') + '</span> '
-      + '<span class="meta">' + [row.title, row.leader, row.ref].filter(Boolean).join(' · ') + '</span>';
-    div.appendChild(head);
-    if (isOpening(row)) renderMedley(div);
-    else if (isChoir(row)) renderChoir(div);
-    else if (isConfession(row)) renderConfession(div);
-    else if (isHymn(row)) renderHymn(div);
-    else if (isAnnounce(row)) renderAnnounce(div);
-    else if (isCtw(row)) renderPassage(div, run.call_to_worship_passage);
-    else if (isSermon(row)) renderSermon(div);
-    order.appendChild(div);
+    const sec = SECTIONS.find(s => s.match(row));
+    order.appendChild(sec ? sectionCard(sec, row) : plainRow(row));
+  });
+  renderChips();
+  growVisible();
+}
+
+function plainRow(row) {
+  const div = document.createElement('div'); div.className = 'row';
+  const part = document.createElement('span'); part.className = 'part';
+  part.textContent = row.part || '';
+  const meta = document.createElement('span'); meta.className = 'meta';
+  meta.textContent = rowMeta(row);
+  div.append(part, ' ', meta);
+  return div;
+}
+
+function sectionCard(sec, row) {
+  if (!(sec.key in collapsed)) collapsed[sec.key] = !(sec.open || sec.missing());
+  const card = document.createElement('div');
+  card.className = 'card seccard'; card.id = 'sec-' + sec.key;
+  const head = document.createElement('div'); head.className = 'sechead';
+  head.onclick = () => toggleSec(sec.key);
+  const caret = document.createElement('span'); caret.className = 'caret';
+  caret.textContent = collapsed[sec.key] ? '▶' : '▼';
+  const part = document.createElement('span'); part.className = 'part';
+  part.textContent = row.part || '';
+  const meta = document.createElement('span'); meta.className = 'meta';
+  meta.textContent = rowMeta(row);
+  const badge = document.createElement('span');
+  head.append(caret, part, meta, badge);
+  const body = document.createElement('div'); body.className = 'secbody';
+  body.id = 'body-' + sec.key;
+  body.hidden = collapsed[sec.key];
+  sec.render(body);
+  body.addEventListener('input', () => markEdited(sec.key));
+  card.append(head, body);
+  setBadge(badge, sec);
+  return card;
+}
+
+function setBadge(el, sec) {
+  if (edited[sec.key]) { el.className = 'badge edit'; el.textContent = '✎'; }
+  else if (sec.missing()) { el.className = 'badge warn'; el.textContent = '⚠'; }
+  else { el.className = 'badge ok'; el.textContent = '✓'; }
+}
+function markEdited(key) {
+  if (edited[key]) return;
+  edited[key] = true;
+  const el = document.querySelector('#sec-' + key + ' .sechead .badge');
+  if (el) setBadge(el, SECTIONS.find(s => s.key === key));
+}
+
+function toggleSec(key) {
+  collapsed[key] = !collapsed[key];
+  const body = document.getElementById('body-' + key);
+  body.hidden = collapsed[key];
+  document.querySelector('#sec-' + key + ' .caret').textContent = collapsed[key] ? '▶' : '▼';
+  if (!collapsed[key]) body.querySelectorAll('textarea').forEach(autogrow);
+}
+function jumpTo(key) {
+  if (collapsed[key]) toggleSec(key);
+  document.getElementById('sec-' + key).scrollIntoView({behavior: 'smooth', block: 'start'});
+}
+function renderChips() {
+  const bar = document.getElementById('chips');
+  bar.innerHTML = '';
+  document.querySelectorAll('#order .seccard').forEach(card => {
+    const sec = SECTIONS.find(s => 'sec-' + s.key === card.id);
+    const b = document.createElement('button'); b.type = 'button'; b.className = 'chip';
+    b.textContent = sec.chip;
+    b.onclick = () => jumpTo(sec.key);
+    bar.appendChild(b);
   });
 }
+
+// Auto-grow textareas (#112): the whole song is visible — no inner scroll, no manual resize.
+// Grown on input, after render, and when a collapsed section (scrollHeight 0) is expanded.
+function autogrow(ta) { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 4) + 'px'; }
+function growVisible() {
+  document.querySelectorAll('#order .secbody:not([hidden]) textarea').forEach(autogrow);
+}
+document.getElementById('order').addEventListener('input', e => {
+  if (e.target.tagName === 'TEXTAREA') autogrow(e.target);
+});
 
 function renderMedley(div) {
   (run.worship_songs || []).forEach((song, s) => {
@@ -176,6 +318,7 @@ function toggleHymn(path) {
   const kept = run.offering_hymn_images || (run.offering_hymn_images = []);
   if (kept.includes(path)) run.offering_hymn_images = kept.filter(p => p !== path);
   else run.offering_hymn_images = hymnAll.filter(p => kept.includes(p) || p === path);  // keep slide order
+  markEdited('hymn');
   renderHymnGrid();
 }
 
@@ -245,7 +388,16 @@ function move(s, d) {
   const j = s + d;
   if (j < 0 || j >= songs.length) return;
   [songs[s], songs[j]] = [songs[j], songs[s]];
+  edited.opening = true;
   render();
+}
+
+let _saveTimer;
+function saveLabel(t) {
+  const b = document.getElementById('save');
+  b.textContent = t;
+  clearTimeout(_saveTimer);
+  _saveTimer = setTimeout(() => { b.textContent = '저장'; }, 3000);
 }
 
 async function save() {
@@ -253,10 +405,12 @@ async function save() {
   const r = await fetch('/runs/' + date, {
     method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(run),
   });
-  if (!r.ok) { document.getElementById('status').textContent = 'Save error: ' + r.status; return false; }
+  if (!r.ok) { saveLabel('저장 ✕'); showStatus('✕ 저장 오류: ' + r.status, true); return false; }
   const body = await r.json();
-  document.getElementById('status').textContent =
-    'Saved.' + (body.warnings ? ' ' + body.warnings.join(' · ') : '');
+  if (body.warnings && body.warnings.length) showWarn(body.warnings.join('\n'));
+  else document.getElementById('warnCard').hidden = true;
+  document.getElementById('status').hidden = true;
+  saveLabel('저장 ✓');
   await load();  // re-render so freshly looked-up extra sermon verses preview (#114)
   return true;
 }
@@ -264,22 +418,33 @@ async function save() {
 let _buildTimer;
 async function generate() {
   const btn = document.getElementById('generate');
-  const st = document.getElementById('status');
   // Persist edits first — the build reads the saved run store, not the page.
   if (!(await save())) return;
   btn.disabled = true;
-  st.textContent = 'Building deck… (this takes a minute on the Mac)';
+  setStep('review', 'done'); setStep('build', 'active');
+  showStatus('◐ 덱 생성 중… (Mac에서 1분쯤 걸립니다)');
+  window.scrollTo({top: 0, behavior: 'smooth'});
   const r = await fetch('/runs/' + date + '/build', {method: 'POST'});
   const body = await r.json();
-  if (!r.ok) { st.textContent = 'Build error: ' + (body.detail || r.status); btn.disabled = false; return; }
+  if (!r.ok) {
+    setStep('build', 'error');
+    showStatus('✕ 빌드 오류: ' + (body.detail || r.status), true);
+    btn.disabled = false;
+    return;
+  }
   clearInterval(_buildTimer);
   _buildTimer = setInterval(async () => {
     const s = await (await fetch(body.status_url)).json();
     if (s.status === 'running') return;
     clearInterval(_buildTimer);
     btn.disabled = false;
-    if (s.status === 'done') st.textContent = 'Done — draft saved at ' + s.path + '\nOpening in Keynote…';
-    else st.textContent = 'Build failed: ' + (s.error || s.status);
+    if (s.status === 'done') {
+      setStep('build', 'done');
+      showStatus('● 완료 — ' + s.path + '\nKeynote에서 여는 중…');
+    } else {
+      setStep('build', 'error');
+      showStatus('✕ 빌드 실패: ' + (s.error || s.status), true);
+    }
   }, 2000);
 }
 
