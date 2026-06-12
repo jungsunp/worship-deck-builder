@@ -112,7 +112,8 @@ _SPLIT_PROMPT = """\
 두면 안 됩니다.
 2. 글자를 더하거나 빼거나 바꾸지 마세요. 조각들을 공백으로 이어 붙이면 원래 줄과 정확히 \
 같아야 합니다. 띄어쓰기 위치에서만 나누세요.
-3. 각 조각은 공백 포함 {max_chars}자 이하로 하세요.
+3. 각 조각은 공백 포함 {max_chars}자 이하로 하세요. 나눈 뒤에도 {max_chars}자를 넘는 \
+조각이 있으면 그 조각을 한 번 더 나누세요.
 4. 단어나 조사 중간이 아니라 악구가 자연스럽게 끝나는 곳에서 나누세요. 예: \
 "이전에 있는 것은 모두 잊어버리고 앞에 계신 그리스도께로 달려가 노라" → \
 ["이전에 있는 것은 모두 잊어버리고", "앞에 계신 그리스도께로 달려가 노라"]
@@ -120,7 +121,7 @@ _SPLIT_PROMPT = """\
 "온세상 가득하리라 물이 바다덮음같이 X 2" → ["온세상 가득하리라", "물이 바다덮음같이 X 2"]
 6. 입력 줄 순서 그대로, 입력 줄마다 조각 배열 하나씩 lines 에 넣으세요.
 
-가사 줄들:
+나눌 입력 가사 줄들은 다음과 같습니다:
 """
 
 
@@ -131,19 +132,18 @@ def _split_with_ollama(lines: list[str], max_chars: int) -> list[list[str]]:
     ``ValueError`` on an unreachable server or unparseable response — callers fall
     back to :func:`_split_at_space`.
 
-    ``OLLAMA_SPLIT_MODEL`` overrides ``OLLAMA_MODEL`` here: the 2026-06-11 bake-off
-    found qwen3:14b best at phrase splits (5/5 valid) but it renumbers lines when
-    reassembling OCR fragments, so the two tasks need different models.
+    Same ``OLLAMA_MODEL`` as reassembly: the 2026-06-11 bake-off picked qwen3:14b
+    for both tasks once the reassembly prompt stopped it renumbering lines.
     """
     host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    model = os.environ.get("OLLAMA_SPLIT_MODEL") or os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
+    model = os.environ.get("OLLAMA_MODEL", "qwen3:14b")
     response = httpx.post(
         f"{host}/api/generate",
         json={
             "model": model,
             "prompt": _SPLIT_PROMPT.format(max_chars=max_chars) + "\n".join(lines),
             "stream": False,
-            "think": False,
+            "think": True,  # measurably better recall/spacing on qwen3:14b (bake-off)
             "format": _SPLIT_FORMAT,
             "options": {"temperature": 0},
         },

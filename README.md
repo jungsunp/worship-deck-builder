@@ -147,7 +147,7 @@ Fill in `.env` (git-ignored):
 |----------|-------------|
 | `ESV_API_KEY` | Free non-commercial key from [api.esv.org](https://api.esv.org/) — English verse text. |
 | `TEMPLATE_KEY` | Path to the master Keynote template deck (`templates/master.key`; git-ignored, place locally). |
-| `OLLAMA_MODEL` / `OLLAMA_HOST` | Lyric-reassembly model + Ollama address. Defaults (`qwen3.5:27b`, `http://127.0.0.1:11434`) work out of the box. |
+| `OLLAMA_MODEL` / `OLLAMA_HOST` | One model for both lyric tasks (reassembly + line splitting) + Ollama address. Defaults (`qwen3:14b`, `http://127.0.0.1:11434`) work out of the box. |
 | `WEB_HOST` / `WEB_PORT` | Mobile review/trigger web app bind address (defaults `127.0.0.1:8787`). |
 | `NTFY_TOPIC` | *(optional)* [ntfy.sh](https://ntfy.sh/) topic for phone push on failure — leave blank to disable. |
 

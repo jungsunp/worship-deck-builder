@@ -167,26 +167,39 @@ _OLLAMA_FORMAT = {
 }
 
 # Flat reassembly only — recall first. We deliberately do NOT ask the model to regroup
-# cross-staff hymn verses (a ~27B-only skill that thrashes on a 24GB Mac); the operator
-# regroups in review. Rule order matters on a 14B: recall is stated first so the model
-# never drops the unnumbered second-staff lines or the chorus.
+# cross-staff hymn verses (a ~27B-only skill); the operator regroups in review. Rule
+# order matters on a 14B: recall is stated first so the model never drops the unnumbered
+# second-staff lines or the chorus. The v3 prompt (2026-06-11 bake-off, see
+# docs/gotchas.md): hyphen removal is a hard postcondition, three worked examples cover
+# the real OCR defect patterns, the faithfulness rule blocks word substitution, and
+# 절 번호 are stripped — verse numbers never belong on a lyric slide. Keep the "-" in
+# the model INPUT: pre-stripping them in code degraded qwen3:14b (they are join cues).
 _PROMPT = """\
-아래는 한국어 찬양 악보 한 장(곡 하나)에서 OCR로 추출한 가사 조각들입니다. 깨끗한 가사 줄 \
-목록으로 정리하세요.
+아래는 한국어 찬양 악보 한 장에서 OCR로 추출한 가사 조각들입니다. 악보에서는 음표마다 \
+음절이 끊어져 있고, 음을 길게 끄는 멜리스마 표시 "-" 가 섞여 있습니다. 이것을 자연스러운 \
+한국어 가사 줄 목록으로 복원하세요.
 
 규칙(모두 지키세요):
 1. 모든 가사를 하나도 빠짐없이 포함하세요. 번호 없는 줄과 후렴 줄도 전부. 어떤 가사도 \
 생략·요약하지 마세요.
-2. 음표마다 끊긴 음절을 자연스러운 단어로 붙이세요. 예: "죄에 서자 유-를 얻게-함은" → \
-"죄에서 자유를 얻게 함은". 음절 끝의 "-"는 제거하고 띄어쓰기를 자연스럽게 고치세요.
-3. 악보 한 단(staff system)의 가사 한 줄을 line 하나로 만드세요(줄바꿈 없이). 줄 순서는 \
+2. 하는 일은 네 가지뿐입니다: 끊어진 음절 붙이기, "-" 제거, 띄어쓰기 교정, 줄 맨 앞 절 \
+번호 제거. 가사 단어를 비슷한 다른 단어로 바꾸거나 글자를 더하지 마세요.
+3. "-" 는 악보의 길게-끌기 표시일 뿐 가사가 아닙니다. 출력의 어떤 줄에도 "-" 가 한 개도 \
+남으면 안 됩니다.
+4. 끊어진 음절을 단어로 붙이고, 띄어쓰기를 표준 한국어 맞춤법대로 고치세요. 조사(을/를/이/\
+가/은/는/에/의/께 등)는 반드시 앞 단어에 붙여 쓰세요. 예:
+   "주 님 을 가 까 이 함 이 내 게 복 이 라" → "주님을 가까이 함이 내게 복이라"
+   "나 의 생명을드- 리니 주영광위- 하여 - 사용하옵소서" → "나의 생명을 드리니 주 영광 위하여 사용하옵소서"
+   "죄에 서자 유-를 얻게-함은" → "죄에서 자유를 얻게 함은"
+5. 악보 한 단(staff system)의 가사 한 줄을 line 하나로 만드세요(줄바꿈 없이). 줄 순서는 \
 위에서 아래로 그대로 유지하세요.
-4. 줄 맨 앞의 절 번호("1." "2." "3." "4.")가 있으면 그대로 살려 두세요.
-5. 악보에 곡이 하나면 song 도 하나만 만들고 모든 줄을 그 song.lines 에 순서대로 넣으세요. \
+6. 절 번호는 가사가 아닙니다. 조각 맨 앞의 절 번호("1." "2." "3." "4.")는 제거하고 가사만 \
+남기세요. 출력의 어떤 줄도 숫자 번호로 시작하면 안 됩니다.
+7. 악보에 곡이 하나면 song 도 하나만 만들고 모든 줄을 그 song.lines 에 순서대로 넣으세요. \
 악보에 여러 곡이 있을 때만 곡별로 나누고 각 곡 제목을 title 로 쓰세요.
-6. title = 악보 맨 위 큰 글씨 제목 한 줄. "Hymn 268" 같은 번호·출처 줄, "L.E.Jones"· \
+8. title = 악보 맨 위 큰 글씨 제목 한 줄. "Hymn 268" 같은 번호·출처 줄, "L.E.Jones"· \
 "Scored by"·영어·연도, 반복되는 가사는 title 이 아닙니다.
-7. 가사가 아닌 것은 제거: 코드, 마디 번호, 영어, 저작권/워터마크, 편곡 기호(V, C, B, 간주, \
+9. 가사가 아닌 것은 제거: 코드, 마디 번호, 영어, 저작권/워터마크, 편곡 기호(V, C, B, 간주, \
 키업, ×2, →), 섹션 라벨(Verse/Chorus/Bridge/Intro/Outro).
 """
 
@@ -200,7 +213,7 @@ def _reassemble(fragments: list[str], title: str = "") -> list[Song]:
     import httpx
 
     host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    model = os.environ.get("OLLAMA_MODEL", "qwen2.5:14b")
+    model = os.environ.get("OLLAMA_MODEL", "qwen3:14b")
     prompt = _PROMPT
     if title:
         prompt += f'이 악보의 곡 제목은 "{title}" 입니다. title 에 그대로 사용하세요.\n'
@@ -212,7 +225,7 @@ def _reassemble(fragments: list[str], title: str = "") -> list[Song]:
                 "model": model,
                 "prompt": prompt + "\n".join(fragments),
                 "stream": False,
-                "think": False,  # disable thinking; qwen3.5 etc. otherwise return empty
+                "think": True,  # measurably better recall/spacing on qwen3:14b (bake-off)
                 "format": _OLLAMA_FORMAT,
                 "options": {"temperature": 0},
             },
