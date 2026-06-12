@@ -153,6 +153,22 @@ def test_delete_inbox_file(tmp_path, monkeypatch) -> None:
     assert not f.exists()
 
 
+def test_clear_inbox(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    (tmp_path / "bulletin.pdf").write_bytes(b"%PDF")
+    (tmp_path / "sheet-a.png").write_bytes(b"png")
+    (tmp_path / "choir.txt").write_text("가사", encoding="utf-8")
+    resp = client.delete("/inbox")
+    assert resp.status_code == 200
+    assert resp.json() == {"deleted": 3}
+    assert not list(tmp_path.iterdir())
+
+
+def test_clear_inbox_missing_dir(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
+    assert client.delete("/inbox").json() == {"deleted": 0}
+
+
 def test_delete_missing_is_404(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     assert client.delete("/inbox/nope.pdf").status_code == 404
