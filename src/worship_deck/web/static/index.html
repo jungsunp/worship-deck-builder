@@ -32,6 +32,10 @@
   #runs li { padding: 0.5rem 0; border-bottom: 1px solid var(--gray-100); font-size: 1rem; }
   #runs a { color: var(--blue); text-decoration: none; }
   .more { font-size: 0.9rem; font-weight: 400; color: var(--blue); text-decoration: none; }
+  .h2row { display: flex; align-items: center; gap: 0.5rem; }
+  .reset { margin-left: auto; padding: 0.4rem 0.7rem; font-size: 0.9rem; font-weight: 400;
+           border: 1px solid var(--red); border-radius: var(--radius);
+           background: #fff; color: var(--red); }
 </style>
 </head>
 <body>
@@ -49,7 +53,8 @@
 <div class="card" id="statusCard" hidden></div>
 <div class="card warn" id="warnCard" hidden></div>
 
-<h2>이번 주 준비물 <span class="count" id="readyCount"></span></h2>
+<h2 class="h2row"><span>이번 주 준비물 <span class="count" id="readyCount"></span></span>
+  <button type="button" class="reset" onclick="resetWeek()">새 주 시작</button></h2>
 
 <div class="card slotcard empty" id="slot-bulletin" onclick="pickSlot(event)">
   <div class="slothead"><span class="mark">⬜</span><span>주보 (PDF)</span></div>
@@ -188,6 +193,19 @@ async function loadInbox() {
   ul.innerHTML = '';
   for (const f of others) ul.appendChild(fileRow(f, 'li', '?'));
   updateReadiness();
+}
+// New-week reset: empty the inbox and return the page to its idle state. Past runs
+// (지난 실행 / review pages) are untouched — only next week's input slots are cleared.
+async function resetWeek() {
+  if (!window.confirm('새 주 준비를 시작할까요?\n업로드한 파일과 성가대 가사가 모두 삭제됩니다.\n(지난 실행 기록은 유지됩니다)')) return;
+  await fetch('/inbox', {method: 'DELETE'});
+  clearInterval(_timer);
+  _phase = 'idle'; _doneDate = null;
+  document.getElementById('statusCard').hidden = true;
+  document.getElementById('warnCard').hidden = true;
+  document.getElementById('choirStatus').textContent = '';
+  setStep('assemble', 'empty'); setStep('review', 'empty'); setStep('build', 'empty');
+  loadInbox();
 }
 async function del(name) {
   await fetch('/inbox/' + encodeURIComponent(name), {method: 'DELETE'});

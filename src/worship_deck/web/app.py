@@ -217,6 +217,18 @@ def inbox() -> dict:
     }
 
 
+@app.delete("/inbox")
+def clear_inbox() -> dict:
+    """Empty the inbox (uploads + choir text) — the home page's new-week reset button.
+
+    Past runs under data/runs/ are untouched; this only clears next week's input slots.
+    """
+    files = [p for p in INBOX_DIR.iterdir() if p.is_file()] if INBOX_DIR.exists() else []
+    for p in files:
+        p.unlink()
+    return {"deleted": len(files)}
+
+
 @app.delete("/inbox/{name}")
 def delete_inbox_file(name: str) -> dict:
     """Remove one uploaded file, path-safe (same guard as /upload: name must have no path parts)."""
