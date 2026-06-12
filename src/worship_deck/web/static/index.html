@@ -2,29 +2,29 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Worship Deck — Upload</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worship Deck — 준비</title>
 <link rel="stylesheet" href="/static/app.css">
 <style>
-  input[type=file] { display: block; width: 100%; margin: 0.5rem 0; font-size: 1rem; }
-  button { width: 100%; padding: 1rem; font-size: 1.1rem; border: 0;
-           border-radius: var(--radius); background: var(--blue); color: #fff; }
-  #assemble { background: var(--green); margin-top: 0.5rem; }
-  #status { margin-top: 1rem; font-size: 1rem; white-space: pre-wrap; }
-  .slot { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.75rem; margin: 0.5rem 0; }
-  .slot .label { font-weight: 600; }
-  .slot .hint { color: var(--gray-600); font-size: 0.85rem; margin: 0.25rem 0; }
-  .slot .count { color: var(--green); font-size: 0.9rem; }
-  .slot .none { color: var(--gray-400); font-size: 0.9rem; margin: 0.25rem 0; }
-  textarea { width: 100%; min-height: 6rem; font-size: 1rem; box-sizing: border-box; }
+  body { padding-bottom: calc(6rem + var(--safe-bottom)); }  /* keep content above stickybar */
+  .hint { color: var(--gray-600); font-size: 0.85rem; margin: 0.25rem 0; }
+  .count { color: var(--green); font-size: 0.9rem; font-weight: 400; }
+  textarea { width: 100%; min-height: 6rem; font-size: 1rem; box-sizing: border-box;
+             margin-top: 0.5rem; }
   .filerow { display: flex; align-items: center; gap: 0.5rem; padding: 0.4rem 0;
              font-size: 1rem; }
   .filerow .ok { color: var(--green); font-weight: 700; flex: none; }
   .filerow .ok.warn { color: var(--amber); }
   .filerow .name { flex: 1; word-break: break-all; }
   .filerow .size { color: var(--gray-600); font-size: 0.85rem; flex: none; }
-  .filerow .del { width: auto; flex: none; padding: 0.4rem 0.7rem; font-size: 1rem;
-                  background: var(--red); }
+  .filerow .del { flex: none; padding: 0.4rem 0.7rem; font-size: 1rem; border: 0;
+                  border-radius: var(--radius); background: var(--red); color: #fff; }
+  .repick { margin-top: 0.25rem; padding: 0.5rem 0.8rem; font-size: 0.95rem;
+            border: 1px solid var(--blue); border-radius: var(--radius);
+            background: #fff; color: var(--blue); }
+  #statusCard { color: var(--gray-600); white-space: pre-wrap; }
+  #statusCard.err { color: var(--red); border-color: var(--red); }  /* outranks .card.err */
+  #assemble.go { background: var(--blue); }
   #inbox { list-style: none; padding: 0; margin: 0; }
   #inbox li { border-bottom: 1px solid var(--gray-100); }
   #runs { list-style: none; padding: 0; margin: 0; }
@@ -33,41 +33,121 @@
 </style>
 </head>
 <body>
-<h1>주보 / 악보 업로드</h1>
-<div class="slot">
-  <div class="label">주보 (PDF)</div>
+<h1>Worship Deck</h1>
+<div class="stepper">
+  <span class="step" data-step="upload"><span class="dot">○</span>업로드</span>
+  <span class="sep"></span>
+  <span class="step" data-step="assemble"><span class="dot">○</span>Assemble</span>
+  <span class="sep"></span>
+  <span class="step" data-step="review"><span class="dot">○</span>검토</span>
+  <span class="sep"></span>
+  <span class="step" data-step="build"><span class="dot">○</span>빌드</span>
+</div>
+
+<div class="card" id="statusCard" hidden></div>
+<div class="card warn" id="warnCard" hidden></div>
+
+<h2>이번 주 준비물 <span class="count" id="readyCount"></span></h2>
+
+<div class="card slotcard empty" id="slot-bulletin" onclick="pickSlot(event)">
+  <div class="slothead"><span class="mark">⬜</span><span>주보 (PDF)</span></div>
+  <div class="tap-hint">탭하여 업로드</div>
   <div class="files" id="files-bulletin"></div>
-  <input type="file" accept=".pdf" onchange="uploadSlot(this, 'bulletin')">
+  <div class="sloterr" id="err-bulletin" hidden></div>
+  <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
+  <input type="file" accept=".pdf" hidden onchange="uploadSlot(this, 'bulletin')">
 </div>
-<div class="slot">
-  <div class="label">찬양 악보 (이미지) <span class="count" id="sheetCount"></span></div>
+
+<div class="card slotcard empty" id="slot-sheet" onclick="pickSlot(event)">
+  <div class="slothead"><span class="mark">⬜</span><span>찬양 악보 (이미지)</span>
+    <span class="count" id="sheetCount"></span></div>
   <div class="hint">파일명 순서 = 메들리 순서</div>
+  <div class="tap-hint">탭하여 업로드</div>
   <div class="files" id="files-sheet"></div>
-  <input type="file" multiple accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'sheets')">
+  <div class="sloterr" id="err-sheet" hidden></div>
+  <button type="button" class="repick when-filled" onclick="pickHere(event)">＋ 추가</button>
+  <input type="file" multiple accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'sheets')">
 </div>
-<div class="slot">
-  <div class="label">고백의 찬양 악보 (이미지 1장)</div>
+
+<div class="card slotcard empty" id="slot-confession" onclick="pickSlot(event)">
+  <div class="slothead"><span class="mark">⬜</span><span>고백의 찬양 악보 (이미지 1장)</span></div>
+  <div class="tap-hint">탭하여 업로드</div>
   <div class="files" id="files-confession"></div>
-  <input type="file" accept=".png,.jpg,.jpeg" onchange="uploadSlot(this, 'confession')">
+  <div class="sloterr" id="err-confession" hidden></div>
+  <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
+  <input type="file" accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'confession')">
 </div>
-<div class="slot">
-  <div class="label">성가대 가사 (텍스트)</div>
+
+<div class="card slotcard" id="slot-choir">
+  <div class="slothead"><span class="mark">⬜</span><span>성가대 가사 (텍스트)</span></div>
   <div class="hint">제목 / 작곡 줄 / 가사 — 절 사이 빈 줄 유지 · 자동 저장</div>
   <textarea id="choirText" oninput="choirChanged()" onblur="flushChoir()"></textarea>
   <div class="hint" id="choirStatus"></div>
 </div>
+
 <div id="otherWrap" hidden>
-  <h2>기타 파일</h2>
-  <div class="hint" style="color:#888;font-size:0.85rem">슬롯으로 인식되지 않아 빌드에 사용되지 않는
-    파일 — 삭제 후 위 슬롯으로 다시 업로드</div>
+  <h2>⚠ 기타 파일</h2>
+  <div class="hint">슬롯으로 인식되지 않아 빌드에 사용되지 않는 파일 — 삭제 후 위 슬롯으로 다시
+    업로드</div>
   <ul id="inbox"></ul>
 </div>
-<button id="assemble" type="button" onclick="assemble()">Assemble inbox</button>
-<div id="status"></div>
-<h2>Review a run</h2>
+
+<h2>지난 실행</h2>
 <ul id="runs"></ul>
+
+<div class="stickybar">
+  <button type="button" class="secondary" id="reassemble" onclick="assemble()" hidden>다시
+    Assemble</button>
+  <button type="button" id="assemble" onclick="ctaClick()" disabled>Assemble</button>
+</div>
 <script>
-let _timer;
+let _timer, _choirTimer;
+let _phase = 'idle';   // idle | running | done — drives the CTA and stepper
+let _doneDate = null;  // service date of the finished assemble (CTA → review link)
+const _ready = {bulletin: false, sheet: false, confession: false, choir: false};
+const DOTS = {empty: '○', active: '◐', done: '●', error: '✕'};
+
+function setStep(name, state) {
+  const el = document.querySelector('.step[data-step="' + name + '"]');
+  el.className = 'step' + (state === 'empty' ? '' : ' ' + state);
+  el.querySelector('.dot').textContent = DOTS[state];
+}
+function readyCount() { return Object.values(_ready).filter(Boolean).length; }
+function updateReadiness() {
+  document.getElementById('readyCount').textContent = readyCount() + ' / 4';
+  if (_phase === 'idle') {
+    setStep('upload', readyCount() === 4 ? 'done' : readyCount() ? 'active' : 'empty');
+  }
+  updateCta();
+}
+function updateCta() {
+  const btn = document.getElementById('assemble');
+  document.getElementById('reassemble').hidden = _phase !== 'done';
+  btn.classList.toggle('go', _phase === 'done');
+  if (_phase === 'running') { btn.disabled = true; btn.textContent = 'Assembling…'; return; }
+  if (_phase === 'done') { btn.disabled = false; btn.textContent = '검토 화면으로 →'; return; }
+  if (!_ready.bulletin) { btn.disabled = true; btn.textContent = 'Assemble — 주보 없음'; return; }
+  btn.disabled = false;
+  btn.textContent = 'Assemble — ' + readyCount() + '/4 준비';
+}
+function ctaClick() {
+  if (_phase === 'done') { location.href = '/review/' + _doneDate; return; }
+  assemble();
+}
+
+// Empty card = whole-card file picker; guard skips real controls and the input's own
+// bubbled synthetic click. Filled cards pick via the 교체/＋ 추가 button instead.
+function pickSlot(e) {
+  if (e.target.closest('button, input, a, .filerow')) return;
+  const card = e.currentTarget;
+  if (!card.classList.contains('empty')) return;
+  card.querySelector('input[type=file]').click();
+}
+function pickHere(e) {
+  e.stopPropagation();
+  e.target.closest('.slotcard').querySelector('input[type=file]').click();
+}
+
 function fileRow(f, tag, mark) {
   const row = document.createElement(tag); row.className = 'filerow';
   const ok = document.createElement('span'); ok.className = mark ? 'ok warn' : 'ok';
@@ -79,6 +159,13 @@ function fileRow(f, tag, mark) {
   row.append(ok, name, size, btn);
   return row;
 }
+function setMark(kind, filled) {
+  const card = document.getElementById('slot-' + kind);
+  card.classList.toggle('filled', filled);
+  if (kind !== 'choir') card.classList.toggle('empty', !filled);
+  card.querySelector('.mark').textContent = filled ? '✓' : '⬜';
+  _ready[kind] = filled;
+}
 async function loadInbox() {
   const {files, choir_text} = await (await fetch('/inbox')).json();
   const ta = document.getElementById('choirText');
@@ -86,16 +173,19 @@ async function loadInbox() {
   for (const kind of ['bulletin', 'sheet', 'confession']) {
     const box = document.getElementById('files-' + kind);
     const mine = files.filter(f => f.kind === kind);
-    box.innerHTML = mine.length ? '' : '<div class="none">아직 업로드 안 됨</div>';
+    box.innerHTML = '';
     for (const f of mine) box.appendChild(fileRow(f, 'div'));
+    setMark(kind, mine.length > 0);
   }
   const sheets = files.filter(f => f.kind === 'sheet').length;
-  document.getElementById('sheetCount').textContent = sheets ? '✓ ' + sheets + '장' : '';
+  document.getElementById('sheetCount').textContent = sheets ? sheets + '장' : '';
+  setMark('choir', !!(choir_text || '').trim());
   const others = files.filter(f => f.kind === 'other');
   document.getElementById('otherWrap').hidden = !others.length;
   const ul = document.getElementById('inbox');
   ul.innerHTML = '';
   for (const f of others) ul.appendChild(fileRow(f, 'li', '?'));
+  updateReadiness();
 }
 async function del(name) {
   await fetch('/inbox/' + encodeURIComponent(name), {method: 'DELETE'});
@@ -103,17 +193,22 @@ async function del(name) {
 }
 async function uploadSlot(input, kind) {
   if (!input.files.length) return;
+  const slot = {sheets: 'sheet'}[kind] || kind;  // upload kind → slot/card id
+  const err = document.getElementById('err-' + slot);
+  err.hidden = true;
+  document.getElementById('slot-' + slot).classList.remove('error');
   const fd = new FormData();
   for (const f of input.files) fd.append('files', f);
   const r = await fetch('/upload/' + kind, {method: 'POST', body: fd});
-  const body = await r.json().catch(() => ({}));
-  document.getElementById('status').textContent = r.ok
-    ? 'Uploaded: ' + (body.saved || []).join(', ')
-    : 'Upload error: ' + (body.detail || r.status);
+  if (!r.ok) {  // rejection reason inside the slot, not a shared status line
+    const body = await r.json().catch(() => ({}));
+    err.textContent = '⚠ ' + (body.detail || '업로드 실패 (' + r.status + ')');
+    err.hidden = false;
+    document.getElementById('slot-' + slot).classList.add('error');
+  }
   input.value = '';
   loadInbox();
 }
-let _choirTimer;
 function choirChanged() {
   document.getElementById('choirStatus').textContent = '…';
   clearTimeout(_choirTimer);
@@ -132,25 +227,49 @@ async function saveChoir() {
   });
   document.getElementById('choirStatus').textContent = r.ok
     ? (text.trim() ? '저장됨 ✓' : '비어 있음 — 저장 안 함') : '저장 오류: ' + r.status;
+  setMark('choir', r.ok && !!text.trim());
+  updateReadiness();
 }
 async function loadRuns() {
   const {runs} = await (await fetch('/runs')).json();
   const ul = document.getElementById('runs');
-  ul.innerHTML = runs.length ? '' : '<li>(none yet — assemble a bulletin first)</li>';
+  ul.innerHTML = runs.length ? '' : '<li class="hint">(아직 없음 — 먼저 Assemble 하세요)</li>';
   for (const d of runs) {
     const li = document.createElement('li');
-    const a = document.createElement('a'); a.href = '/review/' + d; a.textContent = d + ' — Review →';
+    const a = document.createElement('a'); a.href = '/review/' + d; a.textContent = d + ' — 검토 →';
     li.appendChild(a);
     ul.appendChild(li);
   }
 }
 loadInbox();
 loadRuns();
+
+function showStatus(text, isErr) {
+  const el = document.getElementById('statusCard');
+  el.hidden = false;
+  el.textContent = text;
+  el.classList.toggle('err', !!isErr);
+}
+function showWarn(text) {
+  const el = document.getElementById('warnCard');
+  el.hidden = false;
+  el.textContent = text.split('\n').map(w => '⚠ ' + w).join('\n');
+}
 async function assemble(confirm) {
-  document.getElementById('status').textContent = 'Starting…';
+  _phase = 'running';
+  setStep('upload', 'done'); setStep('assemble', 'active'); setStep('review', 'empty');
+  document.getElementById('warnCard').hidden = true;
+  showStatus('시작 중…');
+  updateCta();
   const r = await fetch('/assemble' + (confirm ? '?confirm=1' : ''), {method: 'POST'});
   const body = await r.json();
-  if (!r.ok) { document.getElementById('status').textContent = 'Error: ' + (body.detail || r.status); return; }
+  if (!r.ok) {
+    _phase = 'idle';
+    setStep('assemble', 'error');
+    showStatus('✕ 오류: ' + (body.detail || r.status), true);
+    updateReadiness();
+    return;
+  }
   if (body.needs_confirm) {
     const bullets = (items, empty) => items && items.length
       ? items.map(k => ' • ' + k).join('\n') : ' • ' + empty;
@@ -161,7 +280,10 @@ async function assemble(confirm) {
       + bullets(body.kept, '(none — no review edits saved yet)') + '\n\n'
       + 'Continue?';
     if (window.confirm(msg)) return assemble(true);
-    document.getElementById('status').textContent = 'Cancelled.';
+    _phase = 'idle';
+    setStep('assemble', 'empty');
+    showStatus('취소됨.');
+    updateReadiness();
     return;
   }
   poll(body.status_url, body.service_date);
@@ -170,10 +292,21 @@ function poll(url, date) {
   clearInterval(_timer);
   _timer = setInterval(async () => {
     const s = await (await fetch(url)).json();
-    const st = document.getElementById('status');
-    st.textContent = date + ': ' + s.status + (s.step ? ' (' + s.step + ')' : '') + (s.error ? '\n' + s.error : '') + (s.warning ? '\n⚠ ' + s.warning : '');
-    if (s.status === 'done') st.innerHTML += ' <a href="/review/' + date + '">Review →</a>';
     if (s.status === 'done' || s.status === 'error') clearInterval(_timer);
+    if (s.warning) showWarn(s.warning);
+    if (s.status === 'done') {
+      _phase = 'done'; _doneDate = date;
+      setStep('assemble', 'done'); setStep('review', 'active');
+      showStatus('✓ ' + date + ' assemble 완료 — 검토로 이동하세요');
+      updateCta();
+    } else if (s.status === 'error') {
+      _phase = 'idle';
+      setStep('assemble', 'error');
+      showStatus('✕ 오류: ' + (s.error || ''), true);
+      updateReadiness();
+    } else {
+      showStatus('◐ Assembling… (' + (s.step || s.status) + ')');
+    }
   }, 2000);
 }
 </script>
