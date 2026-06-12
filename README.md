@@ -127,7 +127,7 @@ dispatch test pins the anchors) and do an eyeball build to confirm.
   ```bash
   brew install ollama
   ollama serve                 # leave running (or: brew services start ollama)
-  ollama pull qwen3.5:27b      # 17 GB; best quality. Lighter: exaone3.5:7.8b (4.8 GB)
+  ollama pull qwen3:14b        # ~9 GB; the default model for both lyric tasks
   ```
 
 - **LibreOffice + poppler**, for converting the downloaded 봉헌 hymn PowerPoint to slide
