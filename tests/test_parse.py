@@ -10,6 +10,7 @@ from worship_deck.parse import parse
 from worship_deck.parse.bulletin import (
     _announcement_blocks,
     _expand_list_paren,
+    _extract_announcements,
     _find_row,
     _parse_offering_hymn,
     _part_cell,
@@ -20,6 +21,43 @@ from worship_deck.parse.bulletin import (
 
 def _w(text: str, x0: float, x1: float) -> dict:
     return {"text": text, "x0": x0, "x1": x1}
+
+
+def _mw(text: str, top: float, x0: float = 350.0) -> dict:
+    """A middle-column (교회소식) word at a given top/x0."""
+    return {"text": text, "x0": x0, "x1": x0 + 10, "top": top}
+
+
+class _FakePage:
+    def __init__(self, words: list[dict], height: float = 1000.0) -> None:
+        self._words = words
+        self.rects: list[dict] = []  # no footer boxes → scan whole column
+        self.height = height
+
+    def extract_words(self) -> list[dict]:
+        return self._words
+
+
+def test_extract_announcements_keeps_same_line_tail_with_its_own_item() -> None:
+    """A numbered title whose inline sentence is jittered 1px stays whole and splits on ' - '.
+
+    Mirrors the bulletin's '3. 임직식 - 6/28 … 있습니다.' written as one visual line: the tail
+    sits 1px above the title, so naive top-bucketing would dump it on the previous item.
+    """
+    words = [
+        _mw("2.", 150), _mw("청년부", 150, x0=362),  # ann 2 title
+        _mw("성경통독", 160),  # ann 2 detail
+        _mw("3.", 212), _mw("임직식", 212, x0=362), _mw("-", 212, x0=382),
+        _mw("6/28", 211, x0=400), _mw("있습니다.", 211, x0=420),  # tail, 1px above the title
+        _mw("(피택", 222),  # ann 3 detail
+    ]
+    anns = _extract_announcements(_FakePage(words))
+    by_num = {a["number"]: a for a in anns}
+    # the sentence belongs to ann 3, not ann 2
+    assert "있습니다." not in " ".join(by_num["2"]["detail"])
+    assert by_num["3"]["title"] == "임직식"
+    assert by_num["3"]["detail"][0] == "6/28 있습니다."
+    assert "(피택" in by_num["3"]["detail"][1]
 
 FIXTURES = Path(__file__).parent / "fixtures"
 

@@ -61,6 +61,15 @@ def test_no_composer_line_leaves_composer_empty() -> None:
     assert song.lines == ["가사 한 줄", "가사 두 줄"]
 
 
+def test_composer_without_marker_taken_when_isolated() -> None:
+    """An English credit (no 작곡/편곡) right after the title, set off by a blank, is the composer."""
+    raw = "오 찬양해 우리 주께\nStan Pethel\n\n오 찬양해 우리 주께\n그 이름 송축하라\n"
+    song = parse_choir_text(raw)
+    assert song.title == "오 찬양해 우리 주께"
+    assert song.composer == "Stan Pethel"
+    assert song.lines == ["오 찬양해 우리 주께", "그 이름 송축하라"]
+
+
 def test_empty_input_returns_empty_song() -> None:
     assert parse_choir_text("   \n\n  ") == Song(title="")
 
