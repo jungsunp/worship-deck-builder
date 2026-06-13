@@ -33,6 +33,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -254,7 +255,7 @@ def _reassemble(fragments: list[str], title: str = "") -> list[Song]:
 # ── Orchestration ─────────────────────────────────────────────────────────────
 
 
-def transcribe(image_path: str) -> list[Song]:
+def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[Song]:
     """Read one band-sheet image into its songs' lyric lines.
 
     Apple Vision OCR (with line heights) -> deterministic title detection -> canonical
@@ -265,18 +266,32 @@ def transcribe(image_path: str) -> list[Song]:
     the lyric banner (repeat collapse + phrase-boundary splits, ``linebreak.rebreak``,
     #126) before they reach review.
 
+    If `steps` is provided, per-stage durations (seconds) are written into it with keys
+    "ocr", "gasazip" (if looked up), and "ollama" (if used as fallback).
+
     Raises:
         RuntimeError: if `swift`/OCR fails, or the fallback is needed and Ollama is
             unreachable.
     """
+    t = time.monotonic()
     ocr_lines = _vision_ocr(image_path)
+    if steps is not None:
+        steps["ocr"] = round(time.monotonic() - t, 1)
+
     title = _detect_title(ocr_lines)
     fragments = _filter_lyric_fragments([text for _, text in ocr_lines])
     if title:
+        t = time.monotonic()
         match = online.lookup(title, fragments)
+        if steps is not None:
+            steps["gasazip"] = round(time.monotonic() - t, 1)
         if match:
             return [Song(title=match.title, lines=linebreak.rebreak(match.lines))]
+
+    t = time.monotonic()
     songs = _reassemble(fragments, title=title)
+    if steps is not None:
+        steps["ollama"] = round(time.monotonic() - t, 1)
     for song in songs:
         song.lines = linebreak.rebreak(song.lines)
     return songs

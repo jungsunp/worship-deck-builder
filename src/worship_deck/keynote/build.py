@@ -951,16 +951,24 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
     """
-    _ensure_keynote_ready()  # clear stale open docs first, else `open` returns missing value (-1700)
-    save_draft(template_key, out_key)
+    steps: dict[str, float] = {}
+
+    def _t(name: str, fn, *args, **kwargs):  # type: ignore[no-untyped-def]
+        t = time.monotonic()
+        result = fn(*args, **kwargs)
+        steps[name] = round(time.monotonic() - t, 1)
+        return result
+
+    _t("startup", _ensure_keynote_ready)  # clear stale open docs first, else `open` returns missing value (-1700)
+    _t("save_draft", save_draft, template_key, out_key)
 
     # Derive every section anchor from the pristine draft's landmark text (#98). Raises (before
     # any slide is touched) if the template no longer matches the expected landmarks, instead of
     # silently editing the wrong slides. Reference positions live in config/slide_map.yaml.
-    a = detect_anchors(dump_slide_texts(out_key))
+    a = _t("anchor_detect", lambda: detect_anchors(dump_slide_texts(out_key)))
 
     sermon_bracket = f"[{data.sermon_ref}]" if data.sermon_ref else ""
-    set_date_slides(out_key, data.date, data.sermon_title, sermon_bracket)
+    _t("date_slides", set_date_slides, out_key, data.date, data.sermon_title, sermon_bracket)
 
     # 말씀 ad-hoc special block: last week's pastor-requested slides (extra songs, message/poem
     # cards) that sit between the sermon-title slide and the recurring 파송의 노래/축도/주기도문
@@ -969,14 +977,16 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # every later fill runs at a LOWER index (so this deletion can't shift their anchors, nor
     # they this one). Skipped only when the template carries no slides there (#97).
     if a.special_count:
-        delete_slides(out_key, a.special_start, a.special_count)
+        _t("delete_special", delete_slides, out_key, a.special_start, a.special_count)
 
     # This week's extra sermon verses (#114) regenerate into the just-emptied region; anything
     # beyond verse slides (songs, poem cards) the operator still adds manually (#97). Runs while
     # the special-block anchor is exact and inserts only after the sermon title, so the
     # back-to-front fills below are unaffected.
     if data.sermon_extra_refs:
-        fill_sermon_extra_slides(
+        _t(
+            "sermon_extra",
+            fill_sermon_extra_slides,
             out_key,
             data.sermon_extra_refs,
             data.sermon_extra_passages,
@@ -988,12 +998,14 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # 말씀 title slide: white title box + gold scripture-ref box, before the verse fill
     # resizes/shifts it (#90). Same title/ref the date slides carry.
     if data.sermon_title:
-        set_sermon_title_slide(out_key, a.sermon_title, data.sermon_title, sermon_bracket)
+        _t("sermon_title", set_sermon_title_slide, out_key, a.sermon_title, data.sermon_title, sermon_bracket)
 
     if data.sermon_passage:
         kr_label, en_label = verse_labels(data.sermon_ref)
         verses = [Verse(**v) for v in data.sermon_passage]
-        fill_verse_slides(
+        _t(
+            "sermon_verses",
+            fill_verse_slides,
             out_key,
             a.sermon_verse_start,
             kr_label,
@@ -1007,11 +1019,16 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # keeps last week's reference (#107). It precedes the verse block, so this count-neutral
     # write and the expanding verse fill don't shift each other.
     if data.sermon_ref:
-        set_sermon_ref_slide(out_key, a.sermon_ref, data.sermon_ref)
+        _t("sermon_recap", set_sermon_ref_slide, out_key, a.sermon_ref, data.sermon_ref)
 
     if data.announcements:
-        fill_announcement_slides(
-            out_key, a.announcements_start, data.announcements, existing_count=a.announcements_count
+        _t(
+            "announcement",
+            fill_announcement_slides,
+            out_key,
+            a.announcements_start,
+            data.announcements,
+            existing_count=a.announcements_count,
         )
 
     # 봉헌 offering-hymn images: replace last week's pages (detected after the section's
@@ -1021,15 +1038,22 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # parsed values, else it keeps last week's text (#106). Count-neutral (in-place paragraph text),
     # and separate from the image fill so the title updates even when the download returned no pages.
     if data.offering_hymn_number or data.offering_hymn_title:
-        set_offering_hymn_title_slide(
-            out_key, a.offering_title, data.offering_hymn_number, data.offering_hymn_title
+        _t(
+            "hymn_title",
+            set_offering_hymn_title_slide,
+            out_key,
+            a.offering_title,
+            data.offering_hymn_number,
+            data.offering_hymn_title,
         )
 
     if data.offering_hymn_images:
-        fill_hymn_slides(out_key, a.offering_title, data.offering_hymn_images)
+        _t("hymn_slides", fill_hymn_slides, out_key, a.offering_title, data.offering_hymn_images)
 
     if data.choir_song:
-        fill_choir_slides(
+        _t(
+            "choir",
+            fill_choir_slides,
             out_key,
             a.choir_title,
             Song(**data.choir_song),
@@ -1040,7 +1064,9 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # Absent confession_song (no sheet uploaded / transcription failed) keeps the template's
     # slides for the operator to fix manually (#109).
     if data.confession_song:
-        fill_confession_slides(
+        _t(
+            "confession",
+            fill_confession_slides,
             out_key,
             a.confession_divider,
             Song(**data.confession_song),
@@ -1052,23 +1078,30 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # be updated separately or it keeps last week's reference (#107). It precedes the verse
     # slide, so the count-neutral ref write and the expanding verse fill don't shift each other.
     if data.call_to_worship_ref:
-        set_call_to_worship_ref(out_key, a.call_ref, data.call_to_worship_ref)
+        _t("ctw_ref", set_call_to_worship_ref, out_key, a.call_ref, data.call_to_worship_ref)
 
     if data.call_to_worship_passage:
         kr_label, en_label = verse_labels(data.call_to_worship_ref)
         verses = [Verse(**v) for v in data.call_to_worship_passage]
-        fill_verse_slides(
-            out_key, a.call_verse, kr_label, en_label, verses, existing_count=a.call_verse_count
+        _t(
+            "ctw_verses",
+            fill_verse_slides,
+            out_key,
+            a.call_verse,
+            kr_label,
+            en_label,
+            verses,
+            existing_count=a.call_verse_count,
         )
 
     if data.worship_songs:
         songs = [Song(**s) for s in data.worship_songs]
-        fill_worship_songs(out_key, a.worship_start, a.worship_len, songs)
+        _t("worship_songs", fill_worship_songs, out_key, a.worship_start, a.worship_len, songs)
 
     # Persist every in-place edit with a single save (#117): save_draft opened the deck once and
     # the section fills mutated the open front document; this is the one save that writes them.
-    finalize_draft(out_key)
-    return out_key
+    _t("finalize", finalize_draft, out_key)
+    return out_key, steps
 
 
 def export_pdf(key_path: str, out_pdf: str) -> str:

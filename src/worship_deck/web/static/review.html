@@ -86,6 +86,10 @@ const dm = date.match(/^\d{4}-(\d{2})-(\d{2})$/);
 document.getElementById('date').textContent = dm ? Number(dm[1]) + '월 ' + Number(dm[2]) + '일' : date;
 let run = null;
 
+function fmtDur(s) {
+  const m = Math.floor(s / 60), sec = Math.round(s % 60);
+  return m ? m + '분 ' + sec + '초' : sec + '초';
+}
 const DOTS = {empty: '○', active: '◐', done: '●', error: '✕'};
 function setStep(name, state) {
   const el = document.querySelector('.step[data-step="' + name + '"]');
@@ -495,7 +499,8 @@ async function generate() {
     btn.disabled = false;
     if (s.status === 'done') {
       setStep('build', 'done');
-      showStatus('● 완료 — ' + s.path + '\nKeynote에서 여는 중…');
+      const dur = s.seconds ? ' • ' + fmtDur(s.seconds) : '';
+      showStatus('● 완료' + dur + ' — ' + s.path + '\nKeynote에서 여는 중…');
     } else {
       setStep('build', 'error');
       showStatus('✕ 빌드 실패: ' + (s.error || s.status), true);
