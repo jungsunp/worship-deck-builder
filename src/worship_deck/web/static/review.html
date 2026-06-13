@@ -53,6 +53,8 @@
   .hymncount { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.4rem; }
   #status { color: var(--gray-600); white-space: pre-wrap; }
   #status.err { color: var(--red); border-color: var(--red); }
+  .pdf-link { display: inline-block; margin-top: 0.5rem; padding: 0.5rem 0;
+              color: var(--blue); font-weight: 600; text-decoration: underline; }
   .stickybar #generate { background: var(--purple); }
   .stickybar #generate:disabled { background: #c4b5fd; }
   a { color: var(--blue); }
@@ -501,6 +503,12 @@ async function generate() {
       setStep('build', 'done');
       const dur = s.seconds ? ' • ' + fmtDur(s.seconds) : '';
       showStatus('● 완료' + dur + ' — ' + s.path + '\nKeynote에서 여는 중…');
+      if (s.pdf) {  // tap to preview the rendered slides inline on the phone (#23)
+        const a = document.createElement('a');
+        a.href = s.pdf; a.target = '_blank'; a.className = 'pdf-link';
+        a.textContent = '📄 PDF 미리보기';
+        document.getElementById('status').append('\n', a);
+      }
     } else {
       setStep('build', 'error');
       showStatus('✕ 빌드 실패: ' + (s.error || s.status), true);

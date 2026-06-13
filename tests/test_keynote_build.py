@@ -20,6 +20,7 @@ from worship_deck.keynote.build import (
     dump_slide_texts,
     duplicate_block,
     duplicate_slide,
+    export_pdf,
     fill_announcement_slides,
     fill_choir_slides,
     fill_confession_slides,
@@ -127,6 +128,24 @@ def test_finalize_draft_passes_args_and_returns_out(monkeypatch: pytest.MonkeyPa
 
     assert finalize_draft("out.key") == "out.key"
     assert captured["cmd"] == ["osascript", str(B._FINALIZE), "out.key"]
+
+
+def test_export_pdf_passes_args_and_makes_parent_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """export_pdf (#23) exports the open front document to the out path, creating its dir."""
+    captured: dict = {}
+
+    def fake_run(cmd: list[str], **kw: object) -> _FakeCompleted:
+        captured["cmd"] = cmd
+        return _FakeCompleted(returncode=0, stdout="ok\n")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    out = tmp_path / "drafts" / "draft-2026-06-14.pdf"
+    assert export_pdf(str(out)) == str(out)
+    assert out.parent.is_dir()  # export_pdf created the drafts dir
+    assert captured["cmd"] == ["osascript", str(B._EXPORT_PDF), str(out)]
 
 
 # ---------------------------------------------------------------------------
@@ -1036,6 +1055,17 @@ def test_save_draft_live_produces_file(real_template_key: Path, tmp_path: Path) 
     out = tmp_path / "draft-2026-06-02.key"
     save_draft(str(real_template_key), str(out))
     assert out.exists()  # .key is a package; exists() covers file or bundle
+
+
+@pytest.mark.local_only
+def test_export_pdf_live_produces_readable_pdf(real_template_key: Path, tmp_path: Path) -> None:
+    """#23: open a real deck and confirm export_pdf writes a readable PDF of the open draft."""
+    draft = tmp_path / "draft-2026-06-14.key"
+    save_draft(str(real_template_key), str(draft))  # leaves the draft open as front document
+    pdf = tmp_path / "draft-2026-06-14.pdf"
+    export_pdf(str(pdf))
+    assert pdf.is_file()
+    assert pdf.read_bytes()[:5] == b"%PDF-"  # a real, readable PDF
 
 
 @pytest.mark.local_only
