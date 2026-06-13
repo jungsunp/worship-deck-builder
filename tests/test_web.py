@@ -729,6 +729,26 @@ def test_get_hymn_slide_404_when_missing(_runs, tmp_path, monkeypatch) -> None:
     assert client.get(f"/runs/{_runs}/hymn/nope.png").status_code == 404
 
 
+def test_draft_pdf_serves_file(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # endpoint reads CWD-relative data/drafts/ (#23)
+    drafts = tmp_path / "data" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / f"draft-{_runs}.pdf").write_bytes(b"%PDF-1.4 stub")
+    resp = client.get(f"/runs/{_runs}/draft.pdf")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "application/pdf"
+    assert resp.content == b"%PDF-1.4 stub"
+
+
+def test_draft_pdf_404_when_not_built(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert client.get(f"/runs/{_runs}/draft.pdf").status_code == 404
+
+
+def test_draft_pdf_400_bad_date() -> None:
+    assert client.get("/runs/not-a-date/draft.pdf").status_code == 400
+
+
 def test_put_run_persists_pruned_hymn_images(_runs, tmp_path, monkeypatch) -> None:
     paths = _seed_hymn_pngs(tmp_path, monkeypatch, _runs, ["slide-1.png", "slide-2.png", "slide-3.png"])
     store.save(_runs, replace(_fake_run(), offering_hymn_images=paths))
@@ -762,7 +782,9 @@ def test_history_page_served() -> None:
 def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
     store.save(_runs, _fake_run())
     opened: list = []
+    exported: list = []
     monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.keynote_build, "export_pdf", lambda p: exported.append(p))
     monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: opened.append(a))
 
     resp = client.post(f"/runs/{_runs}/build")
@@ -772,7 +794,25 @@ def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
     status = client.get(f"/runs/{_runs}/build/status").json()
     assert status["status"] == "done"
     assert status["path"] == f"/tmp/draft-{_runs}.key"
+    assert exported == [f"/tmp/draft-{_runs}.pdf"]  # PDF exported from the built draft (#23)
+    assert status["pdf"] == f"/runs/{_runs}/draft.pdf"
     assert opened and opened[0][0] == ["open", f"/tmp/draft-{_runs}.key"]
+
+
+def test_build_pdf_export_failure_is_nonfatal(_runs, monkeypatch) -> None:
+    """A failed PDF export (#23) must not flip a successful build to error; just no preview link."""
+    store.save(_runs, _fake_run())
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: None)
+
+    def _boom(_p):
+        raise RuntimeError("keynote wedged")
+
+    monkeypatch.setattr(app_module.keynote_build, "export_pdf", _boom)
+    client.post(f"/runs/{_runs}/build")
+    status = client.get(f"/runs/{_runs}/build/status").json()
+    assert status["status"] == "done"
+    assert status["pdf"] is None
 
 
 def test_build_missing_run_is_404(_runs) -> None:

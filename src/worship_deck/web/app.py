@@ -21,6 +21,7 @@ from fastapi.staticfiles import StaticFiles
 
 from worship_deck import hymn, obs, parse, pipeline, store
 from worship_deck.bible import verses
+from worship_deck.keynote import build as keynote_build
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
 from worship_deck.parse import ServiceData
@@ -558,6 +559,19 @@ def get_hymn_slide(service_date: str, name: str) -> FileResponse:
     return FileResponse(target)
 
 
+@app.get("/runs/{service_date}/draft.pdf")
+def draft_pdf(service_date: str) -> FileResponse:
+    """Serve the built draft's PDF preview for inline review on the phone (#23)."""
+    try:
+        store.path_for(service_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    pdf = Path(f"data/drafts/draft-{service_date}.pdf").resolve()
+    if not pdf.is_file():
+        raise HTTPException(status_code=404, detail="not built yet")
+    return FileResponse(pdf, media_type="application/pdf")
+
+
 # ── Build (Generate) ─────────────────────────────────────────────────────────
 
 
@@ -567,17 +581,26 @@ def _build_async(service_date: str) -> None:
     FastAPI runs this in a threadpool after the response is sent. The build is slow
     (~60–90s, real Keynote) and local_only, so it must not block the phone's request.
     Failures are caught and recorded in `_BUILD_STATUS` so the page reports them.
-    PDF preview is a follow-up (#26 split): for now the operator reviews the opened deck.
+    After the build, export a PDF of the still-open draft (#23) so the phone can preview
+    the rendered slides inline — the browser can't render a .key and the file is Mac-local.
     """
     logger = obs.configure_logging()
     t0 = time.monotonic()
     try:
         path = pipeline.run(service_date)
+        # Export the PDF preview from the still-open draft (#23). Best-effort: the build already
+        # succeeded, so a failed export shouldn't flip the status to error — just no preview link.
+        pdf_url = None
+        try:
+            keynote_build.export_pdf(str(Path(path).with_suffix(".pdf")))
+            pdf_url = f"/runs/{service_date}/draft.pdf"
+        except Exception:  # noqa: BLE001 - preview is optional; the deck itself is the deliverable
+            logger.exception("PDF preview export failed for %s", service_date)
         # Open the draft in Keynote on the Mac (operator is at the machine). Best-effort:
         # the build already succeeded, so a failed `open` shouldn't flip the status to error.
         subprocess.run(["open", path], check=False)
         total = round(time.monotonic() - t0, 1)
-        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "error": None, "seconds": total}
+        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "pdf": pdf_url, "error": None, "seconds": total}
         logger.info("Built draft for %s at %s in %.1fs", service_date, path, total)
     except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
         logger.exception("Build failed for %s", service_date)

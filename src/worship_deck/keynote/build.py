@@ -42,6 +42,7 @@ _READ_TITLE_BOX = Path(__file__).parent / "applescript" / "read_title_box.apples
 _SET_CTW_REF = Path(__file__).parent / "applescript" / "set_ctw_ref.applescript"
 _SET_SERMON_REF = Path(__file__).parent / "applescript" / "set_sermon_ref.applescript"
 _DUMP_SLIDE_TEXTS = Path(__file__).parent / "applescript" / "dump_slide_texts.applescript"
+_EXPORT_PDF = Path(__file__).parent / "applescript" / "export_pdf.applescript"
 
 # --- verse-slide layout model (#115: calibrated to the ideal 예배의 부름 slide) --------------
 # Verse body boxes are FIXED-height shrink-on-overflow boxes (height never changes when text
@@ -1104,6 +1105,18 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     return out_key, steps
 
 
-def export_pdf(key_path: str, out_pdf: str) -> str:
-    """Export a deck to PDF for phone preview."""
-    raise NotImplementedError
+def export_pdf(out_pdf: str) -> str:
+    """Export the open draft (front document) to PDF for phone preview (#23), returning out_pdf.
+
+    Operates on the document `save_draft`/`finalize_draft` left open (open-once/save-once,
+    #117) — it does NOT re-open the .key, which would return `missing value`/-1700 on an
+    already-open deck (see `_ensure_keynote_ready`). The browser can't render a .key and the
+    file lives only on the Mac, so the phone reviews this PDF inline instead.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote export fails.
+    """
+    out = str(Path(out_pdf).expanduser())
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    _run_osascript(_EXPORT_PDF, out)
+    return out_pdf
