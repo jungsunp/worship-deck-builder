@@ -29,9 +29,12 @@ def parse_choir_text(raw: str) -> Song:
     The block is a title line + a composer/arranger line + lyric lines (already
     line-broken). The title comes from the first non-blank line, the composer line is
     kept for the title slide, and the remaining lines are returned as ordered lyrics.
-    Blank lines between stanzas are preserved (leading/trailing ones trimmed) so
-    ``chunk()`` keeps each stanza on its own slide; interlude markers (``간주``) are
-    dropped.
+    The composer is a ``작곡``/``편곡`` credit line; when neither marker is present (e.g.
+    an English name like "Stan Pethel"), the line directly after the title is taken as
+    the composer only when it stands alone — set off from the lyrics by a blank line — so
+    a multi-line first stanza with no credit is not mistaken for one. Blank lines between
+    stanzas are preserved (leading/trailing ones trimmed) so ``chunk()`` keeps each
+    stanza on its own slide; interlude markers (``간주``) are dropped.
     """
     lines = [ln.strip() for ln in raw.splitlines()]
 
@@ -46,14 +49,16 @@ def parse_choir_text(raw: str) -> Song:
         return Song(title="")
 
     composer = ""
-    lyrics: list[str] = []
-    for ln in rest:
-        if not composer and _COMPOSER_MARK.search(ln):
-            composer = ln
-        elif _INTERLUDE.match(ln):
-            continue
-        else:
-            lyrics.append(ln)
+    body = rest
+    mark = next((i for i, ln in enumerate(rest) if _COMPOSER_MARK.search(ln)), None)
+    if mark is not None:
+        composer = rest[mark]
+        body = rest[:mark] + rest[mark + 1 :]
+    elif rest and rest[0] and (len(rest) == 1 or not rest[1]):
+        composer = rest[0]
+        body = rest[1:]
+
+    lyrics = [ln for ln in body if not _INTERLUDE.match(ln)]
 
     # Trim leading/trailing blanks; interior blanks stay as stanza breaks for chunk().
     while lyrics and not lyrics[0]:

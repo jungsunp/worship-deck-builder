@@ -219,6 +219,11 @@ def _extract_announcements(page) -> list[dict]:
     rendered row (the bulletin breaks detail lines by hand, so rows are kept as-is). Rows
     before the first numbered item (the column tagline) are skipped. The 봉사자 모집 footer
     sits in bordered boxes below the list, so the scan stops at the first such box.
+
+    Some titles run an inline sentence on the same visual line ("N. 임직식 - 6/28 …
+    있습니다."); pdfplumber jitters that tail by ~1px, so rows are clustered with
+    ``_cluster_rows`` (not bucketed by exact top) to keep the line whole, then the title
+    is split at the first " - " so the sentence renders as the leading detail.
     """
     footer_top = min(
         (r["top"] for r in page.rects
@@ -230,17 +235,15 @@ def _extract_announcements(page) -> list[dict]:
         if _MID_LEFT <= w["x0"] < _MID_RIGHT and w["top"] < footer_top
     ]
 
-    rows: dict[int, list] = {}
-    for w in mid_words:
-        rows.setdefault(round(w["top"]), []).append(w)
-
     anns: list[dict] = []
     cur: dict | None = None
-    for top in sorted(rows):
-        text = " ".join(w["text"] for w in sorted(rows[top], key=lambda w: w["x0"])).strip()
+    for row in _cluster_rows(mid_words):
+        text = " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])).strip()
         m = re.match(r"^(\d+)\.\s+(.+)", text)
         if m:
-            cur = {"number": m.group(1), "title": m.group(2).strip(), "detail": []}
+            title, sep, tail = m.group(2).strip().partition(" - ")
+            cur = {"number": m.group(1), "title": title.strip(),
+                   "detail": [tail.strip()] if sep else []}
             anns.append(cur)
         elif cur is not None:  # detail row (skip any header text before the first numbered item)
             cur["detail"].append(text)

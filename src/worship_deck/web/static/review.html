@@ -297,10 +297,9 @@ function renderSong(div, song, kind, hint) {
   const ti = document.createElement('input');
   ti.dataset.kind = kind + '-title'; ti.placeholder = '곡 제목'; ti.value = song.title || '';
   sd.appendChild(ti);
-  if (song.composer) {
-    const c = document.createElement('div'); c.className = 'meta'; c.textContent = song.composer;
-    sd.appendChild(c);
-  }
+  const co = document.createElement('input');
+  co.dataset.kind = kind + '-composer'; co.placeholder = '작곡/편곡'; co.value = song.composer || '';
+  sd.appendChild(co);
   const ta = document.createElement('textarea');
   ta.dataset.kind = kind; ta.value = (song.lines || []).join('\n');
   sd.appendChild(ta);
@@ -428,10 +427,14 @@ function syncFromDom() {
   if (choirTa && run.choir_song) run.choir_song.lines = splitKeepBlanks(choirTa.value);
   const choirTi = document.querySelector('#order input[data-kind="choir-title"]');
   if (choirTi && run.choir_song) run.choir_song.title = choirTi.value.trim();
+  const choirCo = document.querySelector('#order input[data-kind="choir-composer"]');
+  if (choirCo && run.choir_song) run.choir_song.composer = choirCo.value.trim();
   const confTa = document.querySelector('#order textarea[data-kind="confession"]');
   if (confTa && run.confession_song) run.confession_song.lines = splitKeepBlanks(confTa.value);
   const confTi = document.querySelector('#order input[data-kind="confession-title"]');
   if (confTi && run.confession_song) run.confession_song.title = confTi.value.trim();
+  const confCo = document.querySelector('#order input[data-kind="confession-composer"]');
+  if (confCo && run.confession_song) run.confession_song.composer = confCo.value.trim();
   const annTa = document.querySelector('#order textarea[data-kind="ann"]');
   if (annTa) run.announcements = annTa.value.split(/\n-{3,}\n/).map(s => s.trim()).filter(Boolean);
   const hn = document.getElementById('hymnNumber');
