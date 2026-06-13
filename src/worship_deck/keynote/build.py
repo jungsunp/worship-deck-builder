@@ -951,14 +951,12 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
     """
-    import time as _time
-
     steps: dict[str, float] = {}
 
     def _t(name: str, fn, *args, **kwargs):  # type: ignore[no-untyped-def]
-        t = _time.monotonic()
+        t = time.monotonic()
         result = fn(*args, **kwargs)
-        steps[name] = round(_time.monotonic() - t, 1)
+        steps[name] = round(time.monotonic() - t, 1)
         return result
 
     _t("startup", _ensure_keynote_ready)  # clear stale open docs first, else `open` returns missing value (-1700)

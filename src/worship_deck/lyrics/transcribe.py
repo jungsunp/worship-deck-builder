@@ -33,6 +33,7 @@ import json
 import os
 import re
 import subprocess
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -272,8 +273,6 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         RuntimeError: if `swift`/OCR fails, or the fallback is needed and Ollama is
             unreachable.
     """
-    import time
-
     t = time.monotonic()
     ocr_lines = _vision_ocr(image_path)
     if steps is not None:

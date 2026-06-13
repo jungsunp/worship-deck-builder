@@ -36,11 +36,22 @@
   .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
                 margin-right: 3px; vertical-align: middle; }
   .err-msg { color: var(--red); font-size: 0.85rem; margin-top: 0.25rem; }
+  .charts { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; }
+  .chart-card { flex: 1 1 280px; background: var(--gray-50, #f9f9f9);
+                border: 1px solid var(--gray-100); border-radius: var(--radius); padding: 0.75rem; }
+  .chart-card h3 { font-size: 0.9rem; font-weight: 600; margin: 0 0 0.5rem;
+                   display: flex; align-items: baseline; gap: 0.5rem; }
+  .chart-card h3 .latest { font-weight: 400; color: var(--gray-600); font-size: 0.8rem; }
+  .trend { width: 100%; height: auto; display: block; }
+  .trend .axlabel { font-size: 9px; fill: var(--gray-600); }
+  .trend .axval { font-size: 8px; fill: var(--gray-700); }
+  .trend .baseline { stroke: var(--gray-300); stroke-width: 1; }
 </style>
 </head>
 <body>
 <div class="nav"><a href="/">← 홈</a><a href="/history">지난 실행</a></div>
 <h1>성능 대시보드</h1>
+<div id="charts" class="charts"></div>
 <div id="content"><p class="hint">불러오는 중…</p></div>
 <script>
 function fmtDur(s) {
@@ -100,6 +111,58 @@ function renderBar(steps, totalSec) {
   return {bar, legend};
 }
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// One bar per service date (oldest left → newest right) for week-to-week trend.
+// `series` is [{date, seconds}] already sorted ascending by date.
+function renderTrend(series, title, color) {
+  const card = document.createElement('div'); card.className = 'chart-card';
+  const h = document.createElement('h3');
+  h.append(title);
+  if (series.length) {
+    const latest = document.createElement('span'); latest.className = 'latest';
+    latest.textContent = '최근 ' + fmtDur(series[series.length - 1].seconds);
+    h.append(latest);
+  }
+  card.appendChild(h);
+  if (!series.length) {
+    const p = document.createElement('p'); p.className = 'hint'; p.textContent = '기록 없음';
+    card.appendChild(p);
+    return card;
+  }
+  const W = 360, H = 150, padL = 30, padR = 8, padT = 12, padB = 26;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const maxSec = Math.max(...series.map(d => d.seconds), 1);
+  const n = series.length, bw = plotW / n;
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + W + ' ' + H);
+  svg.setAttribute('class', 'trend');
+  const mk = (tag, attrs, text) => {
+    const e = document.createElementNS(SVG_NS, tag);
+    for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v);
+    if (text != null) e.textContent = text;
+    return e;
+  };
+  // baseline + max-value tick
+  svg.appendChild(mk('line', {class: 'baseline', x1: padL, y1: padT + plotH, x2: W - padR, y2: padT + plotH}));
+  svg.appendChild(mk('text', {class: 'axval', x: padL - 4, y: padT + 4, 'text-anchor': 'end'}, fmtDur(maxSec)));
+  series.forEach((d, i) => {
+    const bh = (d.seconds / maxSec) * plotH;
+    const cx = padL + i * bw + bw / 2;
+    const rect = mk('rect', {
+      x: padL + i * bw + bw * 0.18, y: padT + plotH - bh,
+      width: bw * 0.64, height: bh, fill: color, rx: 2,
+    });
+    rect.appendChild(mk('title', {}, d.date + ': ' + fmtDur(d.seconds)));
+    svg.appendChild(rect);
+    if (n <= 8)  // value labels crowd past ~8 bars; the hover tooltip always has the exact figure
+      svg.appendChild(mk('text', {class: 'axval', x: cx, y: padT + plotH - bh - 3, 'text-anchor': 'middle'}, fmtDur(d.seconds)));
+    svg.appendChild(mk('text', {class: 'axlabel', x: cx, y: H - padB + 13, 'text-anchor': 'middle'}, d.date.slice(5)));
+  });
+  card.appendChild(svg);
+  return card;
+}
+
 function renderPhase(rec) {
   const card = document.createElement('div'); card.className = 'phase-card';
   const hdr = document.createElement('div'); hdr.className = 'phase-header';
@@ -110,6 +173,11 @@ function renderPhase(rec) {
   const total = document.createElement('span'); total.className = 'phase-total';
   total.textContent = rec.seconds != null ? fmtDur(rec.seconds) : '—';
   hdr.append(badge, total);
+  if (rec.ts) {
+    const ts = document.createElement('span'); ts.className = 'phase-ts';
+    ts.textContent = rec.ts.replace('T', ' ').slice(5, 16);  // MM-DD HH:MM
+    hdr.append(ts);
+  }
   card.appendChild(hdr);
   if (!rec.ok && rec.error) {
     const err = document.createElement('div'); err.className = 'err-msg';
@@ -124,23 +192,42 @@ function renderPhase(rec) {
   return card;
 }
 
+// Latest successful run per service date for one phase, oldest→newest, capped to the last 12
+// weeks so the trend bars stay readable. Records arrive newest-first, so first seen per date wins.
+function trendSeries(runs, phase) {
+  const latest = {};
+  for (const rec of runs) {
+    if ((rec.phase || 'build') !== phase || !rec.ok || rec.seconds == null) continue;
+    if (!(rec.service_date in latest)) latest[rec.service_date] = rec.seconds;
+  }
+  return Object.entries(latest)
+    .map(([date, seconds]) => ({date, seconds}))
+    .sort((a, b) => (a.date < b.date ? -1 : 1))
+    .slice(-12);
+}
+
 async function load() {
   const data = await fetch('/api/perf').then(r => r.json()).catch(() => ({runs: []}));
+  const charts = document.getElementById('charts');
   const el = document.getElementById('content');
   if (!data.runs || !data.runs.length) {
+    charts.innerHTML = '';
     el.innerHTML = '<p class="hint">기록 없음 — Assemble 또는 Build를 먼저 실행하세요.</p>';
     return;
   }
+  charts.innerHTML = '';
+  charts.appendChild(renderTrend(trendSeries(data.runs, 'assemble'), 'Assemble 시간', '#1d4ed8'));
+  charts.appendChild(renderTrend(trendSeries(data.runs, 'build'), 'Build 시간', '#15803d'));
+
   el.innerHTML = '';
-  // Group by service_date (records arrive newest-first from the API)
+  // Group by service_date, newest service date first (a recent rebuild of an old date
+  // shouldn't jump above the latest Sunday). Records arrive newest-first, so within a
+  // group the most recent run renders on top.
   const groups = {};
-  const order = [];
   for (const rec of data.runs) {
-    const d = rec.service_date;
-    if (!groups[d]) { groups[d] = []; order.push(d); }
-    groups[d].push(rec);
+    (groups[rec.service_date] ||= []).push(rec);
   }
-  for (const d of order) {
+  for (const d of Object.keys(groups).sort((a, b) => (a < b ? 1 : -1))) {
     const grp = document.createElement('div'); grp.className = 'run-group';
     const h2 = document.createElement('h2'); h2.textContent = d;
     grp.appendChild(h2);

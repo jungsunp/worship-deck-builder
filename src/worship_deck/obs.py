@@ -13,6 +13,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -57,12 +58,16 @@ class StepTimer:
         self._steps: dict[str, float] = {}
 
     @contextmanager
-    def step(self, name: str):  # type: ignore[override]
+    def step(self, name: str):
         t = time.monotonic()
         try:
             yield
         finally:
             self._steps[name] = round(time.monotonic() - t, 1)
+
+    def merge(self, steps: dict[str, float]) -> None:
+        """Fold already-measured sub-step durations (e.g. from keynote_build) into this timer."""
+        self._steps.update(steps)
 
     def to_dict(self) -> dict[str, float]:
         return dict(self._steps)
@@ -76,9 +81,20 @@ def write_run_record(
     steps: dict[str, float] | None = None,
     error: str | None = None,
 ) -> None:
-    """Append one JSON record to logs/runs.jsonl (called directly for assemble phase)."""
+    """Append one JSON record to logs/runs.jsonl (called directly for assemble phase).
+
+    `ts` is the wall-clock finish time (local ISO-8601, seconds precision) so the perf
+    dashboard can order/dedupe multiple runs of the same service_date and read week-to-week
+    trend, which `service_date` alone (one Sunday) can't distinguish.
+    """
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    rec: dict = {"service_date": service_date, "phase": phase, "ok": ok, "seconds": seconds}
+    rec: dict = {
+        "service_date": service_date,
+        "phase": phase,
+        "ok": ok,
+        "seconds": seconds,
+        "ts": datetime.now().isoformat(timespec="seconds"),
+    }
     if steps:
         rec["steps"] = steps
     if error:

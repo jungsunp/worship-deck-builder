@@ -35,5 +35,5 @@ def run(service_date: str) -> str:
         # Absolute path: Keynote's `save ... in (POSIX file ...)` throws -609 on a relative path.
         out = str(Path(f"data/drafts/draft-{service_date}.key").resolve())
         path, build_steps = keynote_build.build(data, template, out)
-        timer._steps.update(build_steps)
+        timer.merge(build_steps)
         return path
