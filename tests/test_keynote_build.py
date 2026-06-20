@@ -628,8 +628,9 @@ def test_place_image_raises_on_nonzero_returncode(monkeypatch: pytest.MonkeyPatc
 
 def _mock_song_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Record fill_song_slides' Keynote primitive calls instead of running osascript."""
-    calls: dict = {"set": [], "duplicate": None, "delete": None}
+    calls: dict = {"set": [], "notes": [], "duplicate": None, "delete": None}
     monkeypatch.setattr(B, "set_slide_text", lambda k, i, t: calls["set"].append((i, t)))
+    monkeypatch.setattr(B, "set_slide_notes", lambda k, i, t: calls["notes"].append((i, t)))
     monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
     monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
     return calls
@@ -676,6 +677,32 @@ def test_fill_song_slides_empty_lyrics_leaves_title_only(
     assert calls["delete"] == (8, 1)  # all template lyric slides trimmed
     assert calls["duplicate"] is None
     assert calls["set"] == [(7, "제목")]  # only the title is set
+
+
+def test_fill_song_slides_fans_out_arrangement_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Arrangement repeats (#113): labeled sections V1/C played V1 C C C (no ×N — repeated labels).
+    calls = _mock_song_primitives(monkeypatch)
+    song = Song(
+        title="제목",
+        sections=[
+            {"label": "V1", "lines": ["절1", "절2"]},
+            {"label": "C", "lines": ["후렴"]},
+        ],
+        arrangement="V1 C C C",
+    )
+
+    n = fill_song_slides("k", 7, song, existing_lyric_count=1)
+
+    assert n == 5  # 1 title + 4 played slides (V1 once + C three times)
+    assert calls["duplicate"] == (8, 3)  # grow the single template lyric slide to 4
+    assert calls["delete"] is None
+    assert calls["set"] == [
+        (7, "제목"), (8, "절1\n절2"), (9, "후렴"), (10, "후렴"), (11, "후렴"),
+    ]
+    # each lyric slide carries its section label in presenter notes (operator-only, hidden)
+    assert calls["notes"] == [(8, "V1"), (9, "C"), (10, "C"), (11, "C")]
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,16 @@ class Song:
     # operator splits regrouped verses in review.
     lines: list[str] = field(default_factory=list)
     composer: str = ""  # composer/arranger credit line, shown on the title slide (choir)
+    # Operator-labeled sections (#113): ordered {"label": str, "lines": list[str]} groups
+    # (V1/C/B/PC…). Empty = unlabeled; the builder falls back to chunk(`lines`). When present,
+    # `lines` is kept as the flattened mirror (sections joined by a blank line). See arranged_chunks().
+    sections: list[dict] = field(default_factory=list)
+    # The play-order string sequencing the section labels, e.g. "V1 C V1 Cx2 B Cx3". Empty =
+    # play each section once in document order. See parse_arrangement()/arranged_chunks().
+    arrangement: str = ""
+    # The raw arrangement string read off the lead sheet (e.g. "V-C-V-Cx2-B-Cx3"), shown in
+    # review as a non-binding hint for typing `arrangement`. Display-only — never parsed (#113).
+    arrangement_hint: str = ""
 
 
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
@@ -125,6 +135,27 @@ def _detect_title(ocr_lines: list[tuple[float, str]]) -> str:
     while tokens and not _HANGUL.search(tokens[-1]):
         tokens.pop()
     return " ".join(tokens)
+
+
+# A single arrangement token: a section label (V/C/B or PC), an optional verse number, and an
+# optional ×N repeat — e.g. "V", "C", "B", "PC", "V1", "Cx2", "PC×2", "Cx3".
+_ARR_TOKEN = re.compile(r"(?i)^(?:PC|[VCB])\d*(?:[x×]\d+)?$")
+
+
+def detect_arrangement_hint(ocr_lines: list[tuple[float, str]]) -> str:
+    """Find the printed arrangement string near the top of the sheet (e.g. "V-C-V-Cx2-B-Cx3").
+
+    Display-only (#113): returned verbatim as a hint the operator copies into a song's `order`,
+    never parsed. A line qualifies only when every "-"/space-separated token is an arrangement
+    token and there are at least three — which naturally excludes chord lines ("A C#m7 D",
+    "Am C G") and lyric/credit text. Returns "" when no such line is found (e.g. handwritten
+    marks Vision can't read).
+    """
+    for _, text in ocr_lines[:_TITLE_REGION]:
+        tokens = [t for t in re.split(r"[-\s]+", text.strip()) if t]
+        if len(tokens) >= 3 and all(_ARR_TOKEN.match(t) for t in tokens):
+            return text.strip()
+    return ""
 
 
 # ── Stage 3: filter to lyric fragments ────────────────────────────────────────
@@ -286,7 +317,9 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         if steps is not None:
             steps["gasazip"] = round(time.monotonic() - t, 1)
         if match:
-            return [Song(title=match.title, lines=linebreak.rebreak(match.lines))]
+            song = Song(title=match.title, lines=linebreak.rebreak(match.lines))
+            song.arrangement_hint = detect_arrangement_hint(ocr_lines)
+            return [song]
 
     t = time.monotonic()
     songs = _reassemble(fragments, title=title)
@@ -294,6 +327,10 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         steps["ollama"] = round(time.monotonic() - t, 1)
     for song in songs:
         song.lines = linebreak.rebreak(song.lines)
+    # Attach the sheet's arrangement hint only when one song was read — a multi-song sheet is
+    # ambiguous to attribute (#113).
+    if len(songs) == 1:
+        songs[0].arrangement_hint = detect_arrangement_hint(ocr_lines)
     return songs
 
 
@@ -319,3 +356,44 @@ def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:
     if current:
         slides.append(current)
     return slides
+
+
+def parse_arrangement(s: str) -> list[str]:
+    """Parse a play-order string into a list of section labels (#113).
+
+    Splits on dashes/whitespace and drops empties: "V1 C V1 C B C" -> ["V1","C","V1","C","B","C"].
+    There are no repeat counts — a section is replayed by repeating its label (the operator keeps
+    the slide on screen for live ×N repeats, watching the band sheet), keeping the deck small.
+    """
+    return [t for t in re.split(r"[-\s]+", s.strip()) if t]
+
+
+def arranged_chunks(song: Song) -> list[tuple[str, list[str]]]:
+    """Chunk a song's lyrics into <=2-line slides, honoring its labeled sections + arrangement (#113).
+
+    Returns (label, chunk) pairs in play order — the label rides along so the builder can stamp it
+    into each slide's presenter notes (operator-only; hidden from the audience). When the song has
+    no `sections` (choir/confession/legacy worship) this is chunk(song.lines) with empty labels.
+    Otherwise each section's lines are chunked and played in the order given by `song.arrangement`
+    (a play-order string of section labels); an empty arrangement plays each section once in
+    document order. Labels in the arrangement that match no section are skipped (the UI warns).
+    """
+    if not song.sections:
+        return [("", c) for c in chunk(song.lines)]
+    by_label: dict[str, list[str]] = {}
+    for sec in song.sections:
+        lab = sec["label"].strip().upper()
+        if lab:
+            by_label.setdefault(lab, sec["lines"])
+    labels = (
+        parse_arrangement(song.arrangement)
+        if song.arrangement.strip()
+        else [sec["label"] for sec in song.sections]
+    )
+    out: list[tuple[str, list[str]]] = []
+    for label in labels:
+        lines = by_label.get(label.strip().upper())
+        if lines is None:  # unknown label -> skip (UI warns)
+            continue
+        out.extend((label, c) for c in chunk(lines))
+    return out
