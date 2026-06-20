@@ -614,14 +614,29 @@ def _runs(tmp_path, monkeypatch) -> str:
     return "2026-05-31"
 
 
-def test_list_runs_newest_first(_runs) -> None:
+def test_list_runs_newest_first(_runs, tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)  # list_runs probes CWD-relative data/drafts/ for `pdfs`
     store.save("2026-05-31", _fake_run())
     store.save("2026-06-07", _fake_run())
-    assert client.get("/runs").json() == {"runs": ["2026-06-07", "2026-05-31"]}
+    assert client.get("/runs").json() == {"runs": ["2026-06-07", "2026-05-31"], "pdfs": []}
 
 
 def test_list_runs_empty(_runs) -> None:
-    assert client.get("/runs").json() == {"runs": []}
+    assert client.get("/runs").json() == {"runs": [], "pdfs": []}
+
+
+def test_list_runs_pdfs_lists_built_drafts(_runs, tmp_path, monkeypatch) -> None:
+    """A run whose draft PDF exists on disk is listed in `pdfs` for the /history link (#102)."""
+    monkeypatch.chdir(tmp_path)  # list_runs probes CWD-relative data/drafts/ (mirrors draft.pdf)
+    store.save("2026-05-31", _fake_run())
+    store.save("2026-06-07", _fake_run())
+    drafts = tmp_path / "data" / "drafts"
+    drafts.mkdir(parents=True)
+    (drafts / "draft-2026-06-07.pdf").write_bytes(b"%PDF-1.4 stub")
+    assert client.get("/runs").json() == {
+        "runs": ["2026-06-07", "2026-05-31"],
+        "pdfs": ["2026-06-07"],
+    }
 
 
 def test_index_shows_runs_section() -> None:
