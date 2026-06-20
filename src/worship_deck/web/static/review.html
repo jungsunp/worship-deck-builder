@@ -28,6 +28,9 @@
   .song .hd input { flex: 1; width: auto; min-width: 0; }
   .song .hd button { width: auto; padding: 0.3rem 0.6rem; font-size: 1rem; border: 0;
                      border-radius: var(--radius); background: var(--blue); color: #fff; }
+  .song .libsave { width: auto; margin-top: 0.5rem; padding: 0.5rem 0.8rem; font-size: 0.95rem;
+                   border: 1px solid var(--green); border-radius: var(--radius);
+                   background: #fff; color: var(--green); }
   /* 찬양 medley: one tab per song, panels stay in DOM (hidden) so save sees all edits. */
   .tabs { display: flex; gap: 0.4rem; overflow-x: auto; -webkit-overflow-scrolling: touch;
           margin-top: 0.5rem; }
@@ -303,7 +306,33 @@ function renderSong(div, song, kind, hint) {
   const ta = document.createElement('textarea');
   ta.dataset.kind = kind; ta.value = (song.lines || []).join('\n');
   sd.appendChild(ta);
+  // 고백의 찬양 rotates weekly — let the operator bank a polished song so next week it can be
+  // picked on the home screen instead of re-uploaded + re-transcribed + re-polished.
+  if (kind === 'confession') {
+    const lib = document.createElement('button');
+    lib.id = 'libSave'; lib.type = 'button'; lib.className = 'libsave';
+    lib.textContent = '라이브러리에 저장';
+    lib.onclick = saveConfessionToLibrary;
+    sd.appendChild(lib);
+  }
   div.appendChild(sd);
+}
+
+async function saveConfessionToLibrary() {
+  const get = sel => (document.querySelector('#order ' + sel)?.value || '').trim();
+  const title = get('input[data-kind="confession-title"]');
+  const composer = get('input[data-kind="confession-composer"]');
+  const ta = document.querySelector('#order textarea[data-kind="confession"]');
+  if (!title) { showStatus('✕ 곡 제목을 입력해야 저장할 수 있습니다', true); return; }
+  const btn = document.getElementById('libSave');
+  const r = await fetch('/library/confession', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({title, composer, lines: ta ? splitKeepBlanks(ta.value) : []}),
+  });
+  if (btn) {
+    btn.textContent = r.ok ? '라이브러리에 저장됨 ✓' : '저장 ✕';
+    setTimeout(() => { btn.textContent = '라이브러리에 저장'; }, 3000);
+  }
 }
 
 function renderChoir(div) {

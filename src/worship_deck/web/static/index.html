@@ -78,6 +78,10 @@
 
 <div class="card slotcard empty" id="slot-confession" onclick="pickSlot(event)">
   <div class="slothead"><span class="mark">⬜</span><span>고백의 찬양 악보 (이미지 1장)</span></div>
+  <div class="hint">새 곡은 악보 업로드 · 매주 도는 곡은 아래에서 선택</div>
+  <select id="confessionLib" onchange="pickConfession(this)">
+    <option value="">— 저장된 곡에서 선택 —</option>
+  </select>
   <div class="tap-hint">탭하여 업로드</div>
   <div class="files" id="files-confession"></div>
   <div class="sloterr" id="err-confession" hidden></div>
@@ -149,7 +153,7 @@ function ctaClick() {
 // Empty card = whole-card file picker; guard skips real controls and the input's own
 // bubbled synthetic click. Filled cards pick via the 교체/＋ 추가 button instead.
 function pickSlot(e) {
-  if (e.target.closest('button, input, a, .filerow')) return;
+  if (e.target.closest('button, input, a, select, .filerow')) return;
   const card = e.currentTarget;
   if (!card.classList.contains('empty')) return;
   card.querySelector('input[type=file]').click();
@@ -177,14 +181,31 @@ function setMark(kind, filled) {
   card.querySelector('.mark').textContent = filled ? '✓' : '⬜';
   _ready[kind] = filled;
 }
+// A library-picked confession song reads as a filled slot, with a ✕ to drop the pick (the
+// sidecar is a normal inbox file, so the same /inbox/{name} delete clears it).
+function libRow(title) {
+  const row = document.createElement('div'); row.className = 'filerow';
+  const ok = document.createElement('span'); ok.className = 'ok'; ok.textContent = '✓';
+  const name = document.createElement('span'); name.className = 'name';
+  name.textContent = title + ' (라이브러리)';
+  const btn = document.createElement('button'); btn.className = 'del'; btn.textContent = '✕';
+  btn.onclick = () => del('confession-pick.json');
+  row.append(ok, name, btn);
+  return row;
+}
 async function loadInbox() {
-  const {files, choir_text} = await (await fetch('/inbox')).json();
+  const {files, choir_text, confession_pick} = await (await fetch('/inbox')).json();
   const ta = document.getElementById('choirText');
   if (document.activeElement !== ta) ta.value = choir_text || '';
   for (const kind of ['bulletin', 'sheet', 'confession']) {
     const box = document.getElementById('files-' + kind);
     const mine = files.filter(f => f.kind === kind);
     box.innerHTML = '';
+    if (kind === 'confession' && confession_pick) {  // library pick stands in for an image
+      box.appendChild(libRow(confession_pick));
+      setMark('confession', true);
+      continue;
+    }
     for (const f of mine) box.appendChild(fileRow(f, 'div'));
     setMark(kind, mine.length > 0);
   }
@@ -254,6 +275,24 @@ async function saveChoir() {
   setMark('choir', r.ok && !!text.trim());
   updateReadiness();
 }
+async function loadConfessionLib() {
+  const {songs} = await (await fetch('/library/confession')).json();
+  const sel = document.getElementById('confessionLib');
+  sel.length = 1;  // keep the placeholder option
+  for (const s of songs) {
+    const o = document.createElement('option'); o.value = s.slug; o.textContent = s.title;
+    sel.appendChild(o);
+  }
+}
+async function pickConfession(sel) {
+  const slug = sel.value;
+  if (!slug) return;
+  await fetch('/inbox/confession-pick', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({slug}),
+  });
+  sel.value = '';  // reset to placeholder; the picked song now shows as the filled slot
+  loadInbox();
+}
 async function loadRuns() {
   const {runs} = await (await fetch('/runs')).json();
   const ul = document.getElementById('runs');
@@ -266,6 +305,7 @@ async function loadRuns() {
   }
 }
 loadInbox();
+loadConfessionLib();
 loadRuns();
 
 function showStatus(text, isErr) {

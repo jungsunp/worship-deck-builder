@@ -19,7 +19,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadF
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from worship_deck import hymn, obs, parse, pipeline, store
+from worship_deck import hymn, library, obs, parse, pipeline, store
 from worship_deck.bible import verses
 from worship_deck.keynote import build as keynote_build
 from worship_deck.lyrics import transcribe as lyrics_transcribe
@@ -81,6 +81,7 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
         existing.confession_song.get("title")
         and "confession_song" not in existing.edited_fields
         and _confession_path() is None
+        and _confession_pick() is None
     ):
         kept.append("고백의 찬양 lyrics")
     if existing.offering_hymn_verses:
@@ -109,8 +110,12 @@ def _refreshed_on_reassemble(existing: ServiceData) -> list[str]:
             continue  # no 봉헌 this week — don't list hymn number/title
         if f == "choir_song" and _choir_text() is None:
             continue  # no inbox text — carried over, not refreshed
-        if f == "confession_song" and _confession_path() is None:
-            continue  # no inbox image — carried over, not refreshed
+        if f == "confession_song":
+            if _confession_pick() is not None:
+                refreshed.append("고백의 찬양 lyrics (라이브러리에서 선택)")
+                continue
+            if _confession_path() is None:
+                continue  # no inbox image — carried over, not refreshed
         refreshed.append(_REFRESH_LABELS[f])
     return refreshed
 
@@ -180,6 +185,7 @@ def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
                 raise HTTPException(status_code=400, detail="confession sheet must be an image")
             for old in INBOX_DIR.glob("confession.*"):  # replace — extension may change
                 old.unlink()
+            _confession_pick_file().unlink(missing_ok=True)  # image and library pick are exclusive
             name = f"confession{suffix}"
         else:
             if suffix not in _IMAGE_SUFFIXES:
@@ -212,11 +218,14 @@ def inbox() -> dict:
     choir.txt is excluded from `files` — the home-page textarea is its UI.
     """
     if not INBOX_DIR.exists():
-        return {"files": [], "choir_text": ""}
-    files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name != "choir.txt")
+        return {"files": [], "choir_text": "", "confession_pick": ""}
+    _sidecars = {"choir.txt", "confession-pick.json"}  # have their own UI, not file slots
+    files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name not in _sidecars)
+    pick = _confession_pick()
     return {
         "files": [{"name": p.name, "size": p.stat().st_size, "kind": _kind(p.name)} for p in files],
         "choir_text": _choir_text() or "",
+        "confession_pick": pick.get("title", "") if pick else "",
     }
 
 
@@ -244,6 +253,39 @@ def delete_inbox_file(name: str) -> dict:
     return {"deleted": name}
 
 
+@app.get("/library/confession")
+def list_confession_library() -> dict:
+    """Saved 고백의 찬양 songs for the home picker (#issue): {slug, title, composer}."""
+    return {"songs": library.list_songs()}
+
+
+@app.post("/library/confession")
+def save_confession_library(body: dict = Body(...)) -> dict:
+    """Save a polished confession song to the cross-week library; return its slug + title."""
+    try:
+        slug = library.save_song(body)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"slug": slug, "title": body.get("title", "")}
+
+
+@app.post("/inbox/confession-pick")
+def pick_confession(body: dict = Body(...)) -> dict:
+    """Pick a saved library song as this week's 고백의 찬양 input (alternative to an image).
+
+    Snapshots the full song into the inbox so assemble stays decoupled from the library, and
+    removes any uploaded confession image — the two inputs are mutually exclusive.
+    """
+    song = library.load_song(body.get("slug", ""))
+    if song is None:
+        raise HTTPException(status_code=404, detail="song not in library")
+    INBOX_DIR.mkdir(parents=True, exist_ok=True)
+    for old in INBOX_DIR.glob("confession.*"):
+        old.unlink()
+    _confession_pick_file().write_text(json.dumps(song, ensure_ascii=False), encoding="utf-8")
+    return {"title": song.get("title", "")}
+
+
 def _bulletin_path() -> Path | None:
     """The inbox bulletin PDF (fixed slot name), or None if none uploaded."""
     pdf = INBOX_DIR / "bulletin.pdf"
@@ -259,6 +301,17 @@ def _confession_path() -> Path | None:
     """The 고백의 찬양 sheet image in the inbox, or None if none uploaded."""
     imgs = sorted(p for p in INBOX_DIR.glob("confession.*") if p.suffix.lower() in _IMAGE_SUFFIXES)
     return imgs[0] if imgs else None
+
+
+def _confession_pick_file() -> Path:
+    """Path of the inbox sidecar holding a library-picked confession song (may not exist)."""
+    return INBOX_DIR / "confession-pick.json"
+
+
+def _confession_pick() -> dict | None:
+    """The library song picked for this week (snapshotted into the inbox), or None."""
+    f = _confession_pick_file()
+    return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
 
 
 def _choir_text() -> str | None:
@@ -298,11 +351,15 @@ def _assemble_async(service_date: str) -> None:
                     steps[f"{k}_sheet_{i}"] = v
             data.worship_songs = [asdict(s) for s in songs]
 
-        # 고백의 찬양 (#109): transcribed from its dedicated sheet image. Best-effort like the
+        # 고백의 찬양 (#109): a library-picked song (snapshotted in the inbox) is used as-is —
+        # no transcription; otherwise transcribe its dedicated sheet image. Best-effort like the
         # hymn below — a transcription hiccup must not discard the rest of the assemble.
         if "confession_song" not in data.edited_fields:
+            pick = _confession_pick()
             img = _confession_path()
-            if img is None:
+            if pick is not None:
+                data.confession_song = pick
+            elif img is None:
                 warnings.append("no 고백의 찬양 sheet image in inbox")
             else:
                 try:
