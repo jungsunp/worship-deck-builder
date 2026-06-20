@@ -524,10 +524,17 @@ def perf_data() -> dict:
 
 @app.get("/runs")
 def list_runs() -> dict:
-    """Assembled runs by service date, newest first, for the home page to link to review."""
+    """Assembled runs by service date, newest first, for the home page to link to review.
+
+    `pdfs` lists the dates whose built draft PDF still exists on disk (#102), so /history can
+    show a persistent download link — the post-build link in review is in-memory only and is
+    lost on reload.
+    """
     if not store.RUNS_DIR.exists():
-        return {"runs": []}
-    return {"runs": sorted((p.stem for p in store.RUNS_DIR.glob("*.json")), reverse=True)}
+        return {"runs": [], "pdfs": []}
+    runs = sorted((p.stem for p in store.RUNS_DIR.glob("*.json")), reverse=True)
+    pdfs = [d for d in runs if Path(f"data/drafts/draft-{d}.pdf").is_file()]
+    return {"runs": runs, "pdfs": pdfs}
 
 
 @app.get("/runs/{service_date}")

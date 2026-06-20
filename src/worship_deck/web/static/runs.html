@@ -49,10 +49,11 @@ async function fillBadge(d, badge) {
   badge.className = 'badge ' + cls;
 }
 async function load() {
-  const [{runs}, perfData] = await Promise.all([
+  const [{runs, pdfs}, perfData] = await Promise.all([
     fetch('/runs').then(r => r.json()),
     fetch('/api/perf').then(r => r.json()).catch(() => ({runs: []})),
   ]);
+  const hasPdf = new Set(pdfs || []);
   // Build a lookup: date → {assemble: latestRecord, build: latestRecord}
   const perfByDate = {};
   for (const rec of (perfData.runs || [])) {
@@ -76,6 +77,13 @@ async function load() {
     if (p.assemble?.seconds) parts.push('Assemble: ' + fmtDur(p.assemble.seconds));
     if (p.build?.seconds) parts.push('Build: ' + fmtDur(p.build.seconds));
     if (parts.length) sub.textContent = parts.join(' • ');
+    if (hasPdf.has(d)) {  // persistent preview link to the built draft (#102)
+      if (sub.textContent) sub.append(' • ');
+      const pdf = document.createElement('a');
+      pdf.href = '/runs/' + d + '/draft.pdf'; pdf.target = '_blank';
+      pdf.textContent = '📄 PDF';
+      sub.append(pdf);
+    }
     li.append(a, sub);
     ul.appendChild(li);
     fillBadge(d, badge);
