@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from worship_deck import store
+from worship_deck import library, store
 from worship_deck.bible.verses import Verse
 from worship_deck.lyrics.transcribe import Song
 from worship_deck.parse import ServiceData
@@ -129,6 +129,7 @@ def test_inbox_lists_files_with_kind(tmp_path, monkeypatch) -> None:
             {"name": "sheet-1.png", "size": 7, "kind": "sheet"},
         ],
         "choir_text": "",
+        "confession_pick": "",
     }
 
 
@@ -136,12 +137,14 @@ def test_inbox_choir_text_excluded_from_files(tmp_path, monkeypatch) -> None:
     """choir.txt has its own textarea UI — it round-trips via choir_text, not the file list."""
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     (tmp_path / "choir.txt").write_text("제목\n가사", encoding="utf-8")
-    assert client.get("/inbox").json() == {"files": [], "choir_text": "제목\n가사"}
+    assert client.get("/inbox").json() == {
+        "files": [], "choir_text": "제목\n가사", "confession_pick": "",
+    }
 
 
 def test_inbox_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
-    assert client.get("/inbox").json() == {"files": [], "choir_text": ""}
+    assert client.get("/inbox").json() == {"files": [], "choir_text": "", "confession_pick": ""}
 
 
 def test_delete_inbox_file(tmp_path, monkeypatch) -> None:
@@ -321,6 +324,75 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     data = store.load(date)
     assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": ""}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
+
+
+# ── confession song library (고백의 찬양 pick + save) ──────────────────────────────
+
+
+def test_save_and_list_confession_library(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    song = {"title": "주 은혜임을", "lines": ["1절", "", "2절"], "composer": "작곡가"}
+    assert client.post("/library/confession", json=song).json()["title"] == "주 은혜임을"
+    songs = client.get("/library/confession").json()["songs"]
+    assert songs == [{"slug": "주-은혜임을", "title": "주 은혜임을", "composer": "작곡가"}]
+
+
+def test_save_confession_library_requires_title(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    assert client.post("/library/confession", json={"title": "  ", "lines": ["x"]}).status_code == 400
+
+
+def test_pick_confession_clears_image_and_reports_title(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    slug = library.save_song({"title": "도는찬양", "lines": ["가사"], "composer": ""})
+    (tmp_path / "confession.png").write_bytes(b"img")  # an earlier image upload
+    assert client.post("/inbox/confession-pick", json={"slug": slug}).json() == {"title": "도는찬양"}
+    assert not (tmp_path / "confession.png").exists()  # image and pick are exclusive
+    assert (tmp_path / "confession-pick.json").is_file()
+    # /inbox surfaces the pick title, not a file row
+    inbox = client.get("/inbox").json()
+    assert inbox["confession_pick"] == "도는찬양"
+    assert inbox["files"] == []
+
+
+def test_pick_confession_unknown_slug_is_404(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    assert client.post("/inbox/confession-pick", json={"slug": "nope"}).status_code == 404
+
+
+def test_upload_confession_image_clears_pick(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    slug = library.save_song({"title": "도는찬양", "lines": ["가사"]})
+    client.post("/inbox/confession-pick", json={"slug": slug})
+    client.post("/upload/confession", files={"files": ("a.png", b"img", "image/png")})
+    assert not (tmp_path / "confession-pick.json").exists()  # inverse exclusivity
+
+
+def test_clear_inbox_drops_pick_but_keeps_library(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    slug = library.save_song({"title": "도는찬양", "lines": ["가사"]})
+    client.post("/inbox/confession-pick", json={"slug": slug})
+    client.delete("/inbox")
+    assert not (tmp_path / "confession-pick.json").exists()  # swept with the rest of the inbox
+    assert library.load_song(slug) is not None  # library lives outside the inbox
+
+
+def test_assemble_uses_library_pick_without_transcribing(_assemble_env, monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    slug = library.save_song({"title": "도는찬양", "lines": ["폴리시된 가사"], "composer": "C"})
+    client.post("/inbox/confession-pick", json={"slug": slug})
+    # transcribe still runs for the 찬양 medley sheet, but never produces the confession song
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
+    )
+    date = client.post("/assemble").json()["service_date"]
+    data = store.load(date)
+    assert data.confession_song == {"title": "도는찬양", "lines": ["폴리시된 가사"], "composer": "C"}
+    assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched
 
 
 def test_assemble_warns_on_missing_slots(tmp_path, monkeypatch) -> None:

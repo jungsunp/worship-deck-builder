@@ -29,7 +29,10 @@ body {
 }
 h1 { font-size: 1.3rem; }
 h2 { font-size: 1.1rem; margin: 1.5rem 0 0.5rem; }
-input, textarea { font-size: 16px; }  /* below 16px iOS Safari zooms on focus */
+input, textarea, select { font-size: 16px; }  /* below 16px iOS Safari zooms on focus */
+select { width: 100%; box-sizing: border-box; margin-top: var(--space-2);
+         padding: var(--space-2); border: 1px solid var(--gray-200);
+         border-radius: var(--radius); background: #fff; }
 
 /* ── Shared components (Phase 1 #132; Phase 2 reuses these on the review page) ── */
 
