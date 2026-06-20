@@ -80,11 +80,15 @@ def _bulletin_html() -> str:
 
   /* single-column rows: each border spans the full width → one wide rule per row,
      like the real bulletin. The part name is a fixed-width inline span so the content
-     text still starts past _X_SPLIT (≈105pt). */
+     text still starts past _X_SPLIT (≈105pt). The leader (.who) is pushed to the right
+     so it lands in its own sub-column with a clear horizontal gap — the real bulletin's
+     layout, which _split_performer separates by x-position (not by token vocabulary). */
   table.order {{ border-collapse: collapse; width: 100%; font-size: 13px; }}
   table.order td {{ border-top: 1px solid #555; border-bottom: 1px solid #555;
-                    padding: 4px 2px; vertical-align: top; }}
-  table.order .part {{ display: inline-block; width: 120px; white-space: nowrap; }}
+                    padding: 4px 2px; display: flex; }}
+  table.order .part {{ flex: 0 0 120px; white-space: nowrap; }}
+  table.order .title {{ white-space: nowrap; }}
+  table.order .who {{ margin-left: auto; white-space: nowrap; padding-left: 24px; }}
   .foot {{ font-size: 12px; margin-top: 3px; }}
 
   .nextgen {{ margin-top: 60px; }}
@@ -121,21 +125,24 @@ def _bulletin_html() -> str:
     <div class="colhead">주일예배순서</div>
     <div class="lead">인도: {p}</div>
     <table class="order">
-      <!-- 마라나타 is the worship BAND NAME (matches the real bulletin), not a song
-           title. The bulletin lists no opening-worship songs; they come from the
-           band lead sheet into the top-level worship_songs field at assemble time. -->
-      <tr><td><span class="part">찬 양</span>마라나타</td></tr>
-      <tr><td><span class="part">예배의 부름</span>시 133:1-3 &nbsp; {p}</td></tr>
-      <tr><td><span class="part">고백의 찬양*</span>믿음으로 우리는 &nbsp; 다함께</td></tr>
-      <tr><td><span class="part">신앙고백*</span>사도신경 &nbsp; 다함께</td></tr>
-      <tr><td><span class="part">찬 양</span>사랑은 (윤학준 곡) &nbsp; 성가대</td></tr>
-      <tr><td><span class="part">봉 헌</span>피난처 있으니 (찬 70장) &nbsp; 다함께</td></tr>
-      <tr><td><span class="part">환영 및 인사*</span>다함께</td></tr>
-      <tr><td><span class="part">교회소식</span>{p}</td></tr>
-      <tr><td><span class="part">합심기도</span>다함께</td></tr>
-      <tr><td><span class="part">말 씀</span>설득된 믿음 (요한복음 4:43-54) &nbsp; {p}</td></tr>
-      <tr><td><span class="part">파송의 노래*</span>축복의 통로 &nbsp; 다함께</td></tr>
-      <tr><td><span class="part">축 도*</span>{p}</td></tr>
+      <!-- 마라나타 is the worship BAND NAME (matches the real bulletin), not a song title:
+           it sits in the right performer sub-column (.who), so it parses as the row's
+           leader, not its content. The bulletin lists no opening-worship songs; they come
+           from the band lead sheet into the top-level worship_songs field at assemble time.
+           봉 헌 is sung by 남성 중창단 — an ensemble outside any token vocabulary, so it
+           exercises _split_performer's x-position split (the #142-style regression). -->
+      <tr><td><span class="part">찬 양</span><span class="who">마라나타</span></td></tr>
+      <tr><td><span class="part">예배의 부름</span><span class="title">시 133:1-3</span><span class="who">{p}</span></td></tr>
+      <tr><td><span class="part">고백의 찬양*</span><span class="title">믿음으로 우리는</span><span class="who">다함께</span></td></tr>
+      <tr><td><span class="part">신앙고백*</span><span class="title">사도신경</span><span class="who">다함께</span></td></tr>
+      <tr><td><span class="part">찬 양</span><span class="title">사랑은 (윤학준 곡)</span><span class="who">성가대</span></td></tr>
+      <tr><td><span class="part">봉 헌</span><span class="title">피난처 있으니 (찬 70장)</span><span class="who">남성 중창단</span></td></tr>
+      <tr><td><span class="part">환영 및 인사*</span><span class="who">다함께</span></td></tr>
+      <tr><td><span class="part">교회소식</span><span class="who">{p}</span></td></tr>
+      <tr><td><span class="part">합심기도</span><span class="who">다함께</span></td></tr>
+      <tr><td><span class="part">말 씀</span><span class="title">설득된 믿음 (요한복음 4:43-54)</span><span class="who">{p}</span></td></tr>
+      <tr><td><span class="part">파송의 노래*</span><span class="title">축복의 통로</span><span class="who">다함께</span></td></tr>
+      <tr><td><span class="part">축 도*</span><span class="who">{p}</span></td></tr>
     </table>
     <div class="foot">(*표는 일어서서 하나님께 드립니다.)</div>
 

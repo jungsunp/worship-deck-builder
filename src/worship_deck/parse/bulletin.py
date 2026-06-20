@@ -41,6 +41,13 @@ _PART_GAP = 16
 # into a row when their tops fall within this many points of each other.
 _ROW_JITTER = 8
 
+# The performer (다함께/성가대/clergy/ensemble) sits in a right sub-column of the content cell.
+# It is separated from the title by a clear horizontal gap and never starts left of _LEADER_X,
+# so it is split off by x-position — robust to the sub-pt baseline jitter that scrambles the
+# (top, x0) flatten order, and vocabulary-free (handles unknown ensembles / soloist names).
+_LEADER_GAP = 18   # min whitespace (pt) between the title and the performer sub-column
+_LEADER_X = 230    # the performer sub-column never starts left of this
+
 # Announcement (교회소식) middle-column bounds: the column sits at x≈348–688 and the 기도제목
 # (prayer-topics) column begins at x≈694, so _MID_RIGHT must stay left of it. Each rendered row
 # is one intended line (the bulletin breaks lines by hand), so rows are kept as-is.
@@ -187,6 +194,22 @@ def _part_cell(part_words: list[dict]) -> tuple[str, list[str]]:
     return part, [w["text"] for w in s[i:]]
 
 
+def _split_performer(content_words: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split content-cell words into (title words, performer words) by sub-column.
+
+    The performer sub-column starts at x0 ≥ _LEADER_X. A performer-only row (the band name on
+    the opening 찬양, or 다함께/성가대/clergy on a no-song row) sits entirely in that column → all
+    performer, no title. Otherwise the performer is the trailing run beginning at x0 ≥ _LEADER_X
+    after a gap > _LEADER_GAP; absent such a gap (a lone left-column title) → all title.
+    """
+    s = sorted(content_words, key=lambda w: w["x0"])
+    if s and s[0]["x0"] >= _LEADER_X:
+        return [], s
+    k = next((i for i in range(1, len(s))
+              if s[i]["x0"] >= _LEADER_X and s[i]["x0"] - s[i - 1]["x1"] > _LEADER_GAP), None)
+    return (s[:k], s[k:]) if k is not None else (s, [])
+
+
 def _parse_worship_order(page) -> list[dict]:
     """Extract the main worship order from page 1's left column.
 
@@ -202,12 +225,15 @@ def _parse_worship_order(page) -> list[dict]:
 
     result = []
     for row in _cluster_rows(words):
-        row.sort(key=lambda w: (w["top"], w["x0"]))
         part, gutter = _part_cell([w for w in row if w["x0"] < _X_SPLIT])
-        content = " ".join(gutter + [w["text"] for w in row if w["x0"] >= _X_SPLIT])
-        if not content or not part or part.startswith("인도") or part.startswith("(*"):
+        title_words, perf_words = _split_performer([w for w in row if w["x0"] >= _X_SPLIT])
+        if (not part or part.startswith("인도") or part.startswith("(*")
+                or not (gutter or title_words or perf_words)):
             continue  # column title, the 인도 line, the (*표는…) footnote
-        title, leader, ref = _split_content(content)
+        content = " ".join(gutter + [w["text"] for w in title_words])
+        title, tok_leader, ref = _split_content(content)
+        geo_leader = " ".join(w["text"] for w in perf_words)
+        leader = " ".join(x for x in (tok_leader, geo_leader) if x).strip()
         result.append({"part": part, "title": title, "leader": leader, "ref": ref})
     return result
 
