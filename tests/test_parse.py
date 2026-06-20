@@ -15,6 +15,7 @@ from worship_deck.parse.bulletin import (
     _parse_offering_hymn,
     _part_cell,
     _split_content,
+    _split_performer,
     announcement_blocks,
 )
 
@@ -80,11 +81,13 @@ def test_parse_worship_order_titles() -> None:
     titles = [item["title"] for item in result.worship_order]
     assert "설득된 믿음" in titles                   # sermon title
     assert "피난처 있으니 (찬 70장)" in titles       # offering hymn
-    # The opening 찬양 row's content (마라나타) is the worship BAND NAME, not a song.
-    # The bulletin lists no opening-worship song titles — those come from the band
-    # sheet and land in the top-level worship_songs field at assemble time.
+    # 마라나타 is the worship BAND NAME — a performer, not a song title. It sits in the right
+    # performer sub-column, so it parses as the row's leader and the title stays empty. The
+    # bulletin lists no opening-worship song titles — those come from the band sheet and
+    # land in the top-level worship_songs field at assemble time.
     opening = next(r for r in result.worship_order if r["part"] == "찬 양")
-    assert opening["title"] == "마라나타"  # band name, surfaced as content — not a worship song
+    assert opening["title"] == ""
+    assert opening["leader"] == "마라나타"
 
 
 def test_parse_offering_hymn_from_sample_bulletin() -> None:
@@ -242,6 +245,58 @@ def test_part_cell_empty() -> None:
     assert _part_cell([]) == ("", [])
 
 
+# ── _split_performer() unit tests ─────────────────────────────────────────────
+# Real coords from the 6/21 bulletin (data/inbox/bulletin.pdf). The performer sits in a
+# right sub-column; _split_performer separates it by x-position, so it is immune to the
+# sub-pt baseline jitter that scrambled the old (top, x0) flatten order (#142), and works
+# for any performer label — clergy, congregation, or an unknown ensemble.
+
+def _texts(words: list[dict]) -> list[str]:
+    return [w["text"] for w in words]
+
+
+def test_split_performer_clergy_after_gap() -> None:
+    # Sermon row: pastor sub-column (x≈272) sits after a wide gap; input order scrambled
+    # (clergy first, as the buggy baseline-sort flattened it) — the x-sort still separates it.
+    words = [
+        _w("강선우", 271.6, 293.4), _w("목사", 295.2, 309.8),
+        _w("영적", 130.8, 144.6), _w("아버지", 146.7, 167.4),
+        _w("(삼상", 169.0, 188.0), _w("7:3-14)", 189.0, 205.0),
+    ]
+    title, perf = _split_performer(words)
+    assert _texts(title) == ["영적", "아버지", "(삼상", "7:3-14)"]
+    assert _texts(perf) == ["강선우", "목사"]
+
+
+def test_split_performer_ensemble_after_gap() -> None:
+    # 봉 헌 row: the choir's 남성 중창(단) ensemble trails the title past the column gap.
+    words = [
+        _w("주하나님", 116.7, 143.7), _w("지으신", 145.4, 165.8), _w("세계", 182.8, 196.5),
+        _w("(찬", 198.0, 207.0), _w("79장)", 209.1, 226.4),
+        _w("성가대", 255.2, 277.0), _w("남성", 278.8, 293.4), _w("중창", 295.2, 309.8),
+    ]
+    title, perf = _split_performer(words)
+    assert _texts(title) == ["주하나님", "지으신", "세계", "(찬", "79장)"]
+    assert _texts(perf) == ["성가대", "남성", "중창"]
+
+
+def test_split_performer_lone_band_name_is_performer() -> None:
+    # The opening 찬양 carries only the worship BAND NAME (마라나타 at x≈281, the performer
+    # sub-column) and no song title → all performer, no title (#142 follow-up).
+    title, perf = _split_performer([_w("마라나타", 281.0, 309.8)])
+    assert title == []
+    assert _texts(perf) == ["마라나타"]
+
+
+def test_split_performer_no_gap_performer_only_is_performer() -> None:
+    # Performer-only row (교회소식/축도): the whole run sits in the performer sub-column
+    # (x0 ≥ _LEADER_X) with no preceding title → all performer, no title.
+    words = [_w("강선우", 271.6, 293.4), _w("목사", 295.2, 309.8)]
+    title, perf = _split_performer(words)
+    assert title == []
+    assert _texts(perf) == ["강선우", "목사"]
+
+
 # ── _find_row() unit tests ────────────────────────────────────────────────────
 # The sermon row sometimes carries a series prefix in the part cell ("왜 말 씀"); the
 # lookup must match by whitespace-stripped substring, not exact equality (#104).
@@ -267,5 +322,9 @@ def test_parse_worship_order_leaders() -> None:
     for item in result.worship_order:
         by_part.setdefault(item["part"], []).append(item)
     assert by_part["예배의 부름"][0]["leader"] == "홍길동 목사"
-    assert by_part["봉 헌"][0]["leader"] == "다함께"
+    # 봉 헌 is sung by 남성 중창단 — an ensemble label in no token vocabulary; it is separated
+    # by its right-column x-position (not by matching a word), proving _split_performer (#142).
+    assert by_part["봉 헌"][0]["leader"] == "남성 중창단"
     assert by_part["말 씀"][0]["leader"] == "홍길동 목사"
+    # opening 찬 양: the band name 마라나타 is the performer, not a song title (no title here)
+    assert by_part["찬 양"][0]["leader"] == "마라나타"
