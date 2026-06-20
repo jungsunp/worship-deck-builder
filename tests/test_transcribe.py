@@ -316,6 +316,124 @@ def test_chunk_custom_max_lines() -> None:
 
 
 # ---------------------------------------------------------------------------
+# parse_arrangement / arranged_chunks — labeled-section play-order fan-out (#113)
+# ---------------------------------------------------------------------------
+
+def test_parse_arrangement_splits_into_labels() -> None:
+    # No ×N counter: a label per played group; repeats are explicit repetition.
+    assert T.parse_arrangement("V1 C V1 C B C") == ["V1", "C", "V1", "C", "B", "C"]
+
+
+def test_parse_arrangement_dash_form() -> None:
+    assert T.parse_arrangement("V1-C-C") == ["V1", "C", "C"]
+
+
+def test_parse_arrangement_tolerates_junk_and_empty() -> None:
+    assert T.parse_arrangement("") == []
+    assert T.parse_arrangement("   ") == []
+    assert T.parse_arrangement("  V1   C  ") == ["V1", "C"]
+
+
+def test_arranged_chunks_no_sections_equals_chunk() -> None:
+    # No labeled sections (choir/confession/legacy worship) -> chunk(song.lines), empty labels.
+    lines = ["a", "b", "c", "", "d", "", "e", "f"]
+    song = Song(title="t", lines=lines)
+    assert T.arranged_chunks(song) == [("", c) for c in T.chunk(lines)]
+
+
+def test_arranged_chunks_empty_arrangement_plays_sections_in_order() -> None:
+    song = Song(
+        title="t",
+        sections=[
+            {"label": "V1", "lines": ["v1a", "v1b"]},
+            {"label": "C", "lines": ["ca", "cb"]},
+        ],
+    )
+    assert T.arranged_chunks(song) == [("V1", ["v1a", "v1b"]), ("C", ["ca", "cb"])]
+
+
+def test_arranged_chunks_interleaved_repeats_ppdae() -> None:
+    # 푯대 shape: V1/C/V2/B sections; play V1 C V2 C C B C C C (repeats by repeated labels).
+    song = Song(
+        title="푯대를 향하여",
+        sections=[
+            {"label": "V1", "lines": ["v1a", "v1b"]},
+            {"label": "C", "lines": ["후렴a", "후렴b"]},
+            {"label": "V2", "lines": ["v2a", "v2b"]},
+            {"label": "B", "lines": ["브릿지"]},
+        ],
+        arrangement="V1 C V2 C C B C C C",
+    )
+    chunks = T.arranged_chunks(song)
+    chorus = [("C", ["후렴a", "후렴b"])]
+    assert chunks == (
+        [("V1", ["v1a", "v1b"])] + chorus + [("V2", ["v2a", "v2b"])] + chorus * 2
+        + [("B", ["브릿지"])] + chorus * 3
+    )
+
+
+def test_arranged_chunks_whole_song_repeated() -> None:
+    # 보좌 shape: one 2-line section played 6x via 6 repeated labels -> 6 slides.
+    song = Song(
+        title="보좌 앞으로",
+        sections=[{"label": "V1", "lines": ["주님의 보혈", "의지하는 맘으로"]}],
+        arrangement="V1 V1 V1 V1 V1 V1",
+    )
+    assert T.arranged_chunks(song) == [("V1", ["주님의 보혈", "의지하는 맘으로"])] * 6
+
+
+def test_arranged_chunks_skips_unknown_label() -> None:
+    # A label with no matching section (operator typo / deleted card) is skipped, not crashed.
+    song = Song(
+        title="t",
+        sections=[{"label": "V1", "lines": ["a"]}, {"label": "C", "lines": ["b"]}],
+        arrangement="V1 PC C",
+    )
+    assert T.arranged_chunks(song) == [("V1", ["a"]), ("C", ["b"])]
+
+
+# ---------------------------------------------------------------------------
+# detect_arrangement_hint — printed arrangement string near the top (#113)
+# ---------------------------------------------------------------------------
+
+def test_detect_arrangement_hint_dash_form() -> None:
+    lines = [(0.06, "V-C-V-Cx2-B-Cx3"), (0.03, "내게 유익하던 것을")]
+    assert T.detect_arrangement_hint(lines) == "V-C-V-Cx2-B-Cx3"
+
+
+def test_detect_arrangement_hint_space_form_with_verse_numbers() -> None:
+    lines = [(0.06, "V1 V2 PC C V1 PC×2 Cx3 V5")]
+    assert T.detect_arrangement_hint(lines) == "V1 V2 PC C V1 PC×2 Cx3 V5"
+
+
+def test_detect_arrangement_hint_rejects_chords_and_lyrics() -> None:
+    assert T.detect_arrangement_hint([(0.05, "A C#m7 D E")]) == ""
+    assert T.detect_arrangement_hint([(0.05, "Am C G")]) == ""
+    assert T.detect_arrangement_hint([(0.05, "내 주를 가까이")]) == ""
+    assert T.detect_arrangement_hint([]) == ""
+    assert T.detect_arrangement_hint([(0.05, "V C")]) == ""  # too few tokens
+
+
+def test_transcribe_attaches_arrangement_hint_online(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from worship_deck.lyrics import online
+
+    ocr = [(0.06, "V-C-V-Cx2-B-Cx3")] + _OCR_LINES
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: ocr)
+    monkeypatch.setattr(
+        online,
+        "lookup",
+        lambda *a, **kw: online.Candidate(
+            song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]
+        ),
+    )
+    (song,) = transcribe("whatever.png")
+    assert song.arrangement_hint == "V-C-V-Cx2-B-Cx3"
+    assert song.arrangement == ""  # hint is never auto-applied
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real Vision + Ollama; skipped without the toolchain/sheets
 # ---------------------------------------------------------------------------
 

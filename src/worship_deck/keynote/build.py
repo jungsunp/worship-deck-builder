@@ -15,7 +15,7 @@ from pathlib import Path
 
 from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.keynote.anchors import detect_anchors
-from worship_deck.lyrics.transcribe import Song, chunk
+from worship_deck.lyrics.transcribe import Song, arranged_chunks
 from worship_deck.parse.bulletin import ServiceData
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
@@ -27,6 +27,7 @@ _SET_VERSE_SLIDE = Path(__file__).parent / "applescript" / "set_verse_slide.appl
 _READ_VERSE_BOXES = Path(__file__).parent / "applescript" / "read_verse_boxes.applescript"
 _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescript"
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
+_SET_SLIDE_NOTES = Path(__file__).parent / "applescript" / "set_slide_notes.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
 _SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_CONFESSION_TITLE = (
@@ -543,6 +544,20 @@ def set_slide_text(key_path: str, slide_index: int, text: str) -> str:
     return _run_osascript(_SET_SLIDE_TEXT, key, str(slide_index), text).strip()
 
 
+def set_slide_notes(key_path: str, slide_index: int, notes: str) -> str:
+    """Set a slide's presenter notes, in place (#113).
+
+    Presenter notes are shown only on the operator's presenter display, never on the projected
+    slide, so a section label (V1/C/Tag…) stamped here lets the operator follow the medley
+    arrangement during the service without the audience seeing it. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_SET_SLIDE_NOTES, key, str(slide_index), notes).strip()
+
+
 def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str) -> str:
     """Set the 말씀 title slide's two on-canvas boxes — sermon title + scripture ref — in place (#90).
 
@@ -672,15 +687,17 @@ def fill_song_slides(
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
     """
     set_slide_text(key_path, title_index, song.title)
-    chunks = chunk(song.lines)
+    chunks = arranged_chunks(song)
     target = len(chunks)
     first_lyric = title_index + 1
     if existing_lyric_count > target:
         delete_slides(key_path, first_lyric + target, existing_lyric_count - target)
     elif target > existing_lyric_count:
         duplicate_slide(key_path, first_lyric, target - existing_lyric_count)
-    for i, lines in enumerate(chunks):
+    for i, (label, lines) in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
+        if label:  # stamp the section label into presenter notes (operator-only, #113)
+            set_slide_notes(key_path, first_lyric + i, label)
     return 1 + target
 
 
@@ -730,15 +747,17 @@ def fill_choir_slides(
         composer = f"({composer})"
     for i in range(title_count):
         set_choir_title(key_path, title_index + i, song.title, composer)
-    chunks = chunk(song.lines)
+    chunks = arranged_chunks(song)
     target = len(chunks)
     first_lyric = title_index + title_count
     if existing_lyric_count > target:
         delete_slides(key_path, first_lyric + target, existing_lyric_count - target)
     elif target > existing_lyric_count:
         duplicate_slide(key_path, first_lyric, target - existing_lyric_count)
-    for i, lines in enumerate(chunks):
+    for i, (label, lines) in enumerate(chunks):
         set_slide_text(key_path, first_lyric + i, "\n".join(lines))
+        if label:  # choir/confession have no labeled sections -> no notes
+            set_slide_notes(key_path, first_lyric + i, label)
     return title_count + target
 
 

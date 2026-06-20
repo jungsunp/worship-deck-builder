@@ -38,6 +38,48 @@
          white-space: nowrap; padding: 0.45rem 0.8rem; font-size: 0.95rem;
          border: 1px solid var(--gray-200); border-radius: 999px; background: #fff; }
   .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+  /* 찬양 sections + arrangement (#113): operator-labeled section cards, then a typed play-order. */
+  .lcard { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.5rem;
+           margin-top: 0.5rem; background: #fff; }
+  /* Auto-grows to the full lyrics (so selection is easy) but stays drag-resizable. */
+  .lcard textarea { resize: vertical; overflow: auto; }
+  .cardhd { display: flex; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
+  .cardhd select { width: auto; flex: none; padding: 0.3rem 0.4rem; font-size: 0.95rem;
+                   font-weight: 600; }
+  .cardhd .sp { flex: 1; }
+  .cardhd button { width: auto; border: 0; background: transparent; padding: 0.2rem 0.4rem;
+                   font-size: 1rem; line-height: 1; color: var(--gray-600); }
+  .cardhd button.x { color: var(--red); }
+  .splitbtn { width: auto; margin-top: 0.4rem; padding: 0.3rem 0.6rem; font-size: 0.85rem;
+              border: 1px dashed var(--gray-300); border-radius: var(--radius);
+              background: #fff; color: var(--gray-700); }
+  .addcard { width: auto; margin-top: 0.5rem; padding: 0.4rem 0.8rem; font-size: 0.9rem;
+             border: 1px dashed var(--gray-300); border-radius: var(--radius);
+             background: #fff; color: var(--gray-700); }
+  .arr { margin-top: 0.8rem; }
+  .arrhint { color: var(--gray-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
+  .arrhint b { color: var(--gray-700); }
+  .arrlabel { font-size: 0.8rem; color: var(--gray-600); font-weight: 600; margin-bottom: 0.3rem; }
+  /* Play-order built by tapping labels: drag the ⠿ grip to reorder, corner ✕ removes. Repeat a
+     section live by adding its label again (no ×N counter — keeps the deck small, #113). */
+  .flow { display: flex; flex-wrap: wrap; gap: 0.55rem 0.5rem; align-items: center; min-height: 2rem; }
+  .flowempty { color: var(--gray-500); font-size: 0.85rem; }
+  .fchip { position: relative; display: inline-flex; align-items: center; border: 1px solid var(--blue);
+           border-radius: 999px; background: var(--blue); color: #fff; padding: 0.05rem 0.7rem 0.05rem 0.15rem; }
+  .fchip.dragging { opacity: 0.5; }
+  .fchip .grip { cursor: grab; touch-action: none; color: rgba(255,255,255,0.8); font-size: 0.9rem;
+                 padding: 0.3rem 0.25rem 0.3rem 0.4rem; line-height: 1; user-select: none; }
+  .fchip .lab { font-weight: 600; padding: 0 0.1rem; font-size: 0.95rem; }
+  .fchip .rm { position: absolute; top: -0.45rem; right: -0.45rem; width: 1.05rem; height: 1.05rem;
+               padding: 0; border-radius: 999px; background: var(--red); color: #fff; border: 1px solid #fff;
+               font-size: 0.7rem; line-height: 1rem; text-align: center; }
+  .picklabel { font-size: 0.8rem; color: var(--gray-600); margin: 0.5rem 0 0.2rem; }
+  .pick { margin-top: 0.2rem; display: flex; flex-wrap: wrap; gap: 0.3rem; }
+  .pick button { width: auto; padding: 0.3rem 0.7rem; font-size: 0.95rem; font-weight: 600;
+                 border: 1px solid var(--blue); border-radius: 999px; background: #fff;
+                 color: var(--blue); }
+  .arrout { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.4rem; }
+  .arrwarn { color: var(--red); font-size: 0.85rem; margin-top: 0.3rem; }
   textarea, input { width: 100%; font-size: 1rem; box-sizing: border-box; }
   textarea { min-height: 3.5rem; overflow: hidden; resize: none; }  /* auto-grow (#112) */
   input { padding: 0.5rem; margin: 0.25rem 0; }
@@ -280,12 +322,204 @@ function renderMedley(div) {
     const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(s, -1);
     const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(s, 1);
     hd.append(ti, up, dn); sd.appendChild(hd);
-    const ta = document.createElement('textarea');
-    ta.dataset.kind = 'worship'; ta.dataset.i = s; ta.value = (song.lines || []).join('\n');
-    sd.appendChild(ta);
+    // Start unlabeled lyrics as one V1 card so the operator always has something to split/label.
+    if (!song.sections || !song.sections.length) {
+      song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];
+    }
+    const cardsHost = document.createElement('div');
+    cardsHost.className = 'cards'; cardsHost.dataset.i = s;
+    sd.appendChild(cardsHost);
+    const add = document.createElement('button'); add.type = 'button';
+    add.className = 'addcard'; add.textContent = '＋ 구간';
+    add.onclick = () => { readCards(s); song.sections.push({label: '', lines: []}); bump(s); };
+    sd.appendChild(add);
+    const arr = document.createElement('div'); arr.className = 'arr'; arr.dataset.i = s;
+    sd.appendChild(arr);
+    renderCards(cardsHost, s);    // render into the refs directly — sd isn't in the document yet,
+    renderArrangement(arr, s);    // so refreshSong's #order querySelector would find nothing here
     panels.push(sd);
     div.appendChild(sd);
   });
+}
+
+// Section-card editor (#113). The operator labels lyric groups (V1/C/PC/B…) themselves — online/
+// 14b lyrics carry no structure — and types a play-order string that sequences the labels with ×N
+// repeats. The OCR-read arrangement string is shown only as a non-binding hint.
+const LABEL_OPTS = ['V1', 'V2', 'V3', 'V4', 'PC', 'C', 'B', 'Intro', '간주', 'Tag', 'Ending'];
+
+// Read every card's label + lines from the DOM into song.sections (DOM is the truth for typed
+// text; structural ops call this first so unsaved typing survives a re-render).
+function readCards(s) {
+  const host = document.querySelector('#order .cards[data-i="' + s + '"]');
+  if (!host) return;
+  const secs = [];
+  host.querySelectorAll('.lcard').forEach(card => {
+    const sel = card.querySelector('select');
+    const ta = card.querySelector('textarea');
+    secs.push({label: sel.value === '__custom' ? '' : sel.value, lines: splitKeepBlanks(ta.value)});
+  });
+  run.worship_songs[s].sections = secs;
+}
+
+// Re-render a song's cards + arrangement after a structural change.
+function refreshSong(s) {
+  renderCards(document.querySelector('#order .cards[data-i="' + s + '"]'), s);
+  renderArrangement(document.querySelector('#order .arr[data-i="' + s + '"]'), s);
+}
+const bump = s => { edited.opening = true; refreshSong(s); };
+
+function renderCards(host, s) {
+  const song = run.worship_songs[s];
+  host.innerHTML = '';
+  song.sections.forEach((sec, ci) => {
+    const card = document.createElement('div'); card.className = 'lcard';
+    const cardhd = document.createElement('div'); cardhd.className = 'cardhd';
+    const sel = document.createElement('select');
+    const opts = LABEL_OPTS.slice();
+    if (sec.label && !opts.includes(sec.label)) opts.unshift(sec.label);  // keep custom/OCR labels
+    opts.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; sel.appendChild(op); });
+    const cu = document.createElement('option'); cu.value = '__custom'; cu.textContent = '직접입력…'; sel.appendChild(cu);
+    sel.value = sec.label || '';
+    sel.onchange = () => {
+      if (sel.value === '__custom') {
+        const v = (prompt('구간 라벨 (예: V5, Tag2)') || '').trim();
+        readCards(s); song.sections[ci].label = v; bump(s);
+      } else { readCards(s); edited.opening = true; renderArrangement(host.parentElement.querySelector('.arr'), s); }
+    };
+    const sp = document.createElement('span'); sp.className = 'sp';
+    const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; b.onclick = fn; return b; };
+    const ta = document.createElement('textarea');
+    ta.value = (sec.lines || []).join('\n');
+    cardhd.append(
+      sel, sp,
+      mk('▲', '', () => { readCards(s); if (ci > 0) { [song.sections[ci - 1], song.sections[ci]] = [song.sections[ci], song.sections[ci - 1]]; bump(s); } }),
+      mk('▼', '', () => { readCards(s); if (ci < song.sections.length - 1) { [song.sections[ci + 1], song.sections[ci]] = [song.sections[ci], song.sections[ci + 1]]; bump(s); } }),
+      mk('✕', 'x', () => {
+        readCards(s);
+        if (song.sections.length <= 1) return;          // keep at least one card
+        const tgt = ci > 0 ? ci - 1 : 1;                // merge lines up (or into next for the first)
+        song.sections[tgt].lines = ci > 0
+          ? song.sections[tgt].lines.concat(song.sections[ci].lines)
+          : song.sections[ci].lines.concat(song.sections[tgt].lines);
+        song.sections.splice(ci, 1); bump(s);
+      }),
+    );
+    card.appendChild(cardhd);
+    card.appendChild(ta);
+    autogrow(ta);
+    const split = mk('여기서 나누기', 'splitbtn', () => {
+      const lineIdx = ta.value.slice(0, ta.selectionStart).split('\n').length - 1;  // cursor's line
+      const all = ta.value.split('\n');
+      const top = splitKeepBlanks(all.slice(0, lineIdx).join('\n'));
+      const bottomLines = splitKeepBlanks(all.slice(lineIdx).join('\n'));
+      if (!top.length || !bottomLines.length) return;   // nothing to split
+      readCards(s);
+      song.sections.splice(ci, 1, {label: sec.label, lines: top}, {label: '', lines: bottomLines});
+      bump(s);
+    });
+    card.appendChild(split);
+    host.appendChild(card);
+  });
+}
+
+// transcribe.chunk in JS: blank line breaks a slide, <=2 non-blank lines per slide.
+function chunkCountLines(lines) {
+  let slides = 0, cur = 0;
+  (lines || []).forEach(l => {
+    if (!l.trim()) { if (cur) { slides++; cur = 0; } }
+    else { cur++; if (cur === 2) { slides++; cur = 0; } }
+  });
+  return slides + (cur ? 1 : 0);
+}
+// transcribe.parse_arrangement in JS: "V1 C V1 C" -> ["V1","C","V1","C"] (a label per played slide-
+// group; repeat a label to repeat the section — no ×N counter).
+function parseArr(str) {
+  return (str || '').trim().split(/[-\s]+/).filter(Boolean);
+}
+
+// Serialize a [label,...] sequence back to the stored arrangement string ("V1 C V1 C").
+const serializeSeq = seq => seq.join(' ');
+
+// Pointer-based drag-reorder for a chip's grip (HTML5 draggable doesn't fire on touch). While
+// dragging we move the chip in the DOM relative to whatever chip the pointer is over; on release
+// commit() rebuilds the order from the chips' final DOM positions.
+function startDrag(grip, chip, flow, commit) {
+  grip.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    chip.classList.add('dragging');
+    const move = ev => {
+      const over = document.elementFromPoint(ev.clientX, ev.clientY);
+      const target = over && over.closest ? over.closest('.fchip') : null;
+      if (!target || target === chip || target.parentElement !== flow) return;
+      const r = target.getBoundingClientRect();
+      const after = ev.clientX > r.left + r.width / 2;
+      flow.insertBefore(chip, after ? target.nextSibling : target);
+    };
+    const up = () => {
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      chip.classList.remove('dragging');
+      commit();
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  });
+}
+
+// Play-order is built by TAPPING labels, not typing (#113 feedback): each step is a compact blue
+// chip — a ⠿ grip drag-reorders (pointer events so it works on touch) and a small corner ✕ removes.
+// There is no ×N counter: to repeat a section the operator taps its label again (V1 V1 V1) — one
+// slide per tap keeps the deck small; the operator holds a repeated slide live, watching the band
+// sheet. The result serializes into song.arrangement (a string). Empty order = sections once in order.
+function renderArrangement(host, s) {
+  const song = run.worship_songs[s];
+  host.innerHTML = '';
+  if (song.arrangement_hint) {
+    const h = document.createElement('div'); h.className = 'arrhint';
+    h.append('악보 표기: '); const b = document.createElement('b'); b.textContent = song.arrangement_hint;
+    h.append(b, ' (참고용 · 자동 적용 안 함)'); host.appendChild(h);
+  }
+  const lab = document.createElement('div'); lab.className = 'arrlabel'; lab.textContent = '진행 순서';
+  host.appendChild(lab);
+  const seq = parseArr(song.arrangement);
+  const apply = next => { song.arrangement = serializeSeq(next); edited.opening = true; renderArrangement(host, s); };
+  const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; b.onclick = fn; return b; };
+  const flow = document.createElement('div'); flow.className = 'flow';
+  if (!seq.length) {
+    const e = document.createElement('span'); e.className = 'flowempty';
+    e.textContent = '아래 라벨을 눌러 순서를 만드세요 (비우면 구간 순서대로 1번씩)'; flow.appendChild(e);
+  }
+  // Rebuild seq from the chips' current DOM order (used after a drag) and re-apply.
+  const commitOrder = () => apply([...flow.querySelectorAll('.fchip')].map(el => el.dataset.label));
+  seq.forEach((l, i) => {
+    const chip = document.createElement('span'); chip.className = 'fchip';
+    chip.dataset.label = l;
+    const grip = document.createElement('span'); grip.className = 'grip'; grip.textContent = '⠿';
+    startDrag(grip, chip, flow, commitOrder);
+    const lb = document.createElement('span'); lb.className = 'lab'; lb.textContent = l;
+    const rm = mk('✕', 'rm', () => { const u = seq.slice(); u.splice(i, 1); apply(u); });
+    chip.append(grip, lb, rm);
+    flow.appendChild(chip);
+  });
+  host.appendChild(flow);
+  const pl = document.createElement('div'); pl.className = 'picklabel'; pl.textContent = '라벨 추가 (반복하려면 다시 누르세요)'; host.appendChild(pl);
+  const pick = document.createElement('div'); pick.className = 'pick';
+  const seen = new Set();
+  song.sections.forEach(sec => {
+    const l = (sec.label || '').trim(); if (!l || seen.has(l)) return; seen.add(l);
+    pick.appendChild(mk('＋ ' + l, '', () => apply(seq.concat([l]))));
+  });
+  if (!seen.size) { const e = document.createElement('span'); e.className = 'flowempty'; e.textContent = '구간에 라벨을 먼저 지정하세요'; pick.appendChild(e); }
+  host.appendChild(pick);
+  const out = document.createElement('div'); out.className = 'arrout'; host.appendChild(out);
+  const warn = document.createElement('div'); warn.className = 'arrwarn'; host.appendChild(warn);
+  const byLabel = {};
+  song.sections.forEach(sec => { const k = (sec.label || '').toUpperCase(); if (k && !(k in byLabel)) byLabel[k] = sec.lines; });
+  const played = seq.length ? seq : song.sections.map(sec => sec.label);
+  let total = 0; const unknown = [];
+  played.forEach(l => { const lines = byLabel[(l || '').toUpperCase()]; if (lines === undefined) { if (l) unknown.push(l); return; } total += chunkCountLines(lines); });
+  out.textContent = '→ 가사 슬라이드 ' + total + '장';
+  warn.textContent = unknown.length ? '⚠ 모르는 라벨: ' + [...new Set(unknown)].join(', ') : '';
 }
 
 // Choir / confession lyrics arrive via the home-page inputs at assemble (#109); here the
@@ -446,8 +680,12 @@ const splitKeepBlanks = v => {
 };
 
 function syncFromDom() {
-  document.querySelectorAll('#order textarea[data-kind="worship"]').forEach(ta => {
-    run.worship_songs[ta.dataset.i].lines = splitLines(ta.value);
+  document.querySelectorAll('#order .cards[data-i]').forEach(host => {
+    const s = host.dataset.i, song = run.worship_songs[s];
+    readCards(s);  // DOM cards -> song.sections (label + lines, #113)
+    // Flatten sections to lines (blank-line separated) as the legacy/fallback mirror.
+    song.lines = song.sections.flatMap((sec, i) => i ? [''].concat(sec.lines) : sec.lines);
+    // song.arrangement is kept current in memory by the chip-flow editor — nothing to read here.
   });
   document.querySelectorAll('#order input[data-kind="worship-title"]').forEach(ti => {
     run.worship_songs[ti.dataset.i].title = ti.value.trim();

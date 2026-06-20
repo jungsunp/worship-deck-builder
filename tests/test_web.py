@@ -249,7 +249,10 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     assert status.json()["status"] == "done"
 
     data = store.load(date)
-    assert data.worship_songs == [{"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": ""}]
+    assert data.worship_songs == [
+        {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": "",
+         "sections": [], "arrangement": "", "arrangement_hint": ""}
+    ]
     assert data.call_to_worship_passage == [
         {"number": 1, "korean": "한글", "english": "english"},
     ]
@@ -310,6 +313,9 @@ def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> Non
         "title": "제목",
         "lines": ["1절 가사", "", "2절 가사"],
         "composer": "작곡자 작곡",
+        "sections": [],
+        "arrangement": "",
+        "arrangement_hint": "",
     }
 
 
@@ -322,7 +328,8 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     )
     date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
-    assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": ""}
+    assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": "",
+                                     "sections": [], "arrangement": "", "arrangement_hint": ""}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -650,6 +657,27 @@ def test_put_run_persists_edits(_runs) -> None:
     assert [s["title"] for s in songs] == ["마라나타", "주 은혜임을"]
     assert songs[0]["lines"] == ["new line 1", "new line 2"]
     assert saved.offering_hymn_verses == [1, 3]
+
+
+def test_put_run_persists_song_arrangement(_runs) -> None:
+    # The labeled sections + play-order string and OCR hint survive PUT -> store.load (#113).
+    store.save(_runs, _fake_run())
+    run = client.get(f"/runs/{_runs}").json()
+    run["worship_songs"][0]["sections"] = [
+        {"label": "V1", "lines": ["a", "b"]},
+        {"label": "C", "lines": ["c"]},
+    ]
+    run["worship_songs"][0]["arrangement"] = "V1 C C"
+    run["worship_songs"][0]["arrangement_hint"] = "V-C-V-Cx2"
+    assert client.put(f"/runs/{_runs}", json=run).status_code == 200
+
+    song = store.load(_runs).worship_songs[0]
+    assert song["sections"] == [
+        {"label": "V1", "lines": ["a", "b"]},
+        {"label": "C", "lines": ["c"]},
+    ]
+    assert song["arrangement"] == "V1 C C"
+    assert song["arrangement_hint"] == "V-C-V-Cx2"
 
 
 def test_put_run_tracks_edited_fields(_runs) -> None:
