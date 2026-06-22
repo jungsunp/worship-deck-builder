@@ -23,10 +23,13 @@ Native Keynote can only be driven on a Mac that is **powered on and logged in** 
 automation needs the macOS window server). So:
 
 - **The Mac is the worker** — it runs Keynote and builds the deck.
-- **Your iPhone is the remote** — a small **mobile web app** (reached privately over
-  Tailscale) lets you **upload the week's files**, review/reorder songs, and tap *Generate*.
+- **Phones are the remote** — a small **mobile web app**, reached privately over a
+  **Tailscale** tailnet (stable MagicDNS hostname, HTTPS via `tailscale serve`), lets
+  whoever is on duty **upload the week's files**, review/reorder songs, tap *Generate*,
+  and later tweak the built deck in Keynote on iPhone.
 
-To run while away, the Mac must stay awake (scheduled wake / Tailscale wake-on-LAN).
+To run while away, the Mac must stay **awake** (`caffeinate`/`pmset`) and **on the
+tailnet**. See [Remote access & deployment](#remote-access--deployment) for the full plan.
 
 ## Architecture
 
@@ -121,7 +124,8 @@ changed enough that the CI tests' reference map should follow.
 
 - **LibreOffice + poppler**, for converting the downloaded 봉헌 hymn PowerPoint to slide
   PNGs (`brew install --cask libreoffice && brew install poppler`).
-- **Tailscale** for reaching the mobile web app from your phone while away.
+- **Tailscale** for reaching the web app from phones while away — see
+  [Remote access & deployment](#remote-access--deployment).
 
 **Install and configure:**
 
@@ -137,12 +141,37 @@ Fill in `.env` (git-ignored):
 | `ESV_API_KEY` | Free non-commercial key from [api.esv.org](https://api.esv.org/) — English verse text. |
 | `TEMPLATE_KEY` | Path to the master Keynote template deck (`templates/master.key`; git-ignored, place locally). |
 | `OLLAMA_MODEL` / `OLLAMA_HOST` | One model for both lyric tasks (reassembly + line splitting) + Ollama address. Defaults (`qwen3:14b`, `http://127.0.0.1:11434`) work out of the box. |
-| `WEB_HOST` / `WEB_PORT` | Mobile review/trigger web app bind address (defaults `127.0.0.1:8787`). |
+| `WEB_HOST` / `WEB_PORT` | Web app bind address (defaults `127.0.0.1:8787`). Keep it on loopback in production — `tailscale serve` provides remote access; see [Remote access & deployment](#remote-access--deployment). |
 | `NTFY_TOPIC` | *(optional)* [ntfy.sh](https://ntfy.sh/) topic for phone push on failure — leave blank to disable. |
 
 No Anthropic/cloud key is needed — worship-song lyrics are fetched from gasazip.com (no
 key, no account) or transcribed fully locally on fallback. 봉헌 (offering) hymn slides are
 downloaded online per song, so there is no local hymn directory to configure.
+
+## Remote access & deployment
+
+The app is reachable from phones **privately over [Tailscale](https://tailscale.com)** and
+is **never exposed to the public internet** (it handles member names + offering amounts).
+This is a v2 effort tracked in issues [#148–#162](../../issues?q=label%3Av2); the access
+model is **locked on Tailscale** — chosen over a Cloudflare tunnel because it is $0 with no
+domain, keeps traffic off the public internet entirely, and is the simplest to hand off.
+
+- **Network.** Every operator joins one tailnet. The Mac gets a stable **MagicDNS**
+  hostname and serves the app over HTTPS via `tailscale serve` — no port-forwarding and no
+  open firewall ports. uvicorn binds **loopback only** (`127.0.0.1`); the tailnet is the
+  only way in.
+- **Identity.** There is no app password — the tailnet authenticates each user, and the
+  app reads Tailscale Serve's identity headers (`Tailscale-User-Login`) to attribute each
+  run to a member.
+- **Onboarding.** Non-technical church members install Tailscale once (with a guide/video)
+  and add the app to their home screen; thereafter it's a single tap.
+- **Always-on host.** The production target is a church **Mac mini** that stays powered on,
+  awake (`caffeinate`/`pmset`), and on the tailnet across reboots, with the web app and
+  Tailscale auto-starting via `launchd`.
+
+Tailnet ownership starts on a personal account and will be **transferred to the church's
+account later** (promote it to Owner on the *same* tailnet — never create a new tailnet, or
+every device must re-authenticate).
 
 ## Privacy
 

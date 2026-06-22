@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-Builds a weekly Keynote worship deck for a Korean church's Sunday worship services. The same deck is shared across all services (e.g. 9am and 11am). **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. An iPhone reaches the FastAPI web app over Tailscale to review and trigger builds.
+Builds a weekly Keynote worship deck for a Korean church's Sunday worship services. The same deck is shared across all services (e.g. 9am and 11am). **Requires a Mac that is powered on and logged in** — Keynote automation needs the macOS window server. Phones reach the FastAPI web app privately over a **Tailscale** tailnet to upload files, review, and trigger builds; production runs on an always-on church Mac mini (v2 remote-access effort — issues #148–#162; see README "Remote access & deployment").
 
 Per-section content sources (see `config/slide_map.yaml`):
 - **Worship songs (찬양):** band **lead sheet** images shared via Kakao — often a multi-song medley with red arrangement marks (`V/C/B` sections, `×N` repeats, X-out skips, `→` segues). Only the **lyrics** are needed (the band runs the arrangement live from the sheets). The bulletin names the band, not the songs, so each sheet's title is detected from the OCR (tallest mostly-Hangul line; `lyrics/ocr_ko.swift` emits per-line heights) and **canonical lyrics are looked up on gasazip.com** ranked by OCR-fragment overlap (`lyrics/online.py`, #110). On no confident match it falls back to the free local hybrid — Apple Vision OCR fragments reassembled by a local Ollama model. No API key.
@@ -23,7 +23,7 @@ pytest -m "not local_only"   # CI-safe; no Mac/Keynote needed
 pytest -m local_only          # Mac + Keynote required
 set -a && source .env && set +a  # load .env vars before pytest (live tests need API keys)
 uvicorn worship_deck.web.app:app --host 127.0.0.1 --port 8787 --reload
-uvicorn worship_deck.web.app:app --host 0.0.0.0 --port 8787  # LAN/phone access: same Wi-Fi, hit http://<mac-lan-ip>:8787/ (needs macOS firewall "Allow"). Off-network access is via Tailscale (#28).
+uvicorn worship_deck.web.app:app --host 0.0.0.0 --port 8787  # ad-hoc same-Wi-Fi testing only: hit http://<mac-lan-ip>:8787/ (needs macOS firewall "Allow"). Production binds loopback (127.0.0.1) and uses Tailscale Serve for off-network access — see README "Remote access & deployment" (v2, #148–#162).
 ```
 
 ## Architecture
@@ -55,6 +55,7 @@ The run is two-phase and web-driven: **assemble** (`web/app.py._assemble_async`:
 - **봉헌 hymn slide conversion** (`hymn.pptx_to_pngs`) shells out to LibreOffice `soffice` + poppler `pdftoppm`; bibletoppt needs a browser UA + ~5-min JWT — setup detail: see `docs/gotchas.md`.
 - Required env vars: `ESV_API_KEY` (api.esv.org, free non-commercial), `TEMPLATE_KEY` (path to master `.key` template). Optional: `NTFY_TOPIC` (ntfy.sh topic for phone push on failure — leave blank to disable). Uploaded bulletin/sheet files land in a fixed `data/inbox/` (git-ignored; `worship_deck.web.app.INBOX_DIR`) — no env var, since files arrive via the upload form rather than an iCloud drop-folder. 봉헌 hymn slides are fetched online per song — there is no local hymn directory.
 - **PDF generation/parsing gotchas** (pdfplumber needs Playwright-made PDFs, FontBBox log noise, US-Legal landscape paper size, multi-column flattening, Playwright page-breaks) and **test/env one-offs** (`source .env` fails on the `INBOX_DIR` space; mock `httpx.get` without respx): see `docs/gotchas.md`.
+- **Remote access is Tailscale-only (v2).** The app is never exposed to the public internet: uvicorn binds loopback (`127.0.0.1`), `tailscale serve` fronts it over HTTPS on the tailnet, and per-user identity comes from Serve's `Tailscale-User-Login` header (no app password). Don't add a `--host 0.0.0.0` production path, a public tunnel (Cloudflare etc.), or an app login/password system — those were considered and rejected. See README "Remote access & deployment" and issues #148–#162.
 - `ruff check src tests` lints the whole tree — with concurrent sessions it may fail on another session's uncommitted files. Lint only your changed paths (`ruff check <file>...`) to check your own work.
 
 ## Coding guidelines
