@@ -340,6 +340,31 @@ def announcement_blocks(pdf_path: str) -> list[str]:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _masthead_date(page) -> str:
+    """Read the service date from the bulletin masthead, normalized to "YYYY년 M월 D일".
+
+    The authoritative date lives in the last column of the final page: a "N권 M호"
+    (volume/issue) line with the service date on the line directly below it. Reading it
+    positionally — rather than scanning flattened page text for any "YYYY년 M월 D일" — avoids
+    locking onto unrelated dates in the body (e.g. an obituary in 교우동정) and survives the
+    multi-column flattening that splits the masthead date across other columns' words.
+
+    Returns "" if the masthead can't be located.
+    """
+    words = page.extract_words()
+    issue = next((w for w in words if re.fullmatch(r"\d+호", w["text"])), None)
+    if issue is None:
+        return ""
+    below = [
+        w
+        for w in words
+        if issue["bottom"] < w["top"] < issue["bottom"] + 30 and w["x0"] > issue["x0"] - 40
+    ]
+    below.sort(key=lambda w: w["x0"])
+    m = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", " ".join(w["text"] for w in below))
+    return re.sub(r"\s+", " ", m.group()) if m else ""
+
+
 def to_iso_date(date: str) -> str:
     """Convert a Korean bulletin date ("2026년 5월 31일") to ISO ("2026-05-31").
 
@@ -360,14 +385,11 @@ def parse(pdf_path: str) -> ServiceData:
     logging.disable(logging.WARNING)
     try:
         with pdfplumber.open(pdf_path) as pdf:
-            text = "".join(p.extract_text() or "" for p in pdf.pages)
+            date = _masthead_date(pdf.pages[-1])
             worship_order = _parse_worship_order(pdf.pages[0])
             announcements = _announcement_blocks(_extract_announcements(pdf.pages[0]))
     finally:
         logging.disable(logging.NOTSET)
-
-    date_match = re.search(r"\d{4}년\s*\d{1,2}월\s*\d{1,2}일", text)
-    date = re.sub(r"\s+", " ", date_match.group()) if date_match else ""
 
     call = _find_row(worship_order, "예배의 부름")
     sermon = _find_row(worship_order, "말 씀")

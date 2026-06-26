@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from worship_deck.parse.bulletin import (
     _expand_list_paren,
     _extract_announcements,
     _find_row,
+    _masthead_date,
     _parse_offering_hymn,
     _part_cell,
     _split_content,
@@ -66,6 +68,29 @@ FIXTURES = Path(__file__).parent / "fixtures"
 def test_parse_date_from_sample_bulletin() -> None:
     result = parse(str(FIXTURES / "sample_bulletin.pdf"))
     assert result.date == "2026년 5월 17일"
+
+
+def test_masthead_date_ignores_stray_body_dates() -> None:
+    # The masthead "N권 M호 / YYYY년 M월 D일" is authoritative; an obituary date elsewhere on
+    # the page must not win. extract_words() returns dicts with text/top/bottom/x0.
+    page = SimpleNamespace(
+        extract_words=lambda: [
+            {"text": "2026년", "top": 10, "bottom": 20, "x0": 5},  # obituary, wrong date
+            {"text": "6월", "top": 10, "bottom": 20, "x0": 40},
+            {"text": "21일", "top": 10, "bottom": 20, "x0": 70},
+            {"text": "31권", "top": 40, "bottom": 50, "x0": 699},  # masthead issue line
+            {"text": "26호", "top": 40, "bottom": 50, "x0": 725},
+            {"text": "2026년", "top": 60, "bottom": 70, "x0": 700},  # service date, below it
+            {"text": "6월", "top": 60, "bottom": 70, "x0": 742},
+            {"text": "28일", "top": 60, "bottom": 70, "x0": 764},
+        ]
+    )
+    assert _masthead_date(page) == "2026년 6월 28일"
+
+
+def test_masthead_date_returns_empty_when_no_issue_line() -> None:
+    page = SimpleNamespace(extract_words=lambda: [{"text": "2026년", "top": 10, "bottom": 20, "x0": 5}])
+    assert _masthead_date(page) == ""
 
 
 def test_parse_worship_order_has_all_parts() -> None:
