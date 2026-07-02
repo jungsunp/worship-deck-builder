@@ -16,6 +16,10 @@ data/
 *.mov
 # (allow design assets that are intentionally tracked: see git add -f, or whitelist below)
 !src/worship_deck/render/templates/**/*.png
+# Style-reference doc images (#167): public church live-stream stills + non-sensitive
+# deck slides (psalm/creed/divider/lyric — no member names or offering amounts).
+!docs/style-references/**/*.png
+!docs/style-references/**/*.jpg
 
 # ---- Secrets ----
 .env
