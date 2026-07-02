@@ -10,6 +10,7 @@ dependencies = [
     "fastapi",         # mobile review/trigger web app
     "uvicorn",         # ASGI server
     "python-multipart",# file uploads in the web app
+    "protobuf",        # read/write ProPresenter .pro files (v3 migration, #165)
 ]
 
 [project.optional-dependencies]
@@ -30,3 +31,5 @@ markers = ["local_only: requires a Mac with Keynote; skipped in CI"]
 
 [tool.ruff]
 line-length = 100
+# Generated protobuf bindings (scripts/gen_proto.sh) — don't lint machine output.
+extend-exclude = ["src/worship_deck/propresenter/pb"]

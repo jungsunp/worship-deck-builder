@@ -126,12 +126,16 @@ changed enough that the CI tests' reference map should follow.
   PNGs (`brew install --cask libreoffice && brew install poppler`).
 - **Tailscale** for reaching the web app from phones while away — see
   [Remote access & deployment](#remote-access--deployment).
+- **protoc** (`brew install protobuf`), only for the ProPresenter (.pro) build path
+  (v3 migration, #165) — generates the Python protobuf bindings, which are not
+  committed (see [`scripts/gen_proto.sh`](scripts/gen_proto.sh)).
 
 **Install and configure:**
 
 ```bash
 pip install -e ".[dev]"
 cp .env.example .env          # then fill in the values below
+bash scripts/gen_proto.sh     # only for ProPresenter (.pro) builds — generates protobuf bindings (needs protoc)
 ```
 
 Fill in `.env` (git-ignored):
