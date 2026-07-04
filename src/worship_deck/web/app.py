@@ -136,6 +136,10 @@ INBOX_DIR = Path("data/inbox")
 # alongside the run-store JSON). Tests monkeypatch this to a tmp dir.
 HYMN_DIR = Path("data/runs")
 
+# Custom 찬양 section labels the operator typed via 직접입력 (e.g. C1, C2), reused across weeks
+# in the medley label dropdown. Flat JSON list, git-ignored. Tests monkeypatch this.
+LABELS_FILE = Path("data/custom_labels.json")
+
 
 @app.get("/health")
 def health() -> dict:
@@ -284,6 +288,28 @@ def pick_confession(body: dict = Body(...)) -> dict:
         old.unlink()
     _confession_pick_file().write_text(json.dumps(song, ensure_ascii=False), encoding="utf-8")
     return {"title": song.get("title", "")}
+
+
+@app.get("/api/labels")
+def list_labels() -> dict:
+    """Custom medley section labels the operator has saved (직접입력), for the label dropdown."""
+    if not LABELS_FILE.exists():
+        return {"labels": []}
+    return {"labels": json.loads(LABELS_FILE.read_text(encoding="utf-8"))}
+
+
+@app.post("/api/labels")
+def add_label(body: dict = Body(...)) -> dict:
+    """Remember a newly typed custom label so future runs can pick it from the dropdown."""
+    label = (body.get("label") or "").strip()
+    if not label:
+        raise HTTPException(status_code=400, detail="empty label")
+    labels = json.loads(LABELS_FILE.read_text(encoding="utf-8")) if LABELS_FILE.exists() else []
+    if label not in labels:
+        labels.append(label)
+        LABELS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        LABELS_FILE.write_text(json.dumps(labels, ensure_ascii=False), encoding="utf-8")
+    return {"labels": labels}
 
 
 def _bulletin_path() -> Path | None:

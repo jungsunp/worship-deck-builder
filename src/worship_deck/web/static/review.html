@@ -162,6 +162,7 @@ async function load() {
   const r = await fetch('/runs/' + date);
   if (!r.ok) { showStatus('✕ 불러오기 오류: ' + r.status, true); return; }
   run = await r.json();
+  try { customLabels = (await (await fetch('/api/labels')).json()).labels || []; } catch (e) { /* offline: dropdown still has the defaults */ }
   render();
 }
 
@@ -346,6 +347,7 @@ function renderMedley(div) {
 // 14b lyrics carry no structure — and types a play-order string that sequences the labels with ×N
 // repeats. The OCR-read arrangement string is shown only as a non-binding hint.
 const LABEL_OPTS = ['V1', 'V2', 'V3', 'V4', 'PC', 'C', 'B', 'Intro', '간주', 'Tag', 'Ending'];
+let customLabels = [];  // labels typed via 직접입력, persisted server-side and reused across weeks
 
 // Read every card's label + lines from the DOM into song.sections (DOM is the truth for typed
 // text; structural ops call this first so unsaved typing survives a re-render).
@@ -375,14 +377,18 @@ function renderCards(host, s) {
     const card = document.createElement('div'); card.className = 'lcard';
     const cardhd = document.createElement('div'); cardhd.className = 'cardhd';
     const sel = document.createElement('select');
-    const opts = LABEL_OPTS.slice();
-    if (sec.label && !opts.includes(sec.label)) opts.unshift(sec.label);  // keep custom/OCR labels
+    const opts = LABEL_OPTS.concat(customLabels.filter(l => !LABEL_OPTS.includes(l)));  // + saved 직접입력 labels
+    if (sec.label && !opts.includes(sec.label)) opts.unshift(sec.label);  // keep this card's custom/OCR label
     opts.forEach(o => { const op = document.createElement('option'); op.value = o; op.textContent = o; sel.appendChild(op); });
     const cu = document.createElement('option'); cu.value = '__custom'; cu.textContent = '직접입력…'; sel.appendChild(cu);
     sel.value = sec.label || '';
     sel.onchange = () => {
       if (sel.value === '__custom') {
         const v = (prompt('구간 라벨 (예: V5, Tag2)') || '').trim();
+        if (v && !LABEL_OPTS.includes(v) && !customLabels.includes(v)) {  // remember for future runs
+          customLabels.push(v);
+          fetch('/api/labels', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: v})}).catch(() => {});
+        }
         readCards(s); song.sections[ci].label = v; bump(s);
       } else { readCards(s); edited.opening = true; renderArrangement(host.parentElement.querySelector('.arr'), s); }
     };
@@ -414,8 +420,9 @@ function renderCards(host, s) {
       const bottomLines = splitKeepBlanks(all.slice(lineIdx).join('\n'));
       if (!top.length || !bottomLines.length) return;   // nothing to split
       readCards(s);
-      song.sections.splice(ci, 1, {label: sec.label, lines: top}, {label: '', lines: bottomLines});
-      bump(s);
+      const label = song.sections[ci].label;  // current DOM label — closure `sec` goes stale when
+      song.sections.splice(ci, 1, {label, lines: top}, {label: '', lines: bottomLines});  // the
+      bump(s);                                 // dropdown changes without a card re-render (#387)
     });
     card.appendChild(split);
     host.appendChild(card);
