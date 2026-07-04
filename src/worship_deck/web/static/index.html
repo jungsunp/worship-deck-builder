@@ -77,16 +77,19 @@
 </div>
 
 <div class="card slotcard empty" id="slot-confession" onclick="pickSlot(event)">
-  <div class="slothead"><span class="mark">⬜</span><span>고백의 찬양 악보 (이미지 1장)</span></div>
-  <div class="hint">새 곡은 악보 업로드 · 매주 도는 곡은 아래에서 선택</div>
+  <div class="slothead"><span class="mark">⬜</span><span>고백의 찬양</span></div>
+  <div class="hint">셋 중 하나 — 저장된 곡 선택 · 악보 이미지 업로드 · 가사 직접 입력</div>
   <select id="confessionLib" onchange="pickConfession(this)">
     <option value="">— 저장된 곡에서 선택 —</option>
   </select>
-  <div class="tap-hint">탭하여 업로드</div>
+  <div class="tap-hint">탭하여 악보 이미지 업로드</div>
   <div class="files" id="files-confession"></div>
   <div class="sloterr" id="err-confession" hidden></div>
   <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
   <input type="file" accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'confession')">
+  <textarea id="confessionText" oninput="confessionChanged()" onblur="flushConfession()"
+    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사 (성가대와 동일 형식)"></textarea>
+  <div class="hint" id="confessionStatus"></div>
 </div>
 
 <div class="card slotcard" id="slot-choir">
@@ -116,7 +119,7 @@ function fmtDur(s) {
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
   return m ? m + '분 ' + sec + '초' : sec + '초';
 }
-let _timer, _choirTimer;
+let _timer, _choirTimer, _confessionTimer;
 let _phase = 'idle';   // idle | running | done — drives the CTA and stepper
 let _doneDate = null;  // service date of the finished assemble (CTA → review link)
 const _ready = {bulletin: false, sheet: false, confession: false, choir: false};
@@ -153,7 +156,7 @@ function ctaClick() {
 // Empty card = whole-card file picker; guard skips real controls and the input's own
 // bubbled synthetic click. Filled cards pick via the 교체/＋ 추가 button instead.
 function pickSlot(e) {
-  if (e.target.closest('button, input, a, select, .filerow')) return;
+  if (e.target.closest('button, input, a, select, textarea, .filerow')) return;
   const card = e.currentTarget;
   if (!card.classList.contains('empty')) return;
   card.querySelector('input[type=file]').click();
@@ -194,9 +197,11 @@ function libRow(title) {
   return row;
 }
 async function loadInbox() {
-  const {files, choir_text, confession_pick} = await (await fetch('/inbox')).json();
+  const {files, choir_text, confession_pick, confession_text} = await (await fetch('/inbox')).json();
   const ta = document.getElementById('choirText');
   if (document.activeElement !== ta) ta.value = choir_text || '';
+  const cta = document.getElementById('confessionText');
+  if (document.activeElement !== cta) cta.value = confession_text || '';
   for (const kind of ['bulletin', 'sheet', 'confession']) {
     const box = document.getElementById('files-' + kind);
     const mine = files.filter(f => f.kind === kind);
@@ -207,7 +212,9 @@ async function loadInbox() {
       continue;
     }
     for (const f of mine) box.appendChild(fileRow(f, 'div'));
-    setMark(kind, mine.length > 0);
+    // 고백의 찬양 is ready via any of image / library pick / typed text (#109).
+    setMark(kind, mine.length > 0
+      || (kind === 'confession' && !!(confession_text || '').trim()));
   }
   const sheets = files.filter(f => f.kind === 'sheet').length;
   document.getElementById('sheetCount').textContent = sheets ? sheets + '장' : '';
@@ -229,6 +236,7 @@ async function resetWeek() {
   document.getElementById('statusCard').hidden = true;
   document.getElementById('warnCard').hidden = true;
   document.getElementById('choirStatus').textContent = '';
+  document.getElementById('confessionStatus').textContent = '';
   setStep('assemble', 'empty'); setStep('review', 'empty'); setStep('build', 'empty');
   loadInbox();
 }
@@ -274,6 +282,29 @@ async function saveChoir() {
     ? (text.trim() ? '저장됨 ✓' : '비어 있음 — 저장 안 함') : '저장 오류: ' + r.status;
   setMark('choir', r.ok && !!text.trim());
   updateReadiness();
+}
+// 고백의 찬양 typed lyrics (#109): same debounced auto-save as 성가대. Saving non-empty text
+// clears any uploaded image / library pick server-side, so reload the inbox to refresh the slot.
+function confessionChanged() {
+  document.getElementById('confessionStatus').textContent = '…';
+  clearTimeout(_confessionTimer);
+  _confessionTimer = setTimeout(saveConfession, 800);
+}
+function flushConfession() {
+  if (!_confessionTimer) return;
+  clearTimeout(_confessionTimer);
+  saveConfession();
+}
+async function saveConfession() {
+  _confessionTimer = null;
+  const text = document.getElementById('confessionText').value;
+  const r = await fetch('/inbox/confession-text', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}),
+  });
+  document.getElementById('confessionStatus').textContent = r.ok
+    ? (text.trim() ? '저장됨 ✓ (이미지·라이브러리 선택 해제)' : '비어 있음 — 저장 안 함')
+    : '저장 오류: ' + r.status;
+  await loadInbox();  // saving text drops any image/pick — refresh the slot display + readiness
 }
 async function loadConfessionLib() {
   const {songs} = await (await fetch('/library/confession')).json();

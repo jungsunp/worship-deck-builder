@@ -82,6 +82,7 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
         and "confession_song" not in existing.edited_fields
         and _confession_path() is None
         and _confession_pick() is None
+        and _confession_text() is None
     ):
         kept.append("고백의 찬양 lyrics")
     if existing.offering_hymn_verses:
@@ -114,8 +115,11 @@ def _refreshed_on_reassemble(existing: ServiceData) -> list[str]:
             if _confession_pick() is not None:
                 refreshed.append("고백의 찬양 lyrics (라이브러리에서 선택)")
                 continue
+            if _confession_text() is not None:
+                refreshed.append("고백의 찬양 lyrics (직접 입력한 가사에서 다시 파싱)")
+                continue
             if _confession_path() is None:
-                continue  # no inbox image — carried over, not refreshed
+                continue  # no inbox image/text — carried over, not refreshed
         refreshed.append(_REFRESH_LABELS[f])
     return refreshed
 
@@ -218,14 +222,16 @@ def inbox() -> dict:
     choir.txt is excluded from `files` — the home-page textarea is its UI.
     """
     if not INBOX_DIR.exists():
-        return {"files": [], "choir_text": "", "confession_pick": ""}
-    _sidecars = {"choir.txt", "confession-pick.json"}  # have their own UI, not file slots
+        return {"files": [], "choir_text": "", "confession_pick": "", "confession_text": ""}
+    # Sidecars have their own textarea/picker UI, not a file slot.
+    _sidecars = {"choir.txt", "confession-pick.json", "confession.txt"}
     files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name not in _sidecars)
     pick = _confession_pick()
     return {
         "files": [{"name": p.name, "size": p.stat().st_size, "kind": _kind(p.name)} for p in files],
         "choir_text": _choir_text() or "",
         "confession_pick": pick.get("title", "") if pick else "",
+        "confession_text": _confession_text() or "",
     }
 
 
@@ -286,6 +292,29 @@ def pick_confession(body: dict = Body(...)) -> dict:
     return {"title": song.get("title", "")}
 
 
+@app.post("/inbox/confession-text")
+def save_confession_text(body: dict = Body(...)) -> dict:
+    """Write typed 고백의 찬양 lyrics into the inbox confession.txt — the text-input alternative
+    to an image or a library pick (same title/composer/lyrics format as 성가대, #109).
+
+    Non-empty text clears the uploaded image and library pick so the three confession inputs
+    stay mutually exclusive (mirrors the image↔pick exclusivity); blank text clears the slot.
+    """
+    text = body.get("text", "")
+    target = INBOX_DIR / "confession.txt"
+    if text.strip():
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        for old in INBOX_DIR.glob("confession.*"):  # drop a competing uploaded image
+            if old.suffix.lower() in _IMAGE_SUFFIXES:
+                old.unlink()
+        _confession_pick_file().unlink(missing_ok=True)
+        target.write_text(text, encoding="utf-8")
+        return {"saved": True}
+    if target.is_file():
+        target.unlink()
+    return {"saved": False}
+
+
 def _bulletin_path() -> Path | None:
     """The inbox bulletin PDF (fixed slot name), or None if none uploaded."""
     pdf = INBOX_DIR / "bulletin.pdf"
@@ -312,6 +341,15 @@ def _confession_pick() -> dict | None:
     """The library song picked for this week (snapshotted into the inbox), or None."""
     f = _confession_pick_file()
     return json.loads(f.read_text(encoding="utf-8")) if f.is_file() else None
+
+
+def _confession_text() -> str | None:
+    """Typed 고백의 찬양 lyrics from the inbox (the text-input alternative to an image), or None."""
+    target = INBOX_DIR / "confession.txt"
+    if not target.is_file():
+        return None
+    text = target.read_text(encoding="utf-8")
+    return text if text.strip() else None
 
 
 def _choir_text() -> str | None:
@@ -351,16 +389,20 @@ def _assemble_async(service_date: str) -> None:
                     steps[f"{k}_sheet_{i}"] = v
             data.worship_songs = [asdict(s) for s in songs]
 
-        # 고백의 찬양 (#109): a library-picked song (snapshotted in the inbox) is used as-is —
-        # no transcription; otherwise transcribe its dedicated sheet image. Best-effort like the
-        # hymn below — a transcription hiccup must not discard the rest of the assemble.
+        # 고백의 찬양 (#109): one of three inputs — a library-picked song (snapshotted in the
+        # inbox) or typed lyrics are used as-is (no OCR, parsed like 성가대); otherwise transcribe
+        # its dedicated sheet image. Best-effort like the hymn below — a transcription hiccup must
+        # not discard the rest of the assemble.
         if "confession_song" not in data.edited_fields:
             pick = _confession_pick()
+            text = _confession_text()
             img = _confession_path()
             if pick is not None:
                 data.confession_song = pick
+            elif text is not None:
+                data.confession_song = asdict(parse_choir_text(text))
             elif img is None:
-                warnings.append("no 고백의 찬양 sheet image in inbox")
+                warnings.append("no 고백의 찬양 input (image, text, or library pick) in inbox")
             else:
                 try:
                     confession_steps: dict[str, float] = {}
