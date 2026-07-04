@@ -112,6 +112,16 @@ def test_save_choir_text_writes_and_clears(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "choir.txt").exists()
 
 
+def test_save_confession_text_writes_and_clears(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    text = "고백곡\n작곡자 작곡\n가사 한 줄"
+    assert client.post("/inbox/confession-text", json={"text": text}).json() == {"saved": True}
+    assert (tmp_path / "confession.txt").read_text(encoding="utf-8") == text
+    # blank text clears the slot
+    assert client.post("/inbox/confession-text", json={"text": "  \n"}).json() == {"saved": False}
+    assert not (tmp_path / "confession.txt").exists()
+
+
 # ── /inbox ───────────────────────────────────────────────────────────────────────
 
 
@@ -130,6 +140,7 @@ def test_inbox_lists_files_with_kind(tmp_path, monkeypatch) -> None:
         ],
         "choir_text": "",
         "confession_pick": "",
+        "confession_text": "",
     }
 
 
@@ -138,13 +149,24 @@ def test_inbox_choir_text_excluded_from_files(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     (tmp_path / "choir.txt").write_text("제목\n가사", encoding="utf-8")
     assert client.get("/inbox").json() == {
-        "files": [], "choir_text": "제목\n가사", "confession_pick": "",
+        "files": [], "choir_text": "제목\n가사", "confession_pick": "", "confession_text": "",
+    }
+
+
+def test_inbox_confession_text_excluded_from_files(tmp_path, monkeypatch) -> None:
+    """confession.txt has its own textarea UI — round-trips via confession_text, not the file list."""
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    (tmp_path / "confession.txt").write_text("고백곡\n가사", encoding="utf-8")
+    assert client.get("/inbox").json() == {
+        "files": [], "choir_text": "", "confession_pick": "", "confession_text": "고백곡\n가사",
     }
 
 
 def test_inbox_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
-    assert client.get("/inbox").json() == {"files": [], "choir_text": "", "confession_pick": ""}
+    assert client.get("/inbox").json() == {
+        "files": [], "choir_text": "", "confession_pick": "", "confession_text": "",
+    }
 
 
 def test_delete_inbox_file(tmp_path, monkeypatch) -> None:
@@ -378,6 +400,36 @@ def test_upload_confession_image_clears_pick(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "confession-pick.json").exists()  # inverse exclusivity
 
 
+def test_confession_text_clears_image_and_pick(tmp_path, monkeypatch) -> None:
+    """The three confession inputs are mutually exclusive — typing text drops image + pick."""
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    (tmp_path / "confession.png").write_bytes(b"img")
+    slug = library.save_song({"title": "도는찬양", "lines": ["가사"]})
+    client.post("/inbox/confession-pick", json={"slug": slug})  # this already dropped the image
+    (tmp_path / "confession.png").write_bytes(b"img")  # re-add to prove text drops it too
+    assert client.post("/inbox/confession-text", json={"text": "고백곡\n가사"}).json() == {"saved": True}
+    assert not (tmp_path / "confession.png").exists()
+    assert not (tmp_path / "confession-pick.json").exists()
+    assert (tmp_path / "confession.txt").is_file()
+
+
+def test_upload_confession_image_clears_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    client.post("/inbox/confession-text", json={"text": "고백곡\n가사"})
+    client.post("/upload/confession", files={"files": ("a.png", b"img", "image/png")})
+    assert not (tmp_path / "confession.txt").exists()  # inverse exclusivity
+
+
+def test_pick_confession_clears_text(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
+    slug = library.save_song({"title": "도는찬양", "lines": ["가사"]})
+    client.post("/inbox/confession-text", json={"text": "고백곡\n가사"})
+    client.post("/inbox/confession-pick", json={"slug": slug})
+    assert not (tmp_path / "confession.txt").exists()  # inverse exclusivity
+
+
 def test_clear_inbox_drops_pick_but_keeps_library(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     monkeypatch.setattr(library, "LIBRARY_DIR", tmp_path / "library")
@@ -400,6 +452,20 @@ def test_assemble_uses_library_pick_without_transcribing(_assemble_env, monkeypa
     data = store.load(date)
     assert data.confession_song == {"title": "도는찬양", "lines": ["폴리시된 가사"], "composer": "C"}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched
+
+
+def test_assemble_parses_confession_text_without_transcribing(_assemble_env, monkeypatch, tmp_path) -> None:
+    """Typed 고백의 찬양 lyrics are parsed like 성가대 — no OCR runs on them."""
+    client.post("/inbox/confession-text", json={"text": "고백곡\n작곡자 작곡\n한 줄"})
+    # transcribe runs only for the 찬양 medley sheet, never for the typed confession
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
+    )
+    date = client.post("/assemble").json()["service_date"]
+    data = store.load(date)
+    assert data.confession_song == {"title": "고백곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
+                                     "sections": [], "arrangement": "", "arrangement_hint": ""}
+    assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
 def test_assemble_warns_on_missing_slots(tmp_path, monkeypatch) -> None:
