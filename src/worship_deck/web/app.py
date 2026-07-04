@@ -93,16 +93,17 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
     return kept
 
 
-def _refreshed_on_reassemble(existing: ServiceData) -> list[str]:
+def _refreshed_on_reassemble(existing: ServiceData, hymn_changed: bool) -> list[str]:
     """Labels for the sections a re-assemble would overwrite from the bulletin (#105).
 
-    The machine-only fields (verses, hymn images) always refresh when their input exists; the
-    editable-parsed fields refresh only when the operator has NOT edited them.
+    Bible verses always refresh when their input exists; the editable-parsed fields refresh only
+    when the operator has NOT edited them. 봉헌 hymn slides re-download (reselecting every slide)
+    only when the hymn number changed — an unchanged hymn keeps the operator's kept subset (#108).
     """
     refreshed: list[str] = []
     if existing.call_to_worship_ref or existing.sermon_ref:
         refreshed.append("Bible verses (예배의 부름 · 말씀)")
-    if existing.offering_hymn_number:
+    if existing.offering_hymn_number and (hymn_changed or not existing.offering_hymn_images):
         refreshed.append("봉헌 hymn slide images")
     for f in _EDITABLE_PARSED:
         if f in existing.edited_fields:
@@ -464,7 +465,9 @@ def _assemble_async(service_date: str) -> None:
         # the operator can add the hymn manually.
         _STATUS[service_date] = {"status": "running", "step": "hymn", "error": None}
         th = time.monotonic()
-        if data.offering_hymn_number:
+        # Skip the fetch when a kept slide subset is already present (re-assemble carried the
+        # operator's #108 selection over) — re-fetching would reselect every slide.
+        if data.offering_hymn_number and not data.offering_hymn_images:
             try:
                 pngs = hymn.fetch_hymn_slides(
                     data.offering_hymn_number, HYMN_DIR / service_date / "hymn"
@@ -519,12 +522,18 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
         raise HTTPException(status_code=400, detail="could not detect service date in bulletin")
 
     existing = store.load(service_date) if store.exists(service_date) else None
+    # Whether the 봉헌 hymn changed vs the stored run — the freshly parsed number differs from
+    # what the stored slides were fetched for (including an operator-edited number, which the
+    # merge below restores). Drives whether the operator's kept slide subset survives or gets
+    # re-fetched fresh (below and in _refreshed). (data.offering_hymn_number is the fresh parse
+    # here, pre-merge.)
+    hymn_changed = existing is not None and data.offering_hymn_number != existing.offering_hymn_number
     if existing is not None and not confirm:
         return {
             "service_date": service_date,
             "needs_confirm": True,
             "kept": _kept_on_reassemble(existing),
-            "refresh": _refreshed_on_reassemble(existing),
+            "refresh": _refreshed_on_reassemble(existing, hymn_changed),
         }
     if existing is not None:
         data.edited_fields = list(existing.edited_fields)
@@ -535,6 +544,10 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
         data.offering_hymn_verses = existing.offering_hymn_verses
         data.sermon_extra_refs = existing.sermon_extra_refs
         data.sermon_extra_passages = existing.sermon_extra_passages
+        # Preserve the operator's kept 봉헌 slide subset (#108) unless the hymn changed; leaving
+        # it non-empty makes _assemble_async skip the re-fetch that would reselect all slides.
+        if not hymn_changed:
+            data.offering_hymn_images = existing.offering_hymn_images
         for f in existing.edited_fields:  # preserve operator-edited parsed fields
             setattr(data, f, getattr(existing, f))
 

@@ -596,6 +596,43 @@ def test_reassemble_preserves_edited_choir_despite_new_inbox_text(_assemble_env,
     assert store.load(date).choir_song["lines"] == ["operator edit"]
 
 
+def test_reassemble_preserves_dropped_hymn_slides_same_number(_assemble_env, monkeypatch) -> None:
+    # Operator drops a 봉헌 slide (#108); a re-assemble of the same hymn must keep the kept subset
+    # rather than re-download all slides and reselect every verse.
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    slides = store.load(date).offering_hymn_images
+    assert len(slides) == 2
+    run = client.get(f"/runs/{date}").json()
+    run["offering_hymn_images"] = [slides[0]]  # dropped slide-2
+    client.put(f"/runs/{date}", json=run)
+
+    body = client.post("/assemble").json()
+    assert not any("봉헌 hymn slide images" in r for r in body["refresh"])
+    assert client.post("/assemble?confirm=1").status_code == 200
+    assert client.get(f"/assemble/{date}/status").json()["status"] == "done"
+    assert store.load(date).offering_hymn_images == [slides[0]]
+
+
+def test_reassemble_refetches_hymn_slides_when_number_changes(_assemble_env, monkeypatch) -> None:
+    # A different hymn in the re-parsed bulletin re-downloads all slides (the old kept subset is
+    # meaningless for a new hymn) and lists them as refreshed in the confirm dialog.
+    _fake_transcribe(monkeypatch, "song A")
+    date = client.post("/assemble").json()["service_date"]
+    run = client.get(f"/runs/{date}").json()
+    run["offering_hymn_images"] = [store.load(date).offering_hymn_images[0]]
+    client.put(f"/runs/{date}", json=run)
+    # next parse yields a different 봉헌 hymn number
+    monkeypatch.setattr(
+        app_module.parse, "parse", lambda _p: replace(_fake_data(), offering_hymn_number="221")
+    )
+
+    body = client.post("/assemble").json()
+    assert any("봉헌 hymn slide images" in r for r in body["refresh"])
+    assert client.post("/assemble?confirm=1").status_code == 200
+    assert len(store.load(date).offering_hymn_images) == 2  # re-downloaded, all slides
+
+
 def test_reassemble_preserves_edited_songs_refreshes_unedited(_assemble_env, monkeypatch) -> None:
     _fake_transcribe(monkeypatch, "song A")
     date = client.post("/assemble").json()["service_date"]
