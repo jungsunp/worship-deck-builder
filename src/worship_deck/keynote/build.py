@@ -847,6 +847,25 @@ def fill_worship_songs(
     return total
 
 
+def fill_worship_after_sermon(
+    key_path: str, song: Song, *, worship_seed: int, sermon_title: int
+) -> None:
+    """Insert the optional 설교후 찬양 worship song right after the sermon title slide.
+
+    Clones one worship-song unit (blank-green separator + title + lyric slide) from the 찬양 medley
+    seed (`worship_seed`) to just after `sermon_title`, then fills its title + ≤2-line lyric slides
+    via `fill_song_slides` (honoring any V1/C section labels the operator set). Inheriting the medley
+    unit gives it the same chroma-key green lyric background. Runs before `fill_sermon_extra_slides`
+    in `build()`, so extra sermon verses inserted after the sermon title push this unit later — final
+    deck order is 말씀 → (extra verses) → 설교후 찬양 → 파송의 노래.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
+    """
+    duplicate_block(key_path, worship_seed, _WORSHIP_UNIT, sermon_title, 1)
+    fill_song_slides(key_path, sermon_title + 2, song)  # unit: blank at +1, title at +2, 1 seed lyric
+
+
 def set_announcement_slide(key_path: str, slide_index: int, text: str) -> str:
     """Set one 교회소식 item slide's native text, styling title gold + detail white (#16).
 
@@ -998,6 +1017,19 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # they this one). Skipped only when the template carries no slides there (#97).
     if a.special_count:
         _t("delete_special", delete_slides, out_key, a.special_start, a.special_count)
+
+    # 설교후 찬양 (optional): clone a 찬양 song unit into the emptied post-sermon region. Runs before
+    # the extra-verse fill so those verses land between the sermon and this song. Inserts only after
+    # the sermon title, leaving the back-to-front anchors below untouched.
+    if data.worship_after_sermon:
+        _t(
+            "worship_after_sermon",
+            fill_worship_after_sermon,
+            out_key,
+            Song(**data.worship_after_sermon),
+            worship_seed=a.worship_start,
+            sermon_title=a.sermon_title,
+        )
 
     # This week's extra sermon verses (#114) regenerate into the just-emptied region; anything
     # beyond verse slides (songs, poem cards) the operator still adds manually (#97). Runs while

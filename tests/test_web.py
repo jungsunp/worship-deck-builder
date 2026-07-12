@@ -122,6 +122,44 @@ def test_save_confession_text_writes_and_clears(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "confession.txt").exists()
 
 
+def test_upload_sermonsong_replaces_across_extensions(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    client.post("/upload/sermonsong", files={"files": ("a.png", b"old", "image/png")})
+    client.post("/upload/sermonsong", files={"files": ("b.jpg", b"new", "image/jpeg")})
+    assert not (tmp_path / "sermonsong.png").exists()
+    assert (tmp_path / "sermonsong.jpg").read_bytes() == b"new"
+
+
+def test_upload_sermonsong_rejects_non_image(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    assert client.post(
+        "/upload/sermonsong", files={"files": ("bulletin.pdf", b"pdf", "application/pdf")}
+    ).status_code == 400
+
+
+def test_save_sermonsong_text_writes_and_clears(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    text = "설교후곡\n작곡자 작곡\n가사 한 줄"
+    assert client.post("/inbox/sermonsong-text", json={"text": text}).json() == {"saved": True}
+    assert (tmp_path / "sermonsong.txt").read_text(encoding="utf-8") == text
+    # blank text clears the slot
+    assert client.post("/inbox/sermonsong-text", json={"text": "  \n"}).json() == {"saved": False}
+    assert not (tmp_path / "sermonsong.txt").exists()
+
+
+def test_sermonsong_image_and_text_are_mutually_exclusive(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
+    # typing lyrics drops a competing uploaded image ...
+    client.post("/upload/sermonsong", files={"files": ("a.png", b"img", "image/png")})
+    client.post("/inbox/sermonsong-text", json={"text": "설교후곡\n가사"})
+    assert not (tmp_path / "sermonsong.png").exists()
+    assert (tmp_path / "sermonsong.txt").exists()
+    # ... and uploading an image drops the typed text.
+    client.post("/upload/sermonsong", files={"files": ("b.png", b"img", "image/png")})
+    assert not (tmp_path / "sermonsong.txt").exists()
+    assert (tmp_path / "sermonsong.png").exists()
+
+
 # ── /inbox ───────────────────────────────────────────────────────────────────────
 
 
@@ -141,6 +179,7 @@ def test_inbox_lists_files_with_kind(tmp_path, monkeypatch) -> None:
         "choir_text": "",
         "confession_pick": "",
         "confession_text": "",
+        "sermonsong_text": "",
     }
 
 
@@ -150,6 +189,7 @@ def test_inbox_choir_text_excluded_from_files(tmp_path, monkeypatch) -> None:
     (tmp_path / "choir.txt").write_text("제목\n가사", encoding="utf-8")
     assert client.get("/inbox").json() == {
         "files": [], "choir_text": "제목\n가사", "confession_pick": "", "confession_text": "",
+        "sermonsong_text": "",
     }
 
 
@@ -159,6 +199,7 @@ def test_inbox_confession_text_excluded_from_files(tmp_path, monkeypatch) -> Non
     (tmp_path / "confession.txt").write_text("고백곡\n가사", encoding="utf-8")
     assert client.get("/inbox").json() == {
         "files": [], "choir_text": "", "confession_pick": "", "confession_text": "고백곡\n가사",
+        "sermonsong_text": "",
     }
 
 
@@ -166,6 +207,7 @@ def test_inbox_empty(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path / "missing")
     assert client.get("/inbox").json() == {
         "files": [], "choir_text": "", "confession_pick": "", "confession_text": "",
+        "sermonsong_text": "",
     }
 
 
@@ -466,6 +508,41 @@ def test_assemble_parses_confession_text_without_transcribing(_assemble_env, mon
     assert data.confession_song == {"title": "고백곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
                                      "sections": [], "arrangement": "", "arrangement_hint": ""}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
+
+
+def test_assemble_parses_sermonsong_text_without_transcribing(_assemble_env, monkeypatch, tmp_path) -> None:
+    """Typed 설교후 찬양 lyrics are parsed like 성가대 — no OCR runs on them."""
+    client.post("/inbox/sermonsong-text", json={"text": "설교후곡\n작곡자 작곡\n한 줄"})
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
+    )
+    date = client.post("/assemble").json()["service_date"]
+    assert store.load(date).worship_after_sermon == {
+        "title": "설교후곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
+        "sections": [], "arrangement": "", "arrangement_hint": "",
+    }
+
+
+def test_assemble_transcribes_sermonsong_image(_assemble_env, monkeypatch, tmp_path) -> None:
+    (tmp_path / "sermonsong.png").write_bytes(b"img")
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda p, **kw: [Song(title="설교후곡" if Path(p).name.startswith("sermonsong") else "찬양곡", lines=["x"])],
+    )
+    date = client.post("/assemble").json()["service_date"]
+    data = store.load(date)
+    assert data.worship_after_sermon["title"] == "설교후곡"
+    assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
+
+
+def test_assemble_without_sermonsong_leaves_it_empty(_assemble_env, monkeypatch) -> None:
+    """설교후 찬양 is optional — no input means an empty section and no warning."""
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
+    )
+    date = client.post("/assemble").json()["service_date"]
+    assert store.load(date).worship_after_sermon == {}
+    assert "설교후" not in (client.get(f"/assemble/{date}/status").json().get("warning") or "")
 
 
 def test_assemble_warns_on_missing_slots(tmp_path, monkeypatch) -> None:
@@ -827,6 +904,32 @@ def test_put_run_tracks_choir_and_confession_edits(_runs) -> None:
     assert store.load(_runs).edited_fields == ["choir_song", "confession_song"]
 
 
+def test_put_run_tracks_sermonsong_edits(_runs) -> None:
+    store.save(_runs, replace(
+        _fake_run(), worship_after_sermon={"title": "설교후", "lines": ["a"], "composer": ""},
+    ))
+    run = client.get(f"/runs/{_runs}").json()
+    run["worship_after_sermon"]["lines"] = ["a fixed"]
+    client.put(f"/runs/{_runs}", json=run)
+    assert store.load(_runs).edited_fields == ["worship_after_sermon"]
+
+
+def test_put_run_normalizes_untouched_optional_song(_runs) -> None:
+    """The review UI seeds an empty V1 card; an untouched 설교후 찬양 must normalize back to {} so
+    it isn't flagged as an edit (and so the build skips it)."""
+    store.save(_runs, _fake_run())  # worship_after_sermon defaults to {}
+    run = client.get(f"/runs/{_runs}").json()
+    # what the seeded-but-untouched editor round-trips: an empty V1 card, blank title/composer
+    run["worship_after_sermon"] = {
+        "title": "", "composer": "", "lines": [],
+        "sections": [{"label": "V1", "lines": []}], "arrangement": "", "arrangement_hint": "",
+    }
+    client.put(f"/runs/{_runs}", json=run)
+    saved = store.load(_runs)
+    assert saved.worship_after_sermon == {}
+    assert "worship_after_sermon" not in saved.edited_fields
+
+
 def test_put_run_looks_up_changed_extra_refs(_runs, monkeypatch) -> None:
     store.save(_runs, _fake_run())
     calls: list[str] = []
@@ -895,6 +998,14 @@ def test_review_page_has_confession_editor_and_no_paste_box() -> None:
     assert "renderConfession" in body
     assert "붙여넣기" not in body  # the old choir paste box is gone
     assert "attachChoir" not in body
+
+
+def test_review_page_has_labeled_song_editors() -> None:
+    """고백/설교후 찬양 share the V1/C section-card editor (renderLabeledSong + songByRef)."""
+    body = client.get("/review/2026-05-31").text
+    assert "renderSermonSong" in body
+    assert "renderLabeledSong" in body
+    assert "songByRef" in body
 
 
 # ── /runs/{date}/hymn (봉헌 slide grid, #84/#108) ─────────────────────────────

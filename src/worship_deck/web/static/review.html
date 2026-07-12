@@ -196,7 +196,12 @@ const SECTIONS = [
    missing: () => !(run.announcements || []).length},
   {key: 'sermon', chip: '말씀', match: isSermon, render: renderSermon, open: false,
    missing: () => !(run.sermon_passage || []).length},
+  // 설교후 찬양 isn't a bulletin worship-order row — match() never fires; render() injects it
+  // manually right after the 말씀 card (its slides land after the sermon in the deck).
+  {key: 'sermonsong', chip: '설교후', match: () => false, render: renderSermonSong, open: false,
+   missing: () => !(run.worship_after_sermon && run.worship_after_sermon.title)},
 ];
+const SERMONSONG_SEC = SECTIONS.find(s => s.key === 'sermonsong');
 const edited = {};     // key → operator touched the section this visit (✎ badge)
 const collapsed = {};  // key → card collapsed; seeded on first render, then operator-owned
 
@@ -205,9 +210,25 @@ function rowMeta(row) { return [row.title, row.leader, row.ref].filter(Boolean).
 function render() {
   const order = document.getElementById('order');
   order.innerHTML = '';
-  run.worship_order.forEach((row) => {
+  const wo = run.worship_order;
+  const sermonIdx = wo.findIndex(isSermon);
+  // A 찬양 row after the 말씀 row is the (optional) 설교후 찬양 — its lyrics come from the operator's
+  // upload/typed text (worship_after_sermon), NOT the opening medley. Route it to the 설교후 찬양
+  // editor so it isn't rendered as a second opening-medley card (#duplicate).
+  const postSermonSongIdx = sermonIdx >= 0 ? wo.findIndex((r, i) => i > sermonIdx && isOpening(r)) : -1;
+  wo.forEach((row, i) => {
+    if (i === postSermonSongIdx) {
+      order.appendChild(sectionCard(SERMONSONG_SEC, row));
+      return;
+    }
     const sec = SECTIONS.find(s => s.match(row));
     order.appendChild(sec ? sectionCard(sec, row) : plainRow(row));
+    // Fallback: the bulletin has no post-sermon 찬양 row, but the operator added a 설교후 찬양 anyway —
+    // show it right after the 말씀 card. Most weeks there's no song, so nothing renders here.
+    if (sec && sec.key === 'sermon' && postSermonSongIdx < 0
+        && run.worship_after_sermon && run.worship_after_sermon.title) {
+      order.appendChild(sectionCard(SERMONSONG_SEC, {part: '설교후 찬양'}));
+    }
   });
   renderChips();
   growVisible();
@@ -349,6 +370,17 @@ function renderMedley(div) {
 const LABEL_OPTS = ['V1', 'V2', 'V3', 'V4', 'PC', 'C', 'B', 'Intro', '간주', 'Tag', 'Ending'];
 let customLabels = [];  // labels typed via 직접입력, persisted server-side and reused across weeks
 
+// The section-card editor is shared by three single-or-medley song sections. `ref` selects the
+// target song: a numeric index into the 찬양 medley, or a string key for the single-song sections
+// (고백의 찬양 / 설교후 찬양). The .cards[data-i] selectors work for both (string or numeric).
+function songByRef(ref) {
+  if (ref === 'confession') return run.confession_song;
+  if (ref === 'sermonsong') return run.worship_after_sermon || (run.worship_after_sermon = {});
+  return run.worship_songs[ref];
+}
+const editKeyOf = ref => (ref === 'confession' ? 'confession'
+                        : ref === 'sermonsong' ? 'sermonsong' : 'opening');
+
 // Read every card's label + lines from the DOM into song.sections (DOM is the truth for typed
 // text; structural ops call this first so unsaved typing survives a re-render).
 function readCards(s) {
@@ -360,7 +392,7 @@ function readCards(s) {
     const ta = card.querySelector('textarea');
     secs.push({label: sel.value === '__custom' ? '' : sel.value, lines: splitKeepBlanks(ta.value)});
   });
-  run.worship_songs[s].sections = secs;
+  songByRef(s).sections = secs;
 }
 
 // Re-render a song's cards + arrangement after a structural change.
@@ -368,10 +400,10 @@ function refreshSong(s) {
   renderCards(document.querySelector('#order .cards[data-i="' + s + '"]'), s);
   renderArrangement(document.querySelector('#order .arr[data-i="' + s + '"]'), s);
 }
-const bump = s => { edited.opening = true; refreshSong(s); };
+const bump = s => { edited[editKeyOf(s)] = true; refreshSong(s); };
 
 function renderCards(host, s) {
-  const song = run.worship_songs[s];
+  const song = songByRef(s);
   host.innerHTML = '';
   song.sections.forEach((sec, ci) => {
     const card = document.createElement('div'); card.className = 'lcard';
@@ -390,7 +422,7 @@ function renderCards(host, s) {
           fetch('/api/labels', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({label: v})}).catch(() => {});
         }
         readCards(s); song.sections[ci].label = v; bump(s);
-      } else { readCards(s); edited.opening = true; renderArrangement(host.parentElement.querySelector('.arr'), s); }
+      } else { readCards(s); edited[editKeyOf(s)] = true; renderArrangement(host.parentElement.querySelector('.arr'), s); }
     };
     const sp = document.createElement('span'); sp.className = 'sp';
     const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; b.onclick = fn; return b; };
@@ -479,7 +511,8 @@ function startDrag(grip, chip, flow, commit) {
 // slide per tap keeps the deck small; the operator holds a repeated slide live, watching the band
 // sheet. The result serializes into song.arrangement (a string). Empty order = sections once in order.
 function renderArrangement(host, s) {
-  const song = run.worship_songs[s];
+  if (!host) return;
+  const song = songByRef(s);
   host.innerHTML = '';
   if (song.arrangement_hint) {
     const h = document.createElement('div'); h.className = 'arrhint';
@@ -489,7 +522,7 @@ function renderArrangement(host, s) {
   const lab = document.createElement('div'); lab.className = 'arrlabel'; lab.textContent = '진행 순서';
   host.appendChild(lab);
   const seq = parseArr(song.arrangement);
-  const apply = next => { song.arrangement = serializeSeq(next); edited.opening = true; renderArrangement(host, s); };
+  const apply = next => { song.arrangement = serializeSeq(next); edited[editKeyOf(s)] = true; renderArrangement(host, s); };
   const mk = (txt, cls, fn) => { const b = document.createElement('button'); b.type = 'button'; b.textContent = txt; if (cls) b.className = cls; b.onclick = fn; return b; };
   const flow = document.createElement('div'); flow.className = 'flow';
   if (!seq.length) {
@@ -563,12 +596,14 @@ async function saveConfessionToLibrary() {
   const get = sel => (document.querySelector('#order ' + sel)?.value || '').trim();
   const title = get('input[data-kind="confession-title"]');
   const composer = get('input[data-kind="confession-composer"]');
-  const ta = document.querySelector('#order textarea[data-kind="confession"]');
+  readCards('confession');  // DOM cards -> sections; flatten to blank-line-separated lyric lines
+  const secs = run.confession_song.sections || [];
+  const lines = secs.flatMap((sec, i) => i ? [''].concat(sec.lines) : sec.lines);
   if (!title) { showStatus('✕ 곡 제목을 입력해야 저장할 수 있습니다', true); return; }
   const btn = document.getElementById('libSave');
   const r = await fetch('/library/confession', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({title, composer, lines: ta ? splitKeepBlanks(ta.value) : []}),
+    body: JSON.stringify({title, composer, lines}),
   });
   if (btn) {
     btn.textContent = r.ok ? '라이브러리에 저장됨 ✓' : '저장 ✕';
@@ -580,9 +615,43 @@ function renderChoir(div) {
   renderSong(div, run.choir_song, 'choir', '성가대 가사 없음 — 홈 화면에서 가사를 입력하고 다시 Assemble');
 }
 
-function renderConfession(div) {
-  renderSong(div, run.confession_song, 'confession', '고백의 찬양 가사 없음 — 홈 화면에서 악보를 업로드하고 다시 Assemble');
+// 고백의 찬양 / 설교후 찬양: a single song the operator can group into V1/C sections in review —
+// the same section-card + arrangement editor as the 찬양 medley, minus only the medley tabs.
+function renderLabeledSong(div, ref, libSave) {
+  const song = songByRef(ref);
+  const sd = document.createElement('div'); sd.className = 'song';
+  const ti = document.createElement('input');
+  ti.dataset.kind = ref + '-title'; ti.placeholder = '곡 제목'; ti.value = song.title || '';
+  const co = document.createElement('input');
+  co.dataset.kind = ref + '-composer'; co.placeholder = '작곡/편곡'; co.value = song.composer || '';
+  sd.append(ti, co);
+  // Seed unlabeled lyrics as one V1 card so the operator always has something to split/label.
+  if (!song.sections || !song.sections.length) {
+    song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];
+  }
+  const cardsHost = document.createElement('div');
+  cardsHost.className = 'cards'; cardsHost.dataset.i = ref;
+  sd.appendChild(cardsHost);
+  const add = document.createElement('button'); add.type = 'button';
+  add.className = 'addcard'; add.textContent = '＋ 구간';
+  add.onclick = () => { readCards(ref); song.sections.push({label: '', lines: []}); bump(ref); };
+  sd.appendChild(add);
+  if (libSave) {  // 고백의 찬양 rotates weekly — bank a polished song for next week's home picker.
+    const lib = document.createElement('button');
+    lib.id = 'libSave'; lib.type = 'button'; lib.className = 'libsave';
+    lib.textContent = '라이브러리에 저장';
+    lib.onclick = saveConfessionToLibrary;
+    sd.appendChild(lib);
+  }
+  const arr = document.createElement('div'); arr.className = 'arr'; arr.dataset.i = ref;
+  sd.appendChild(arr);
+  div.appendChild(sd);
+  renderCards(cardsHost, ref);      // render into the refs directly — sd isn't in the document yet,
+  renderArrangement(arr, ref);      // so refreshSong's #order querySelector would find nothing here
 }
+
+function renderConfession(div) { renderLabeledSong(div, 'confession', true); }
+function renderSermonSong(div) { renderLabeledSong(div, 'sermonsong', false); }
 
 function mkInput(id, ph, val) {
   const i = document.createElement('input'); i.id = id; i.placeholder = ph; i.value = val || '';
@@ -688,7 +757,7 @@ const splitKeepBlanks = v => {
 
 function syncFromDom() {
   document.querySelectorAll('#order .cards[data-i]').forEach(host => {
-    const s = host.dataset.i, song = run.worship_songs[s];
+    const s = host.dataset.i, song = songByRef(s);  // s: numeric medley index or a section key
     readCards(s);  // DOM cards -> song.sections (label + lines, #113)
     // Flatten sections to lines (blank-line separated) as the legacy/fallback mirror.
     song.lines = song.sections.flatMap((sec, i) => i ? [''].concat(sec.lines) : sec.lines);
@@ -703,12 +772,15 @@ function syncFromDom() {
   if (choirTi && run.choir_song) run.choir_song.title = choirTi.value.trim();
   const choirCo = document.querySelector('#order input[data-kind="choir-composer"]');
   if (choirCo && run.choir_song) run.choir_song.composer = choirCo.value.trim();
-  const confTa = document.querySelector('#order textarea[data-kind="confession"]');
-  if (confTa && run.confession_song) run.confession_song.lines = splitKeepBlanks(confTa.value);
-  const confTi = document.querySelector('#order input[data-kind="confession-title"]');
-  if (confTi && run.confession_song) run.confession_song.title = confTi.value.trim();
-  const confCo = document.querySelector('#order input[data-kind="confession-composer"]');
-  if (confCo && run.confession_song) run.confession_song.composer = confCo.value.trim();
+  // confession/sermonsong lyrics come from their label cards (the .cards loop above); only the
+  // title/composer inputs need reading back here.
+  [['confession', run.confession_song], ['sermonsong', run.worship_after_sermon]].forEach(([k, s]) => {
+    if (!s) return;
+    const ti = document.querySelector('#order input[data-kind="' + k + '-title"]');
+    if (ti) s.title = ti.value.trim();
+    const co = document.querySelector('#order input[data-kind="' + k + '-composer"]');
+    if (co) s.composer = co.value.trim();
+  });
   const annTa = document.querySelector('#order textarea[data-kind="ann"]');
   if (annTa) run.announcements = annTa.value.split(/\n-{3,}\n/).map(s => s.trim()).filter(Boolean);
   const hn = document.getElementById('hymnNumber');
