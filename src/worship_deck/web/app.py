@@ -41,6 +41,7 @@ _EDITABLE_PARSED = (
     "worship_songs",
     "choir_song",
     "confession_song",
+    "worship_after_sermon",
     "announcements",
     "offering_hymn_number",
     "offering_hymn_title",
@@ -52,6 +53,7 @@ _EDIT_LABELS = {
     "worship_songs": "찬양 songs (edited lyrics/order)",
     "choir_song": "성가대 choir lyrics (edited)",
     "confession_song": "고백의 찬양 lyrics (edited)",
+    "worship_after_sermon": "설교후 찬양 lyrics (edited)",
     "announcements": "교회소식 announcements (edited)",
     "offering_hymn_number": "봉헌 hymn number (edited)",
     "offering_hymn_title": "봉헌 hymn title (edited)",
@@ -60,6 +62,7 @@ _REFRESH_LABELS = {
     "worship_songs": "찬양 songs (re-transcribed)",
     "choir_song": "성가대 choir lyrics (re-parsed from inbox text)",
     "confession_song": "고백의 찬양 lyrics (re-transcribed)",
+    "worship_after_sermon": "설교후 찬양 lyrics (re-transcribed)",
     "announcements": "교회소식 announcements (re-parsed)",
     "offering_hymn_number": "봉헌 hymn number",
     "offering_hymn_title": "봉헌 hymn title",
@@ -85,6 +88,13 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
         and _confession_text() is None
     ):
         kept.append("고백의 찬양 lyrics")
+    if (
+        existing.worship_after_sermon.get("title")
+        and "worship_after_sermon" not in existing.edited_fields
+        and _sermon_song_path() is None
+        and _sermon_song_text() is None
+    ):
+        kept.append("설교후 찬양 lyrics")
     if existing.offering_hymn_verses:
         kept.append("봉헌 verse picks (" + ", ".join(str(v) for v in existing.offering_hymn_verses) + ")")
     if existing.sermon_extra_refs:
@@ -157,12 +167,14 @@ def index() -> FileResponse:
 
 
 # Each required source has a dedicated upload slot (#109); slot identity is the reserved
-# inbox filename: bulletin.pdf, confession.<ext>, sheet-<origname>, choir.txt.
+# inbox filename: bulletin.pdf, confession.<ext>, sermonsong.<ext>, sheet-<origname>, choir.txt.
 def _kind(name: str) -> str:
     if name == "bulletin.pdf":
         return "bulletin"
     if name.startswith("confession."):
         return "confession"
+    if name.startswith("sermonsong."):
+        return "sermonsong"
     if name.startswith("sheet-"):
         return "sheet"
     return "other"
@@ -176,7 +188,7 @@ def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
     their original (sanitized) names behind a constant prefix so filename order is preserved.
     Called by the home page's fetch-on-select JS, so it returns JSON, not a page.
     """
-    if kind not in ("bulletin", "sheets", "confession"):
+    if kind not in ("bulletin", "sheets", "confession", "sermonsong"):
         raise HTTPException(status_code=400, detail="unknown upload slot")
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
@@ -196,6 +208,12 @@ def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
                 old.unlink()
             _confession_pick_file().unlink(missing_ok=True)  # image and library pick are exclusive
             name = f"confession{suffix}"
+        elif kind == "sermonsong":
+            if suffix not in _IMAGE_SUFFIXES:
+                raise HTTPException(status_code=400, detail="설교후 찬양 sheet must be an image")
+            for old in INBOX_DIR.glob("sermonsong.*"):  # replace image + text (exclusive inputs)
+                old.unlink()
+            name = f"sermonsong{suffix}"
         else:
             if suffix not in _IMAGE_SUFFIXES:
                 raise HTTPException(status_code=400, detail="sheets must be images")
@@ -227,9 +245,12 @@ def inbox() -> dict:
     choir.txt is excluded from `files` — the home-page textarea is its UI.
     """
     if not INBOX_DIR.exists():
-        return {"files": [], "choir_text": "", "confession_pick": "", "confession_text": ""}
+        return {
+            "files": [], "choir_text": "", "confession_pick": "",
+            "confession_text": "", "sermonsong_text": "",
+        }
     # Sidecars have their own textarea/picker UI, not a file slot.
-    _sidecars = {"choir.txt", "confession-pick.json", "confession.txt"}
+    _sidecars = {"choir.txt", "confession-pick.json", "confession.txt", "sermonsong.txt"}
     files = sorted(p for p in INBOX_DIR.iterdir() if p.is_file() and p.name not in _sidecars)
     pick = _confession_pick()
     return {
@@ -237,6 +258,7 @@ def inbox() -> dict:
         "choir_text": _choir_text() or "",
         "confession_pick": pick.get("title", "") if pick else "",
         "confession_text": _confession_text() or "",
+        "sermonsong_text": _sermon_song_text() or "",
     }
 
 
@@ -320,6 +342,28 @@ def save_confession_text(body: dict = Body(...)) -> dict:
     return {"saved": False}
 
 
+@app.post("/inbox/sermonsong-text")
+def save_sermonsong_text(body: dict = Body(...)) -> dict:
+    """Write typed 설교후 찬양 lyrics into the inbox sermonsong.txt — the text-input alternative
+    to an uploaded sheet image (same title/composer/lyrics format as 성가대).
+
+    Non-empty text clears a competing uploaded image so the two inputs stay mutually exclusive;
+    blank text clears the slot.
+    """
+    text = body.get("text", "")
+    target = INBOX_DIR / "sermonsong.txt"
+    if text.strip():
+        INBOX_DIR.mkdir(parents=True, exist_ok=True)
+        for old in INBOX_DIR.glob("sermonsong.*"):  # drop a competing uploaded image
+            if old.suffix.lower() in _IMAGE_SUFFIXES:
+                old.unlink()
+        target.write_text(text, encoding="utf-8")
+        return {"saved": True}
+    if target.is_file():
+        target.unlink()
+    return {"saved": False}
+
+
 @app.get("/api/labels")
 def list_labels() -> dict:
     """Custom medley section labels the operator has saved (직접입력), for the label dropdown."""
@@ -373,6 +417,21 @@ def _confession_pick() -> dict | None:
 def _confession_text() -> str | None:
     """Typed 고백의 찬양 lyrics from the inbox (the text-input alternative to an image), or None."""
     target = INBOX_DIR / "confession.txt"
+    if not target.is_file():
+        return None
+    text = target.read_text(encoding="utf-8")
+    return text if text.strip() else None
+
+
+def _sermon_song_path() -> Path | None:
+    """The 설교후 찬양 sheet image in the inbox, or None if none uploaded."""
+    imgs = sorted(p for p in INBOX_DIR.glob("sermonsong.*") if p.suffix.lower() in _IMAGE_SUFFIXES)
+    return imgs[0] if imgs else None
+
+
+def _sermon_song_text() -> str | None:
+    """Typed 설교후 찬양 lyrics from the inbox (the text-input alternative to an image), or None."""
+    target = INBOX_DIR / "sermonsong.txt"
     if not target.is_file():
         return None
     text = target.read_text(encoding="utf-8")
@@ -443,6 +502,28 @@ def _assemble_async(service_date: str) -> None:
                 except Exception:  # noqa: BLE001 - best-effort, surface as a warning
                     logger.exception("고백의 찬양 transcription failed for %s", service_date)
                     warnings.append("고백의 찬양 transcription failed — edit it in review")
+
+        # 설교후 찬양: optional worship song after the sermon — typed lyrics (parsed like 성가대,
+        # no OCR) or a dedicated sheet image. Absent input just leaves the section empty (the whole
+        # section is optional), so no warning. Best-effort like the confession above.
+        if "worship_after_sermon" not in data.edited_fields:
+            text = _sermon_song_text()
+            img = _sermon_song_path()
+            if text is not None:
+                data.worship_after_sermon = asdict(parse_choir_text(text))
+            elif img is not None:
+                try:
+                    sermonsong_steps: dict[str, float] = {}
+                    result = lyrics_transcribe.transcribe(str(img), steps=sermonsong_steps)
+                    for k, v in sermonsong_steps.items():
+                        steps[f"{k}_sermonsong"] = v
+                    if result:
+                        data.worship_after_sermon = asdict(result[0])
+                    else:
+                        warnings.append("설교후 찬양 transcription found no lyrics")
+                except Exception:  # noqa: BLE001 - best-effort, surface as a warning
+                    logger.exception("설교후 찬양 transcription failed for %s", service_date)
+                    warnings.append("설교후 찬양 transcription failed — edit it in review")
 
         # 성가대 (#109): parsed from the home-page choir text saved into the inbox.
         if "choir_song" not in data.edited_fields:
@@ -642,6 +723,12 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     existing = store.load(service_date) if store.exists(service_date) else None
     data = ServiceData(**{k: v for k, v in body.items() if k in known})
     data.offering_hymn_verses = [int(v) for v in data.offering_hymn_verses]
+    # The single-song sections seed an empty V1 card in review; an untouched section must read as
+    # "no content" (title-less, no lyrics) so it isn't built and isn't flagged as an edit (#105).
+    for f in ("worship_after_sermon", "confession_song"):
+        song = getattr(data, f)
+        if not song.get("title") and not any((ln or "").strip() for ln in song.get("lines", [])):
+            setattr(data, f, {})
     # Extra sermon refs (#114) are looked up on save, not at build: a typo'd ref fails here
     # with a visible warning instead of a minute into the Keynote build, and the review page
     # can preview the verses. Only changed refs hit the network; a failed lookup stores an

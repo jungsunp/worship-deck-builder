@@ -88,7 +88,7 @@
   <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
   <input type="file" accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'confession')">
   <textarea id="confessionText" oninput="confessionChanged()" onblur="flushConfession()"
-    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사 (성가대와 동일 형식)"></textarea>
+    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사"></textarea>
   <div class="hint" id="confessionStatus"></div>
 </div>
 
@@ -97,6 +97,19 @@
   <div class="hint">제목 / 작곡 줄 / 가사 — 절 사이 빈 줄 유지 · 자동 저장</div>
   <textarea id="choirText" oninput="choirChanged()" onblur="flushChoir()"></textarea>
   <div class="hint" id="choirStatus"></div>
+</div>
+
+<div class="card slotcard empty" id="slot-sermonsong" onclick="pickSlot(event)">
+  <div class="slothead"><span class="mark">⬜</span><span>설교후 찬양</span></div>
+  <div class="hint">대부분 주는 생략 · 설교 후 찬양이 있는 주에만 — 악보 이미지나 가사 입력</div>
+  <div class="tap-hint">탭하여 악보 이미지 업로드</div>
+  <div class="files" id="files-sermonsong"></div>
+  <div class="sloterr" id="err-sermonsong" hidden></div>
+  <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
+  <input type="file" accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'sermonsong')">
+  <textarea id="sermonsongText" oninput="sermonsongChanged()" onblur="flushSermonsong()"
+    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사"></textarea>
+  <div class="hint" id="sermonsongStatus"></div>
 </div>
 
 <div id="otherWrap" hidden>
@@ -119,7 +132,7 @@ function fmtDur(s) {
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
   return m ? m + '분 ' + sec + '초' : sec + '초';
 }
-let _timer, _choirTimer, _confessionTimer;
+let _timer, _choirTimer, _confessionTimer, _sermonsongTimer;
 let _phase = 'idle';   // idle | running | done — drives the CTA and stepper
 let _doneDate = null;  // service date of the finished assemble (CTA → review link)
 const _ready = {bulletin: false, sheet: false, confession: false, choir: false};
@@ -182,7 +195,7 @@ function setMark(kind, filled) {
   card.classList.toggle('filled', filled);
   if (kind !== 'choir') card.classList.toggle('empty', !filled);
   card.querySelector('.mark').textContent = filled ? '✓' : '⬜';
-  _ready[kind] = filled;
+  if (kind in _ready) _ready[kind] = filled;  // optional slots (설교후 찬양) stay out of the /4 count
 }
 // A library-picked confession song reads as a filled slot, with a ✕ to drop the pick (the
 // sidecar is a normal inbox file, so the same /inbox/{name} delete clears it).
@@ -197,12 +210,15 @@ function libRow(title) {
   return row;
 }
 async function loadInbox() {
-  const {files, choir_text, confession_pick, confession_text} = await (await fetch('/inbox')).json();
+  const {files, choir_text, confession_pick, confession_text, sermonsong_text}
+    = await (await fetch('/inbox')).json();
   const ta = document.getElementById('choirText');
   if (document.activeElement !== ta) ta.value = choir_text || '';
   const cta = document.getElementById('confessionText');
   if (document.activeElement !== cta) cta.value = confession_text || '';
-  for (const kind of ['bulletin', 'sheet', 'confession']) {
+  const sta = document.getElementById('sermonsongText');
+  if (document.activeElement !== sta) sta.value = sermonsong_text || '';
+  for (const kind of ['bulletin', 'sheet', 'confession', 'sermonsong']) {
     const box = document.getElementById('files-' + kind);
     const mine = files.filter(f => f.kind === kind);
     box.innerHTML = '';
@@ -212,9 +228,10 @@ async function loadInbox() {
       continue;
     }
     for (const f of mine) box.appendChild(fileRow(f, 'div'));
-    // 고백의 찬양 is ready via any of image / library pick / typed text (#109).
+    // 고백의 찬양 / 설교후 찬양 are ready via image or typed text (고백 also via library pick).
     setMark(kind, mine.length > 0
-      || (kind === 'confession' && !!(confession_text || '').trim()));
+      || (kind === 'confession' && !!(confession_text || '').trim())
+      || (kind === 'sermonsong' && !!(sermonsong_text || '').trim()));
   }
   const sheets = files.filter(f => f.kind === 'sheet').length;
   document.getElementById('sheetCount').textContent = sheets ? sheets + '장' : '';
@@ -237,6 +254,7 @@ async function resetWeek() {
   document.getElementById('warnCard').hidden = true;
   document.getElementById('choirStatus').textContent = '';
   document.getElementById('confessionStatus').textContent = '';
+  document.getElementById('sermonsongStatus').textContent = '';
   setStep('assemble', 'empty'); setStep('review', 'empty'); setStep('build', 'empty');
   loadInbox();
 }
@@ -305,6 +323,29 @@ async function saveConfession() {
     ? (text.trim() ? '저장됨 ✓ (이미지·라이브러리 선택 해제)' : '비어 있음 — 저장 안 함')
     : '저장 오류: ' + r.status;
   await loadInbox();  // saving text drops any image/pick — refresh the slot display + readiness
+}
+// 설교후 찬양 typed lyrics: same debounced auto-save as 고백. Non-empty text clears any uploaded
+// sheet image server-side, so reload the inbox to refresh the slot.
+function sermonsongChanged() {
+  document.getElementById('sermonsongStatus').textContent = '…';
+  clearTimeout(_sermonsongTimer);
+  _sermonsongTimer = setTimeout(saveSermonsong, 800);
+}
+function flushSermonsong() {
+  if (!_sermonsongTimer) return;
+  clearTimeout(_sermonsongTimer);
+  saveSermonsong();
+}
+async function saveSermonsong() {
+  _sermonsongTimer = null;
+  const text = document.getElementById('sermonsongText').value;
+  const r = await fetch('/inbox/sermonsong-text', {
+    method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({text}),
+  });
+  document.getElementById('sermonsongStatus').textContent = r.ok
+    ? (text.trim() ? '저장됨 ✓ (이미지 해제)' : '비어 있음 — 저장 안 함')
+    : '저장 오류: ' + r.status;
+  await loadInbox();  // saving text drops any image — refresh the slot display
 }
 async function loadConfessionLib() {
   const {songs} = await (await fetch('/library/confession')).json();

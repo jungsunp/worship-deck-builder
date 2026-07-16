@@ -101,6 +101,15 @@ sections:
         the first closing landmark (#98)."
       render: manual
 
+  worship_after_sermon:       # 설교후 찬양 (optional)
+    # Not in the bulletin worship_order — an optional worship song after the sermon. The operator
+    # uploads a sheet image or types lyrics on the home page (transcribed/parsed at assemble) and
+    # labels V1/C sections in review, like 찬양. At build a single 찬양 song unit (blank + title +
+    # lyric slides) is cloned into the emptied post-sermon region, landing after any extra sermon
+    # verses and before the 파송의 노래 closing. Absent input builds nothing.
+    source: worship_after_sermon (inbox sermonsong.<ext> image or sermonsong.txt)
+    render: native_text
+
   ending_date:
     slides: [167, 168]
     changes: service date

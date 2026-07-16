@@ -68,6 +68,9 @@ class ServiceData:
     choir_song: dict = field(default_factory=dict)
     # 고백의 찬양 (Song-as-dict); transcribed from the uploaded sheet image at assemble (#109).
     confession_song: dict = field(default_factory=dict)
+    # 설교후 찬양 — optional worship song after the sermon (Song-as-dict). Not in the bulletin; the
+    # operator uploads a sheet image or types lyrics, transcribed/parsed at assemble. {} until set.
+    worship_after_sermon: dict = field(default_factory=dict)
     # 예배의 부름 / 말씀 verse passages — one Verse-as-dict each (개역한글 + ESV), looked up at assemble.
     call_to_worship_passage: list[dict] = field(default_factory=list)
     sermon_passage: list[dict] = field(default_factory=list)

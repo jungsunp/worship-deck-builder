@@ -27,6 +27,7 @@ from worship_deck.keynote.build import (
     fill_hymn_slides,
     fill_song_slides,
     fill_verse_slides,
+    fill_worship_after_sermon,
     fill_worship_songs,
     finalize_draft,
     hymn_image_block,
@@ -888,6 +889,18 @@ def test_fill_worship_songs_empty_is_noop(monkeypatch: pytest.MonkeyPatch) -> No
     assert calls["delete"] is None
     assert calls["dup_block"] == []
     assert calls["fill"] == []
+
+
+def test_fill_worship_after_sermon_clones_unit_after_sermon_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _mock_worship_primitives(monkeypatch)
+    song = Song(title="설교후곡", lines=["1", "2"])
+
+    fill_worship_after_sermon("k", song, worship_seed=6, sermon_title=134)
+
+    # clone one 3-slide worship unit (blank/title/lyric) from the 찬양 seed to after the sermon title
+    assert calls["dup_block"] == [(6, 3, 134, 1)]
+    # fill the cloned unit's title (sermon_title + 2; blank at +1, lyric seed at +3)
+    assert calls["fill"] == [(136, "설교후곡")]
 
 
 # ---------------------------------------------------------------------------
