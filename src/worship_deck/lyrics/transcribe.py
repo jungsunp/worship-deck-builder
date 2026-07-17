@@ -6,12 +6,12 @@ The band runs the arrangement live from the physical sheets, so the deck only ne
 1. Apple Vision (``ocr_ko.swift``) reads the Korean text with per-line heights. High
    recall over busy musical notation and it never crashes on big images — but it returns
    each note's syllable as a separate fragment ("가 까 이"), so the lines need rebuilding.
-2. The sheet's title — the tallest Hangul line near the top of the page — is detected
-   deterministically from the OCR heights (the bulletin names the band, not the songs,
-   so the sheet title is the only song identity; #110).
-3. Canonical lyrics are looked up on gasazip.com by that title, ranked against the OCR
-   fragments (``online.lookup``). A confident match wins: clean text, no note-split
-   syllables, no duplicated key-change repeats.
+2. Sheet-title candidates — the tallest Hangul lines near the top of the page, tallest
+   first — are detected deterministically from the OCR heights (the bulletin names the
+   band, not the songs, so the sheet title is the only song identity; #110, #202).
+3. Canonical lyrics are looked up on gasazip.com by each title candidate in turn,
+   ranked against the OCR fragments (``online.lookup``). The first confident match
+   wins: clean text, no note-split syllables, no duplicated key-change repeats.
 4. Otherwise a local Ollama model (default ``qwen2.5:14b``, in *text* mode) reassembles
    the fragments into clean lyric lines, in top-to-bottom page order — the original
    free/offline path. Running it as a text task sidesteps the vision-runner crash we hit
@@ -103,17 +103,20 @@ def _vision_ocr(image_path: str) -> list[tuple[float, str]]:
 _TITLE_REGION = 10  # OCR lines from the top of the page to consider
 _TITLE_MIN_HANGUL_RATIO = 0.5  # of non-space chars; handwriting mixes latin/digits in
 _TITLE_MAX_HANGUL = 16  # longer Hangul runs are note-split lyric lines, not titles
+_TITLE_CANDIDATES = 3  # tall lines to try as lookup queries, tallest first (#202)
 
 
-def _detect_title(ocr_lines: list[tuple[float, str]]) -> str:
-    """Pick the sheet title: the tallest mostly-Hangul line near the top of the page.
+def _detect_titles(ocr_lines: list[tuple[float, str]]) -> list[str]:
+    """Pick sheet-title candidates: the tallest mostly-Hangul lines near the top.
 
     Handwritten arrangement marks can be taller but are dominated by latin/digit/symbol
     glyphs (e.g. ``드럼만 - ((83)``), so a line only qualifies when at least half its
     non-space characters are Hangul; full lyric lines (continuation pages without their
     own title) are excluded by the Hangul length cap. Stray non-Hangul tokens merged
     into the title's baseline (e.g. a red "•all" mark) are trimmed off the edges.
-    Returns "" when nothing qualifies — the caller then skips the online lookup.
+    Returns up to ``_TITLE_CANDIDATES`` titles tallest-first — big garbled handwriting
+    can out-height the printed title, so the lookup tries each in turn (#202) — or
+    ``[]`` when nothing qualifies, and the caller then skips the online lookup.
     """
     candidates = []
     for height, text in ocr_lines[:_TITLE_REGION]:
@@ -126,15 +129,17 @@ def _detect_title(ocr_lines: list[tuple[float, str]]) -> str:
         if hangul / nonspace < _TITLE_MIN_HANGUL_RATIO:
             continue
         candidates.append((height, text))
-    if not candidates:
-        return ""
-    _, text = max(candidates, key=lambda c: c[0])
-    tokens = text.split()
-    while tokens and not _HANGUL.search(tokens[0]):
-        tokens.pop(0)
-    while tokens and not _HANGUL.search(tokens[-1]):
-        tokens.pop()
-    return " ".join(tokens)
+    titles: list[str] = []
+    for _, text in sorted(candidates, key=lambda c: c[0], reverse=True)[:_TITLE_CANDIDATES]:
+        tokens = text.split()
+        while tokens and not _HANGUL.search(tokens[0]):
+            tokens.pop(0)
+        while tokens and not _HANGUL.search(tokens[-1]):
+            tokens.pop()
+        title = " ".join(tokens)
+        if title and title not in titles:
+            titles.append(title)
+    return titles
 
 
 # A single arrangement token: a section label (V/C/B or PC), an optional verse number, and an
@@ -294,8 +299,8 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
     canonical text wins (a sheet page holds one song, possibly printed twice for a key
     change). Otherwise falls back to local Ollama reassembly of the fragments, which
     also handles the rare multi-song page. Either way the lines are re-broken to fit
-    the lyric banner (repeat collapse + phrase-boundary splits, ``linebreak.rebreak``,
-    #126) before they reach review.
+    the lyric banner (phrase-boundary splits, ``linebreak.rebreak``, #126) before they
+    reach review.
 
     If `steps` is provided, per-stage durations (seconds) are written into it with keys
     "ocr", "gasazip" (if looked up), and "ollama" (if used as fallback).
@@ -309,11 +314,15 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
     if steps is not None:
         steps["ocr"] = round(time.monotonic() - t, 1)
 
-    title = _detect_title(ocr_lines)
+    titles = _detect_titles(ocr_lines)
     fragments = _filter_lyric_fragments([text for _, text in ocr_lines])
-    if title:
+    if titles:
         t = time.monotonic()
-        match = online.lookup(title, fragments)
+        match = None
+        for title in titles:  # tallest first; stop at the first confident match (#202)
+            match = online.lookup(title, fragments)
+            if match:
+                break
         if steps is not None:
             steps["gasazip"] = round(time.monotonic() - t, 1)
         if match:
@@ -322,7 +331,7 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
             return [song]
 
     t = time.monotonic()
-    songs = _reassemble(fragments, title=title)
+    songs = _reassemble(fragments, title=titles[0] if titles else "")
     if steps is not None:
         steps["ollama"] = round(time.monotonic() - t, 1)
     for song in songs:

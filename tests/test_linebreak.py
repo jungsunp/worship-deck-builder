@@ -1,4 +1,4 @@
-"""Tests for worship_deck.lyrics.linebreak — repeat collapse, phrase splits, fallback."""
+"""Tests for worship_deck.lyrics.linebreak — phrase splits, rule-based fallback."""
 
 from __future__ import annotations
 
@@ -27,33 +27,6 @@ def _split_payload(splits: list[list[str]]) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# collapse_repeats — pure
-# ---------------------------------------------------------------------------
-
-def test_collapse_adjacent_phrase_to_x2() -> None:
-    line = "온세상 가득하리라 물이 바다덮음같이 물이 바다덮음같이"
-    assert L.collapse_repeats(line) == "온세상 가득하리라 물이 바다덮음같이 X 2"
-
-
-def test_collapse_triple_repeat_to_x3() -> None:
-    assert L.collapse_repeats("거룩 거룩 거룩 전능하신 주") == "거룩 X 3 전능하신 주"
-
-
-def test_collapse_prefers_longest_group() -> None:
-    # Two-token group, not two interleaved single-token collapses.
-    assert L.collapse_repeats("주께 가오니 주께 가오니") == "주께 가오니 X 2"
-
-
-def test_collapse_leaves_non_adjacent_repeats() -> None:
-    line = "물이 바다덮음같이 여호와의 영광이 물이 바다덮음같이"
-    assert L.collapse_repeats(line) == line
-
-
-def test_collapse_skips_single_syllable_melisma() -> None:
-    assert L.collapse_repeats("아 아 아") == "아 아 아"
-
-
-# ---------------------------------------------------------------------------
 # _split_at_space — pure fallback
 # ---------------------------------------------------------------------------
 
@@ -73,13 +46,8 @@ def test_split_at_space_keeps_overlong_word_whole() -> None:
     assert L._split_at_space(word, 22) == [word]
 
 
-def test_split_at_space_never_orphans_repeat_suffix() -> None:
-    parts = L._split_at_space("온세상 가득하리라 물이 바다덮음같이 X 2", 22)
-    assert parts == ["온세상 가득하리라 물이", "바다덮음같이 X 2"]
-
-
 # ---------------------------------------------------------------------------
-# rebreak — collapse + length pass, mocked Ollama
+# rebreak — length pass, mocked Ollama
 # ---------------------------------------------------------------------------
 
 _LONG = "이전에 있는 것은 모두 잊어버리고 앞에 계신 그리스도께로 달려가 노라"
@@ -141,19 +109,7 @@ def test_rebreak_uses_ollama_model(monkeypatch: pytest.MonkeyPatch) -> None:
     assert seen["model"] == "qwen3:14b"
 
 
-def test_rebreak_collapses_identical_adjacent_lines() -> None:
-    assert L.rebreak(["물이 바다덮음같이"] * 3) == ["물이 바다덮음같이 X 3"]
-
-
-def test_rebreak_does_not_collapse_lines_across_stanza_break() -> None:
-    lines = ["물이 바다덮음같이", "", "물이 바다덮음같이"]
-    assert L.rebreak(lines) == lines
-
-
-def test_rebreak_rejects_orphaned_repeat_suffix_from_model(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    line = "온세상 가득하리라 물이 바다덮음같이 물이 바다덮음같이"
-    bad = [["온세상 가득하리라 물이 바다덮음같이 X", "2"]]
-    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(_split_payload(bad)))
-    assert L.rebreak([line]) == ["온세상 가득하리라 물이", "바다덮음같이 X 2"]
+def test_rebreak_keeps_repeated_lines_verbatim() -> None:
+    # Repeats are never collapsed to "… X N" — the operator reads slides against the
+    # sheet while labeling sections, and the literal repeat reads better (2026-07-16).
+    assert L.rebreak(["물이 바다덮음같이"] * 3) == ["물이 바다덮음같이"] * 3
