@@ -212,7 +212,16 @@ def test_transcribe_uses_online_match_when_confident(
     monkeypatch.setattr(online, "lookup", fake_lookup)
     songs = transcribe("whatever.png")
 
-    assert songs == [Song(title="내 주를 가까이", lines=["내 주를 가까이 하게 함은"])]
+    assert songs == [
+        Song(
+            title="내 주를 가까이",
+            lines=["내 주를 가까이 하게 함은"],
+            provenance={  # gasazip origin surfaced by the review badge (#200)
+                "source": "gasazip", "song_id": "1", "artist": "x",
+                "cand_cov": 0.0, "ocr_cov": 0.0,
+            },
+        )
+    ]
     assert seen["title"] == "내 주를 가까이"
     # Lookup ranks against the filtered Hangul fragments only.
     assert "https://x" not in seen["fragments"] and "G" not in seen["fragments"]
@@ -298,7 +307,9 @@ def test_transcribe_falls_back_to_reassembly_with_detected_title(
     monkeypatch.setattr(httpx, "post", fake_post)
     songs = transcribe("whatever.png")
 
-    assert songs == [Song(title="내 주를 가까이", lines=["내 주를 가까이"])]
+    assert songs == [
+        Song(title="내 주를 가까이", lines=["내 주를 가까이"], provenance={"source": "local"})
+    ]
     # Only the Hangul fragments reach the model — chords/URLs filtered out.
     assert "내 주 를" in seen["prompt"] and "가까이" in seen["prompt"]
     assert "https://x" not in seen["prompt"] and "\nG\n" not in seen["prompt"]

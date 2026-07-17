@@ -484,6 +484,7 @@ def _assemble_async(service_date: str) -> None:
             text = _confession_text()
             img = _confession_path()
             if pick is not None:
+                pick.pop("provenance", None)  # library song is trustworthy; show no badge (#200)
                 data.confession_song = pick
             elif text is not None:
                 data.confession_song = asdict(parse_choir_text(text))

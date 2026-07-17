@@ -60,6 +60,11 @@ class Song:
     # The raw arrangement string read off the lead sheet (e.g. "V-C-V-Cx2-B-Cx3"), shown in
     # review as a non-binding hint for typing `arrangement`. Display-only — never parsed (#113).
     arrangement_hint: str = ""
+    # Lyric origin for the review provenance badge (#200). Empty for typed/library songs
+    # (no badge shown). gasazip match: {"source":"gasazip","song_id","artist","cand_cov",
+    # "ocr_cov"} — the two coverages are the confidence readout. Local OCR+Ollama fallback:
+    # {"source":"local"} (flagged for proofreading). Describes origin, not current text.
+    provenance: dict = field(default_factory=dict)
 
 
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
@@ -328,6 +333,13 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         if match:
             song = Song(title=match.title, lines=linebreak.rebreak(match.lines))
             song.arrangement_hint = detect_arrangement_hint(ocr_lines)
+            song.provenance = {
+                "source": "gasazip",
+                "song_id": match.song_id,
+                "artist": match.artist,
+                "cand_cov": match.cand_cov,
+                "ocr_cov": match.ocr_cov,
+            }
             return [song]
 
     t = time.monotonic()
@@ -336,6 +348,7 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         steps["ollama"] = round(time.monotonic() - t, 1)
     for song in songs:
         song.lines = linebreak.rebreak(song.lines)
+        song.provenance = {"source": "local"}
     # Attach the sheet's arrangement hint only when one song was read — a multi-song sheet is
     # ambiguous to attribute (#113).
     if len(songs) == 1:

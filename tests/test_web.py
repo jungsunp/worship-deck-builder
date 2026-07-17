@@ -315,7 +315,7 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     data = store.load(date)
     assert data.worship_songs == [
         {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": "",
-         "sections": [], "arrangement": "", "arrangement_hint": ""}
+         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {}}
     ]
     assert data.call_to_worship_passage == [
         {"number": 1, "korean": "한글", "english": "english"},
@@ -380,6 +380,7 @@ def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> Non
         "sections": [],
         "arrangement": "",
         "arrangement_hint": "",
+        "provenance": {},
     }
 
 
@@ -393,7 +394,8 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
     assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": "",
-                                     "sections": [], "arrangement": "", "arrangement_hint": ""}
+                                     "sections": [], "arrangement": "", "arrangement_hint": "",
+                                     "provenance": {}}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -506,7 +508,8 @@ def test_assemble_parses_confession_text_without_transcribing(_assemble_env, mon
     date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
     assert data.confession_song == {"title": "고백곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
-                                     "sections": [], "arrangement": "", "arrangement_hint": ""}
+                                     "sections": [], "arrangement": "", "arrangement_hint": "",
+                                     "provenance": {}}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -519,7 +522,7 @@ def test_assemble_parses_sermonsong_text_without_transcribing(_assemble_env, mon
     date = client.post("/assemble").json()["service_date"]
     assert store.load(date).worship_after_sermon == {
         "title": "설교후곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
-        "sections": [], "arrangement": "", "arrangement_hint": "",
+        "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
     }
 
 
