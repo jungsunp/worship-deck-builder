@@ -315,7 +315,8 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     data = store.load(date)
     assert data.worship_songs == [
         {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": "",
-         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {}}
+         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
+         "fragments": []}
     ]
     assert data.call_to_worship_passage == [
         {"number": 1, "korean": "한글", "english": "english"},
@@ -381,6 +382,7 @@ def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> Non
         "arrangement": "",
         "arrangement_hint": "",
         "provenance": {},
+        "fragments": [],
     }
 
 
@@ -395,7 +397,7 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     data = store.load(date)
     assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": "",
                                      "sections": [], "arrangement": "", "arrangement_hint": "",
-                                     "provenance": {}}
+                                     "provenance": {}, "fragments": []}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -509,7 +511,7 @@ def test_assemble_parses_confession_text_without_transcribing(_assemble_env, mon
     data = store.load(date)
     assert data.confession_song == {"title": "고백곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
                                      "sections": [], "arrangement": "", "arrangement_hint": "",
-                                     "provenance": {}}
+                                     "provenance": {}, "fragments": []}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -523,6 +525,7 @@ def test_assemble_parses_sermonsong_text_without_transcribing(_assemble_env, mon
     assert store.load(date).worship_after_sermon == {
         "title": "설교후곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
+        "fragments": [],
     }
 
 
@@ -1166,3 +1169,83 @@ def test_build_records_error(_runs, monkeypatch) -> None:
 
 def test_review_page_has_generate_button() -> None:
     assert 'id="generate"' in client.get("/review/2026-05-31").text
+
+
+# ---------------------------------------------------------------------------
+# Re-search (#203): per-song title correction + gasazip candidate picker
+# ---------------------------------------------------------------------------
+
+def test_research_scores_stored_fragments(_runs, monkeypatch) -> None:
+    """POST /research re-runs the lookup for one song, scoring the corrected title against the
+    song's persisted OCR fragments, and returns candidates with a short preview for picking."""
+    run = _fake_run()
+    run.worship_songs[0]["fragments"] = ["보좌앞에 지금가오니"]
+    store.save(_runs, run)
+    seen = {}
+
+    def fake_scored(title, fragments, **kw):
+        seen["title"], seen["fragments"] = title, fragments
+        return [
+            app_module.lyrics_online.Candidate(
+                song_id="111", title="보좌 앞으로", artist="찬미워십",
+                lines=["주님의보혈", "", "받아주소서"], cand_cov=0.9, ocr_cov=0.8,
+            )
+        ]
+
+    monkeypatch.setattr(app_module.lyrics_online, "search_scored", fake_scored)
+    r = client.post(f"/runs/{_runs}/research", json={"ref": "0", "title": "보좌 앞으로"})
+    assert r.status_code == 200
+    assert seen == {"title": "보좌 앞으로", "fragments": ["보좌앞에 지금가오니"]}
+    assert r.json()["scored"] is True  # song has stored fragments → match %s are meaningful
+    assert r.json()["candidates"] == [
+        {"song_id": "111", "title": "보좌 앞으로", "artist": "찬미워십",
+         "cand_cov": 0.9, "ocr_cov": 0.8, "preview": ["주님의보혈", "받아주소서"]}  # blank lines dropped
+    ]
+
+
+def test_research_unscored_when_no_fragments(_runs, monkeypatch) -> None:
+    """A song assembled before fragment persistence (or typed) has no fragments — the endpoint
+    flags scored=False so the UI hides the meaningless 0% match and picks by preview instead."""
+    store.save(_runs, _fake_run())  # _fake_run songs carry no "fragments" key
+
+    def fake_scored(title, fragments, **kw):
+        assert fragments == []  # nothing to score against
+        return [app_module.lyrics_online.Candidate(song_id="111", title="보좌 앞으로", artist="")]
+
+    monkeypatch.setattr(app_module.lyrics_online, "search_scored", fake_scored)
+    r = client.post(f"/runs/{_runs}/research", json={"ref": "0", "title": "보좌 앞으로"})
+    assert r.status_code == 200 and r.json()["scored"] is False and r.json()["candidates"]
+
+
+def test_research_requires_title(_runs) -> None:
+    store.save(_runs, _fake_run())
+    assert client.post(f"/runs/{_runs}/research", json={"ref": "0", "title": " "}).status_code == 400
+
+
+def test_research_unknown_ref_is_404(_runs) -> None:
+    store.save(_runs, _fake_run())
+    assert client.post(f"/runs/{_runs}/research", json={"ref": "9", "title": "x"}).status_code == 404
+
+
+def test_research_network_error_returns_message(_runs, monkeypatch) -> None:
+    """A gasazip hiccup surfaces as a message the phone shows, not a 500."""
+    import httpx
+
+    store.save(_runs, _fake_run())
+
+    def boom(*a, **kw):
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(app_module.lyrics_online, "search_scored", boom)
+    r = client.post(f"/runs/{_runs}/research", json={"ref": "0", "title": "보좌 앞으로"})
+    assert r.status_code == 200 and r.json()["candidates"] == [] and r.json()["error"]
+
+
+def test_research_apply_rebreaks_chosen_lyrics(_runs, monkeypatch) -> None:
+    """POST /research/apply fetches the picked candidate and rebreaks it like assemble does."""
+    monkeypatch.setattr(app_module.lyrics_online, "fetch_lyrics", lambda sid: ["가사 한 줄", "두 줄"])
+    monkeypatch.setattr(app_module.linebreak, "rebreak", lambda lines: lines + ["(rebroken)"])
+    r = client.post(f"/runs/{_runs}/research/apply",
+                    json={"song_id": "111", "title": "보좌 앞으로", "artist": "찬미워십"})
+    assert r.status_code == 200
+    assert r.json() == {"lines": ["가사 한 줄", "두 줄", "(rebroken)"]}

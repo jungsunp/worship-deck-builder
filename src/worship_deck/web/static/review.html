@@ -62,6 +62,24 @@
           border-radius: 999px; border: 1px solid currentColor; text-decoration: none; }
   .prov.ok { color: var(--green); }
   .prov.warn { color: var(--amber); }
+  /* Re-search (#203): 재검색 button + inline gasazip candidate picker under the song card. */
+  .research { width: auto; margin-left: auto; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+              border: 0; border-radius: var(--radius); background: var(--blue); color: #fff;
+              cursor: pointer; flex: none; }
+  .research[disabled] { background: var(--gray-400); }
+  .provrow { display: flex; align-items: center; gap: 0.5rem; }
+  .candlist { margin: 0.5rem 0; display: grid; gap: 0.5rem; }
+  .candmsg { color: var(--gray-600); font-size: 0.9rem; }
+  .cand { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.6rem;
+          background: var(--gray-050, #fafafa); }
+  .cand .candhd { display: flex; align-items: center; gap: 0.5rem; }
+  .cand .candtitle { font-weight: 600; }
+  .cand .candmeta { color: var(--gray-600); font-size: 0.85rem; }
+  .cand .candpick { width: auto; margin-left: auto; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+                    border: 1px solid var(--green); border-radius: var(--radius);
+                    background: #fff; color: var(--green); cursor: pointer; flex: none; }
+  .cand .candprev { margin-top: 0.3rem; color: var(--gray-600); font-size: 0.85rem;
+                    white-space: pre-wrap; }
   .arr { margin-top: 0.8rem; }
   .arrhint { color: var(--gray-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
   .arrhint b { color: var(--gray-700); }
@@ -350,7 +368,7 @@ function renderMedley(div) {
     const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(s, -1);
     const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(s, 1);
     hd.append(ti, up, dn); sd.appendChild(hd);
-    appendProvRow(sd, song);  // lyric origin badge (#200)
+    appendProvRow(sd, song, s);  // lyric origin badge (#200) + 재검색 (#203)
     // Start unlabeled lyrics as one V1 card so the operator always has something to split/label.
     if (!song.sections || !song.sections.length) {
       song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];
@@ -411,12 +429,96 @@ function provBadge(song) {
   return null;
 }
 
-// Wrap a provBadge in a .provrow and append to `sd` when there's a badge to show.
-function appendProvRow(sd, song) {
+// Wrap a provBadge in a .provrow and append to `sd` when there's a badge to show. Image-derived
+// songs (any badge) also get a 재검색 button + an inline candidate-list host: the operator
+// corrects the title and re-runs the gasazip lookup right here (#203).
+function appendProvRow(sd, song, ref) {
   const b = provBadge(song);
-  if (!b) return;
+  if (!b) return;  // no badge (typed/library) → no re-search either
   const row = document.createElement('div'); row.className = 'provrow';
-  row.appendChild(b); sd.appendChild(row);
+  row.appendChild(b);
+  const list = document.createElement('div'); list.className = 'candlist'; list.hidden = true;
+  const btn = document.createElement('button'); btn.type = 'button';
+  btn.className = 'research'; btn.textContent = '재검색';
+  btn.onclick = () => researchSong(ref, btn, list);
+  row.appendChild(btn); sd.appendChild(row); sd.appendChild(list);
+}
+
+// Read the operator-corrected title from the song's title input, re-run the gasazip lookup, and
+// render the scored candidates into `list` for picking (#203). Scores against the OCR fragments
+// persisted at assemble, so no re-OCR — but the throttled fetches take several seconds.
+async function researchSong(ref, btn, list) {
+  const ti = ref === 'confession' || ref === 'sermonsong'
+    ? document.querySelector('#order input[data-kind="' + ref + '-title"]')
+    : document.querySelector('#order input[data-kind="worship-title"][data-i="' + ref + '"]');
+  const title = (ti ? ti.value : (songByRef(ref).title || '')).trim();
+  if (!title) { alert('먼저 곡 제목을 입력하세요'); return; }
+  btn.disabled = true; btn.textContent = '검색 중…';
+  list.hidden = false; list.innerHTML = '';
+  const msg = document.createElement('div'); msg.className = 'candmsg';
+  msg.textContent = '가사집에서 "' + title + '" 검색 중… (수 초 걸릴 수 있어요)';
+  list.appendChild(msg);
+  try {
+    const r = await fetch('/runs/' + date + '/research', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ref: String(ref), title}),
+    });
+    const body = await r.json();
+    list.innerHTML = '';
+    if (!r.ok || body.error) { msg.textContent = body.error || ('검색 오류: ' + r.status); list.appendChild(msg); return; }
+    if (!body.candidates.length) { msg.textContent = '검색 결과가 없습니다.'; list.appendChild(msg); return; }
+    // No stored OCR fragments (song predates fragment persistence, or was typed) → the match %s
+    // are meaningless; tell the operator to pick by preview and hide them.
+    if (!body.scored) {
+      msg.textContent = '악보 대조 점수 없음 (다시 Assemble하면 생겨요) — 가사 미리보기로 선택하세요';
+      list.appendChild(msg);
+    }
+    body.candidates.forEach(c => list.appendChild(candCard(ref, c, list, body.scored)));
+  } catch (e) {
+    list.innerHTML = ''; msg.textContent = '검색 오류'; list.appendChild(msg);
+  } finally {
+    btn.disabled = false; btn.textContent = '재검색';
+  }
+}
+
+// One gasazip candidate row: title · artist (· 일치% when scored), a lyric preview, and a 선택
+// button. `scored` is false for songs without stored OCR fragments — the % would be a fake 0.
+function candCard(ref, c, list, scored) {
+  const card = document.createElement('div'); card.className = 'cand';
+  const hd = document.createElement('div'); hd.className = 'candhd';
+  const t = document.createElement('span'); t.className = 'candtitle'; t.textContent = c.title;
+  const m = document.createElement('span'); m.className = 'candmeta';
+  m.textContent = (c.artist || '') + (scored ? ' · 일치 ' + Math.round((c.cand_cov || 0) * 100) + '%' : '');
+  const pick = document.createElement('button'); pick.type = 'button';
+  pick.className = 'candpick'; pick.textContent = '선택';
+  pick.onclick = () => applyCandidate(ref, c, list);
+  hd.append(t, m, pick); card.appendChild(hd);
+  if (c.preview && c.preview.length) {
+    const pv = document.createElement('div'); pv.className = 'candprev';
+    pv.textContent = c.preview.join('\n');
+    card.appendChild(pv);
+  }
+  return card;
+}
+
+// Apply a picked candidate: fetch its rebroken lyrics (same rebreak as assemble) and replace the
+// song's text. Existing #113 section labels are invalidated by new lyrics, so clear them and let
+// the operator relabel. syncFromDom first so other songs' unsaved edits survive the re-render.
+async function applyCandidate(ref, c, list) {
+  const r = await fetch('/runs/' + date + '/research/apply', {
+    method: 'POST', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({song_id: c.song_id, title: c.title, artist: c.artist}),
+  });
+  if (!r.ok) { showStatus('✕ 가사 적용 오류: ' + r.status, true); return; }
+  const {lines} = await r.json();
+  syncFromDom();
+  const song = songByRef(ref);
+  song.title = c.title; song.lines = lines; song.sections = []; song.arrangement = '';
+  song.provenance = {source: 'gasazip', song_id: c.song_id, artist: c.artist,
+                     cand_cov: c.cand_cov, ocr_cov: c.ocr_cov};
+  edited[editKeyOf(ref)] = true;
+  list.hidden = true;
+  render();
 }
 
 // Read every card's label + lines from the DOM into song.sections (DOM is the truth for typed
@@ -663,7 +765,7 @@ function renderLabeledSong(div, ref, libSave) {
   const co = document.createElement('input');
   co.dataset.kind = ref + '-composer'; co.placeholder = '작곡/편곡'; co.value = song.composer || '';
   sd.append(ti, co);
-  appendProvRow(sd, song);  // lyric origin badge (#200)
+  appendProvRow(sd, song, ref);  // lyric origin badge (#200) + 재검색 (#203)
   // Seed unlabeled lyrics as one V1 card so the operator always has something to split/label.
   if (!song.sections || !song.sections.length) {
     song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];

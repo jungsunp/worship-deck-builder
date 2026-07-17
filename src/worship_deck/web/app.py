@@ -15,6 +15,7 @@ import time
 from dataclasses import asdict, fields
 from pathlib import Path
 
+import httpx
 from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -22,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 from worship_deck import hymn, library, obs, parse, pipeline, store
 from worship_deck.bible import verses
 from worship_deck.keynote import build as keynote_build
+from worship_deck.lyrics import linebreak
+from worship_deck.lyrics import online as lyrics_online
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
 from worship_deck.parse import ServiceData
@@ -757,6 +760,83 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     data.edited_fields = sorted(edited)
     store.save(service_date, data)
     return {"saved": service_date, "warnings": warnings} if warnings else {"saved": service_date}
+
+
+def _song_by_ref(data: ServiceData, ref: str) -> dict | None:
+    """Resolve a review song reference to its stored dict — mirrors review.html's songByRef.
+
+    ``ref`` is a numeric string index into the 찬양 medley, or "confession"/"sermonsong" for the
+    single-song sections. Returns None when the ref doesn't resolve to a present song.
+    """
+    if ref == "confession":
+        return data.confession_song or None
+    if ref == "sermonsong":
+        return data.worship_after_sermon or None
+    try:
+        return data.worship_songs[int(ref)]
+    except (ValueError, IndexError):
+        return None
+
+
+@app.post("/runs/{service_date}/research")
+def research_song(service_date: str, body: dict = Body(...)) -> dict:
+    """Re-run the gasazip lookup for one song from an operator-corrected title (#203).
+
+    Scores candidates against the song's stored OCR fragments (persisted at assemble) and
+    returns the top matches for the operator to pick from — the HITL fix when the automatic
+    lookup landed on the wrong song. Read-only: the pick is applied via /research/apply + PUT.
+    """
+    ref, title = str(body.get("ref", "")), (body.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="title is required")
+    try:
+        data = store.load(service_date)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="no run for that date")
+    song = _song_by_ref(data, ref)
+    if song is None:
+        raise HTTPException(status_code=404, detail="unknown song ref")
+    fragments = song.get("fragments", [])
+    try:
+        cands = lyrics_online.search_scored(title, fragments)
+    except httpx.HTTPError:
+        return {"candidates": [], "error": "가사집 검색 실패 — 잠시 후 다시 시도하세요"}
+    return {
+        # scored=False means this song predates fragment persistence (or was typed) — the match %s
+        # are meaningless, so the UI hides them and the operator picks by lyric preview. A re-assemble
+        # re-transcribes the song and stores its fragments, restoring the match scores.
+        "scored": bool(fragments),
+        "candidates": [
+            {
+                "song_id": c.song_id, "title": c.title, "artist": c.artist,
+                "cand_cov": c.cand_cov, "ocr_cov": c.ocr_cov,
+                "preview": [ln for ln in c.lines if ln.strip()][:4],
+            }
+            for c in cands
+        ]
+    }
+
+
+@app.post("/runs/{service_date}/research/apply")
+def apply_research(service_date: str, body: dict = Body(...)) -> dict:
+    """Fetch a chosen gasazip candidate's lyrics and rebreak them like assemble does (#203).
+
+    Pure transform — the client sets the song's lines/provenance in the run object and persists
+    via PUT /runs (matching the existing edit flow). Rebreaking only the picked candidate avoids
+    the wasted work of rebreaking every candidate in /research.
+    """
+    song_id = str(body.get("song_id", "")).strip()
+    if not song_id:
+        raise HTTPException(status_code=400, detail="song_id is required")
+    cand = lyrics_online.Candidate(
+        song_id=song_id, title=(body.get("title") or ""), artist=(body.get("artist") or "")
+    )
+    try:
+        cand.lines = lyrics_online.fetch_lyrics(song_id)
+    except httpx.HTTPError:
+        raise HTTPException(status_code=502, detail="가사집 가사 조회 실패")
+    lyrics_online._strip_header(cand)
+    return {"lines": linebreak.rebreak(cand.lines)}
 
 
 @app.get("/runs/{service_date}/hymn")
