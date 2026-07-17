@@ -3,10 +3,12 @@
 The worship/고백 lyric banners are fixed-width autoshrink boxes and ``chunk()`` groups
 lines 2-per-slide with no notion of fit, so over-long transcribed lines render small and
 cramped. ``rebreak()`` runs inside ``transcribe()`` — after gasazip lookup or Ollama
-reassembly, before results are persisted for review — collapsing adjacent repeated
-phrases to ``… X N`` and splitting still-over-long lines at musical-phrase boundaries
-(local Ollama; rule-based split at the best space when Ollama is unreachable or its
-output fails validation, so Ollama is never a hard dependency of the gasazip path).
+reassembly, before results are persisted for review — splitting over-long lines at
+musical-phrase boundaries (local Ollama; rule-based split at the best space when Ollama
+is unreachable or its output fails validation, so Ollama is never a hard dependency of
+the gasazip path). Repeated phrases/lines stay verbatim — the operator reads slides
+against the sheet while labeling sections, and ``… X N`` marks read worse than the
+repeat itself (2026-07-16 review).
 
 Fit model (same glyph-advance model as keynote/build.py, #115): measured on master.key,
 the worship (slide 8) and 고백 (slide 60) lyric banners are identical — on-canvas text
@@ -29,56 +31,13 @@ _CHAR_W_KO = 0.83  # avg Hangul glyph advance / font — matches keynote/build.p
 _FILL = 0.92  # headroom below the geometric maximum; see module docstring
 MAX_CHARS = int(_LYRIC_BOX_W * _FILL / (_LYRIC_FONT * _CHAR_W_KO))  # 22
 
-# Don't collapse repeats of a unit this short: melisma syllables ("아 아 아") read
-# better sung out than as "아 X 3".
-_MIN_COLLAPSE_CHARS = 2
-
-
-def collapse_repeats(line: str) -> str:
-    """Collapse adjacent repeated phrases in one line to ``phrase X N``.
-
-    Token (space-separated) level, longest group first, so
-    ``물이 바다덮음같이 물이 바다덮음같이`` becomes ``물이 바다덮음같이 X 2`` rather than
-    two single-token collapses. Non-adjacent repeats are left alone.
-    """
-    tokens = line.split()
-    changed = True
-    while changed:
-        changed = False
-        for g in range(len(tokens) // 2, 0, -1):
-            for i in range(len(tokens) - 2 * g + 1):
-                group = tokens[i : i + g]
-                if len("".join(group)) < _MIN_COLLAPSE_CHARS:
-                    continue
-                n = 1
-                while tokens[i + n * g : i + (n + 1) * g] == group:
-                    n += 1
-                if n >= 2:
-                    tokens[i : i + n * g] = group + ["X", str(n)]
-                    changed = True
-                    break
-            if changed:
-                break
-    return " ".join(tokens)
-
 
 def _split_at_space(line: str, max_chars: int) -> list[str]:
     """Rule-based fallback: greedy split at spaces so each part fits ``max_chars``.
 
-    Splits between units — words, except an ``X N`` repeat suffix is fused to the word
-    before it so it can never be orphaned. A single overlong unit stays whole and
-    autoshrinks slightly.
+    A single overlong word stays whole and autoshrinks slightly.
     """
-    tokens = line.split()
-    rest: list[str] = []
-    i = 0
-    while i < len(tokens):
-        if rest and tokens[i] == "X" and i + 1 < len(tokens) and tokens[i + 1].isdigit():
-            rest[-1] += f" X {tokens[i + 1]}"
-            i += 2
-        else:
-            rest.append(tokens[i])
-            i += 1
+    rest = line.split()
     parts: list[str] = []
     while rest:
         cur = [rest.pop(0)]
@@ -101,8 +60,7 @@ _SPLIT_FORMAT = {
 
 # Rule 1 (must split into >= 2 pieces) is load-bearing: every line sent here is
 # over-long by construction, but on barely-over lines the model otherwise returns the
-# line unsplit. Worked examples in rules 4-5 are likewise needed — without the X-N
-# example the model orphans the repeat suffix.
+# line unsplit. The worked example in rule 4 is likewise needed.
 _SPLIT_PROMPT = """\
 아래 한국어 찬양 가사 줄들은 슬라이드 한 줄에 넣기에 너무 깁니다. 각 줄을 노래할 때 \
 호흡이 끊기는 악구(musical phrase)/의미 단위 경계에서 더 짧은 줄들로 나누세요.
@@ -117,9 +75,7 @@ _SPLIT_PROMPT = """\
 4. 단어나 조사 중간이 아니라 악구가 자연스럽게 끝나는 곳에서 나누세요. 예: \
 "이전에 있는 것은 모두 잊어버리고 앞에 계신 그리스도께로 달려가 노라" → \
 ["이전에 있는 것은 모두 잊어버리고", "앞에 계신 그리스도께로 달려가 노라"]
-5. "X 2" 같은 반복 표시는 바로 앞 구절과 같은 조각에 붙여 두세요. 예: \
-"온세상 가득하리라 물이 바다덮음같이 X 2" → ["온세상 가득하리라", "물이 바다덮음같이 X 2"]
-6. 입력 줄 순서 그대로, 입력 줄마다 조각 배열 하나씩 lines 에 넣으세요.
+5. 입력 줄 순서 그대로, 입력 줄마다 조각 배열 하나씩 lines 에 넣으세요.
 
 나눌 입력 가사 줄들은 다음과 같습니다:
 """
@@ -166,45 +122,31 @@ def _valid_split(original: str, parts: object, max_chars: int) -> bool:
         return False
     if not all(isinstance(p, str) and p.strip() for p in parts):
         return False
-    if any(p.strip() == "X" or p.strip().isdigit() or p.strip().startswith("X ") for p in parts):
-        return False  # orphaned "X N" repeat suffix
     if "".join(parts).replace(" ", "") != original.replace(" ", ""):
         return False
     return all(len(p.strip()) <= max_chars + 2 for p in parts)
 
 
 def rebreak(lines: list[str], *, max_chars: int = MAX_CHARS) -> list[str]:
-    """Collapse repeats and split over-long lyric lines at phrase boundaries.
+    """Split over-long lyric lines at phrase boundaries.
 
-    Blank lines (stanza breaks, the ``chunk()`` convention) pass through untouched and
-    are never merged across. When no line exceeds ``max_chars`` after collapsing, no
-    I/O happens at all; otherwise one batched Ollama call covers the over-long lines,
-    and any failure degrades per line to the rule-based split. Never raises on Ollama
-    problems.
+    Blank lines (stanza breaks, the ``chunk()`` convention) pass through untouched.
+    When no line exceeds ``max_chars``, no I/O happens at all; otherwise one batched
+    Ollama call covers the over-long lines, and any failure degrades per line to the
+    rule-based split. Never raises on Ollama problems.
     """
-    # Collapse pass: repeats within a line, then identical adjacent lines.
-    groups: list[tuple[str, int]] = []  # (collapsed line, adjacent repeat count)
-    for raw in lines:
-        if not raw.strip():
-            groups.append(("", 1))
-            continue
-        text = collapse_repeats(raw.strip())
-        if groups and groups[-1][0] == text:
-            groups[-1] = (text, groups[-1][1] + 1)
-        else:
-            groups.append((text, 1))
-    collapsed = [f"{text} X {n}" if n > 1 else text for text, n in groups]
+    cleaned = [ln.strip() for ln in lines]
 
-    long_idx = [i for i, ln in enumerate(collapsed) if len(ln) > max_chars]
+    long_idx = [i for i, ln in enumerate(cleaned) if len(ln) > max_chars]
     if not long_idx:
-        return collapsed
+        return cleaned
 
     try:
-        model_splits = _split_with_ollama([collapsed[i] for i in long_idx], max_chars)
+        model_splits = _split_with_ollama([cleaned[i] for i in long_idx], max_chars)
     except (httpx.HTTPError, ValueError):
         model_splits = []
     out: list[str] = []
-    for i, ln in enumerate(collapsed):
+    for i, ln in enumerate(cleaned):
         if i not in long_idx:
             out.append(ln)
             continue

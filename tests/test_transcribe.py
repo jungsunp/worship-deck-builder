@@ -136,12 +136,13 @@ def test_reassemble_raises_when_ollama_unreachable(monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
-# _detect_title — tallest Hangul line near the top, edge tokens trimmed
+# _detect_titles — tallest Hangul lines near the top, tallest first, edges trimmed
 # ---------------------------------------------------------------------------
 
-def test_detect_title_real_sheet_shape() -> None:
+def test_detect_titles_real_sheet_shape() -> None:
     # Shape of the real 보좌 앞으로 sheet: a taller handwritten mark with no Hangul,
     # the title with a merged red "•all" mark, then watermark/credits and lyrics.
+    # The short lyric line also qualifies — as a lower-priority candidate (#202).
     lines = [
         (0.0634, 'vx3(aim) - VX3 (ky change "F")'),
         (0.0474, "•all 보좌 앞으로"),
@@ -149,17 +150,17 @@ def test_detect_title_real_sheet_shape() -> None:
         (0.0318, "E B/D# C#m G#m/B"),
         (0.0444, "V 주님의 보혈 . 의지하 는맘 .으로"),
     ]
-    assert T._detect_title(lines) == "보좌 앞으로"
+    assert T._detect_titles(lines) == ["보좌 앞으로", "주님의 보혈 . 의지하 는맘 .으로"]
 
 
-def test_detect_title_skips_noise_and_handles_empty() -> None:
-    assert T._detect_title([]) == ""
-    assert T._detect_title([(0.05, "VX3 chords only")]) == ""
-    # Known Hangul noise (watermark phonetics) never becomes the title.
-    assert T._detect_title([(0.09, "아이자야씩스티원"), (0.04, "나는 예배하네")]) == "나는 예배하네"
+def test_detect_titles_skips_noise_and_handles_empty() -> None:
+    assert T._detect_titles([]) == []
+    assert T._detect_titles([(0.05, "VX3 chords only")]) == []
+    # Known Hangul noise (watermark phonetics) never becomes a title candidate.
+    assert T._detect_titles([(0.09, "아이자야씩스티원"), (0.04, "나는 예배하네")]) == ["나는 예배하네"]
 
 
-def test_detect_title_ignores_taller_handwritten_marks() -> None:
+def test_detect_titles_ignores_taller_handwritten_marks() -> None:
     # Real sheet-2 shape: handwriting with some Hangul ("드럼만") out-talls the
     # printed title but is mostly latin/digits — the ratio filter rejects it.
     lines = [
@@ -168,17 +169,17 @@ def test_detect_title_ignores_taller_handwritten_marks() -> None:
         (0.0300, "죄에서 자유를 얻게 함은"),
         (0.0237, "Hymn 268 • 천천히 L.E.Jones, 1889"),
     ]
-    assert T._detect_title(lines) == "죄에서 자유를 얻게 함은"
+    assert T._detect_titles(lines) == ["죄에서 자유를 얻게 함은"]
 
 
-def test_detect_title_rejects_lyric_lines_on_continuation_pages() -> None:
+def test_detect_titles_rejects_lyric_lines_on_continuation_pages() -> None:
     # Continuation pages have no printed title; their tallest Hangul is a note-split
-    # lyric line, which the Hangul length cap rejects → "" → no online lookup.
+    # lyric line, which the Hangul length cap rejects → [] → no online lookup.
     lines = [
         (0.0919, 'CX3-B-CXX-C (주의 보혈")'),
         (0.0486, "포- 대를 향하여- 그리- 스도 예수안-에서- 부름 의상을-위하-여 달려가 - 노라-"),
     ]
-    assert T._detect_title(lines) == ""
+    assert T._detect_titles(lines) == []
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +216,38 @@ def test_transcribe_uses_online_match_when_confident(
     assert seen["title"] == "내 주를 가까이"
     # Lookup ranks against the filtered Hangul fragments only.
     assert "https://x" not in seen["fragments"] and "G" not in seen["fragments"]
+
+
+def test_transcribe_tries_next_title_candidate_when_lookup_misses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-07-12 sheet 003 shape (#202): the tallest Hangul line is garbled
+    handwriting; the lookup misses on it and succeeds on the second candidate
+    (the printed title)."""
+    from worship_deck.lyrics import online
+
+    ocr = [
+        (0.09, "그런가 보시면 탄생"),  # garbled handwriting, tallest
+        (0.03, "허무한 시절 지날때"),  # printed title
+    ]
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: ocr)
+    tried: list[str] = []
+
+    def fake_lookup(title: str, fragments: list[str]) -> online.Candidate | None:
+        tried.append(title)
+        if title == "허무한 시절 지날때":
+            return online.Candidate(
+                song_id="602",
+                title="성령이 오셨네",
+                artist="심형진",
+                lines=["성령이 오셨네 내 맘에 오셨네"],
+            )
+        return None
+
+    monkeypatch.setattr(online, "lookup", fake_lookup)
+    (song,) = transcribe("whatever.png")
+    assert tried == ["그런가 보시면 탄생", "허무한 시절 지날때"]
+    assert song.title == "성령이 오셨네"
 
 
 def test_transcribe_rebreaks_overlong_online_lines_without_ollama(

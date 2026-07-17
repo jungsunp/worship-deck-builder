@@ -13,20 +13,29 @@ godpeople 403s scrapers and CCLI's API is paid/NDA'd; gasazip needs only a brows
 from __future__ import annotations
 
 import html
+import logging
 import re
+import time
 from dataclasses import dataclass, field
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 _BASE = "http://gasazip.com"
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _TIMEOUT = 10.0
 
-# Fraction of a candidate's lyric bigrams that must appear in the OCR fragments. The
-# right song scores near 1.0 (OCR reads every staff line, syllable splits don't matter
-# after Hangul-only normalization); same-titled different songs score near 0.
+# Acceptance (#202): a candidate passes when the OCR fragments cover at least
+# _MATCH_THRESHOLD of its lyric bigrams — the right song scores near 1.0 (OCR reads
+# every staff line, syllable splits don't matter after Hangul-only normalization) and
+# same-titled different songs score near 0 — or, for canonical texts longer than the
+# sheet (hymn pages print every verse, the sheet often has one), when its title
+# resembles the query AND its lyrics cover at least _OCR_COV_MIN of the OCR's bigrams.
 _MATCH_THRESHOLD = 0.5
-_TOP_N = 5  # search candidates to fetch and score
+_OCR_COV_MIN = 0.5
+_FALLBACK_N = 5  # site-ranked rows to fetch when no title-similar row is accepted
+_THROTTLE_S = 2.5  # spacing between requests — gasazip 429s after ~10 rapid ones
 
 
 @dataclass
@@ -36,6 +45,10 @@ class Candidate:
     artist: str
     # Canonical lyric lines; a blank line marks a stanza break (chunk() convention).
     lines: list[str] = field(default_factory=list)
+    # Both coverage directions from scoring, logged for threshold tuning (#202) and
+    # surfaced by the review provenance badge (#200).
+    cand_cov: float = 0.0
+    ocr_cov: float = 0.0
 
 
 # Search rows only: href precedes class on search results (related-song rows on song
@@ -48,10 +61,29 @@ _RESULT = re.compile(
 _LYRICS_DIV = re.compile(r'id="gasa-desktop"[^>]*>(.*?)</div>', re.S)
 _TAG = re.compile(r"<[^>]+>")
 _HANGUL_ONLY = re.compile(r"[^가-힣]")
+# Trailing repeat marks some song pages embed in the lyric text ("…함없네(x2)") — repeats
+# are the band's arrangement concern, not slide text (operator preference, 2026-07-16).
+_REPEAT_MARK = re.compile(r"[(（]?\s*[xX×]\s*\d+\s*[)）]?\s*$")
 
 
 def _clean(fragment: str) -> str:
     return html.unescape(_TAG.sub("", fragment)).strip()
+
+
+_last_request = 0.0
+_lyrics_cache: dict[str, list[str]] = {}
+
+
+def _throttled_get(url: str, **kwargs) -> httpx.Response:
+    """httpx.get with requests spaced >= _THROTTLE_S apart (no wait before the first)."""
+    global _last_request
+    wait = _last_request + _THROTTLE_S - time.monotonic()
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        return httpx.get(url, **kwargs)
+    finally:
+        _last_request = time.monotonic()
 
 
 def search(title: str) -> list[Candidate]:
@@ -60,7 +92,7 @@ def search(title: str) -> list[Candidate]:
     Raises:
         httpx.HTTPError: network failure or non-2xx response.
     """
-    resp = httpx.get(
+    resp = _throttled_get(
         f"{_BASE}/search.html", params={"q": title}, headers=_HEADERS, timeout=_TIMEOUT
     )
     resp.raise_for_status()
@@ -73,13 +105,20 @@ def search(title: str) -> list[Candidate]:
 def fetch_lyrics(song_id: str) -> list[str]:
     """Fetch one song page's lyric lines; blank lines mark stanza breaks.
 
+    Trailing "(x2)"-style repeat marks are stripped. Cached per song_id for the
+    process lifetime (lyrics are static); hits return a copy because callers
+    (``_strip_header``) mutate the list.
+
     Raises:
         httpx.HTTPError: network failure or non-2xx response.
     """
-    resp = httpx.get(f"{_BASE}/{song_id}", headers=_HEADERS, timeout=_TIMEOUT)
+    if song_id in _lyrics_cache:
+        return list(_lyrics_cache[song_id])
+    resp = _throttled_get(f"{_BASE}/{song_id}", headers=_HEADERS, timeout=_TIMEOUT)
     resp.raise_for_status()
     m = _LYRICS_DIV.search(resp.text)
     if not m:
+        _lyrics_cache[song_id] = []
         return []
     # <br /> is followed by a literal newline in the markup — fold the pair into one
     # break so only an explicit <br /><br /> survives as a blank stanza-break line.
@@ -87,13 +126,17 @@ def fetch_lyrics(song_id: str) -> list[str]:
     lines = [html.unescape(_TAG.sub("", ln)).strip() for ln in text.split("\n")]
     out: list[str] = []
     for ln in lines:
-        if ln:
-            out.append(ln)
+        stripped = _REPEAT_MARK.sub("", ln).strip()
+        if ln and not stripped:
+            continue  # the line was only a repeat mark — drop it, don't fake a stanza break
+        if stripped:
+            out.append(stripped)
         elif out and out[-1]:  # collapse runs of blanks, drop leading blanks
             out.append("")
     while out and not out[-1]:
         out.pop()
-    return out
+    _lyrics_cache[song_id] = out
+    return list(out)
 
 
 def _strip_header(cand: Candidate) -> None:
@@ -112,32 +155,54 @@ def _bigrams(text: str) -> set[str]:
     return {s[i : i + 2] for i in range(len(s) - 1)}
 
 
-def _score(fragments: list[str], lines: list[str]) -> float:
-    """Fraction of the candidate's lyric bigrams present in the OCR fragments."""
+def _covs(ocr_bigrams: set[str], lines: list[str]) -> tuple[float, float]:
+    """(cand_cov, ocr_cov): the bigram intersection over each side's bigram count."""
     lyric = _bigrams("".join(lines))
-    if not lyric:
-        return 0.0
-    return len(lyric & _bigrams("".join(fragments))) / len(lyric)
+    inter = len(lyric & ocr_bigrams)
+    return (
+        inter / len(lyric) if lyric else 0.0,
+        inter / len(ocr_bigrams) if ocr_bigrams else 0.0,
+    )
+
+
+def _title_similar(a: str, b: str) -> bool:
+    """Hangul-normalized containment either way (site titles add parentheses/artist)."""
+    na, nb = _HANGUL_ONLY.sub("", a), _HANGUL_ONLY.sub("", b)
+    if len(na) > len(nb):
+        na, nb = nb, na
+    return len(na) >= 2 and na in nb
 
 
 def lookup(title: str, fragments: list[str]) -> Candidate | None:
     """Find the song matching the sheet: search by title, rank by OCR-fragment overlap.
 
-    Returns the best candidate (with ``lines`` populated) when it clears the match
-    threshold; ``None`` on no confident match or any network failure — the caller
-    falls back to local transcription.
+    All search rows are considered — the right song often sits past the first few
+    (#202): rows whose title resembles the query are fetched and scored first; if none
+    is accepted, the first ``_FALLBACK_N`` remaining rows in site order are tried —
+    gasazip's search indexes lyrics, so a first-line "title" still surfaces the right
+    song under a dissimilar name. Stops at the first accepted candidate (``lines``
+    populated); returns ``None`` on no confident match or any network failure — the
+    caller falls back to local transcription.
     """
+    ocr = _bigrams("".join(fragments))
     try:
-        candidates = search(title)[:_TOP_N]
-        best, best_score = None, 0.0
-        for cand in candidates:
+        rows = search(title)
+        similar = [c for c in rows if _title_similar(title, c.title)]
+        rest = [c for c in rows if not _title_similar(title, c.title)]
+        for cand in similar + rest[:_FALLBACK_N]:
             cand.lines = fetch_lyrics(cand.song_id)
             _strip_header(cand)
-            score = _score(fragments, cand.lines)
-            if score > best_score:
-                best, best_score = cand, score
+            cand.cand_cov, cand.ocr_cov = _covs(ocr, cand.lines)
+            logger.info(
+                "gasazip %s '%s' (%s): cand_cov=%.2f ocr_cov=%.2f",
+                cand.song_id, cand.title, cand.artist, cand.cand_cov, cand.ocr_cov,
+            )
+            if cand.cand_cov >= _MATCH_THRESHOLD or (
+                cand in similar and cand.ocr_cov >= _OCR_COV_MIN
+            ):
+                logger.info("gasazip match for %r: %s '%s'", title, cand.song_id, cand.title)
+                return cand
     except httpx.HTTPError:
         return None
-    if best is None or best_score < _MATCH_THRESHOLD:
-        return None
-    return best
+    logger.info("gasazip: no confident match for %r (%d rows)", title, len(rows))
+    return None

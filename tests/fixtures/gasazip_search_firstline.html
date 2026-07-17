@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Trimmed replica of a gasazip search page for the #202 first-line scenario (sheet 003,
+     2026-07-12): the sheet titles the song by its first lyric line, so NO row title
+     resembles the query — but gasazip's search indexes lyrics, so the right song (row 2)
+     is in the top rows and fragment scoring accepts it. Row 3 has no song fixture:
+     fetching it after the row-2 match would fail the early-exit test loudly. -->
+<html lang="ko">
+<head><meta charset="utf-8"></head>
+<body>
+<p class="gz-candy-result-count">3개의 검색 결과</p>
+
+<div class="list-group gz-candy-list gz-candy-search-results">
+  <a href="/601" class="list-group-item list-group-item-action gz-candy-row gz-candy-song-row">
+    <span class="gz-candy-row-main">
+      <strong>주님 다시 오실 때까지</strong>
+      <em>예람워십</em>
+    </span>
+  </a>
+  <a href="/602" class="list-group-item list-group-item-action gz-candy-row gz-candy-song-row">
+    <span class="gz-candy-row-main">
+      <strong>성령이 오셨네</strong>
+      <em>심형진</em>
+    </span>
+  </a>
+  <a href="/603" class="list-group-item list-group-item-action gz-candy-row gz-candy-song-row">
+    <span class="gz-candy-row-main">
+      <strong>거룩하신 하나님</strong>
+      <em>어노인팅</em>
+    </span>
+  </a>
+</div>
+</body>
+</html>
