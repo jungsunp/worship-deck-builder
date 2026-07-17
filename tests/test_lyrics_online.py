@@ -264,6 +264,37 @@ def test_strip_header_drops_title_artist_line_only() -> None:
 
 
 # ---------------------------------------------------------------------------
+# search_scored (#203) — review re-search: every row scored, no threshold
+# ---------------------------------------------------------------------------
+
+def test_search_scored_returns_all_rows_ranked(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Unlike lookup(), no acceptance threshold — every searched row is returned with
+    lyrics populated, best fragment coverage first, for the operator to pick."""
+    _fake_get(monkeypatch)
+    cands = online.search_scored("보좌 앞으로", _BOJWA_FRAGMENTS)
+    assert {c.song_id for c in cands} == {"111", "222", "333"}  # all rows, not just a match
+    assert cands[0].song_id == "111"  # fully covered → highest cand_cov, ranked first
+    assert cands[0].cand_cov >= cands[-1].cand_cov and cands[0].lines
+
+
+def test_search_scored_caps_fetches_at_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`limit` bounds the song-page fetches (latency + gasazip throttle)."""
+    calls = _fake_get(monkeypatch)
+    online.search_scored("보좌 앞으로", _BOJWA_FRAGMENTS, limit=1)
+    assert sum(1 for c in calls if "search.html" not in c) == 1
+
+
+def test_search_scored_propagates_network_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The endpoint catches this to show a message; lookup() swallows it instead."""
+    def boom(*a: object, **kw: object) -> None:
+        raise httpx.ConnectError("offline")
+
+    monkeypatch.setattr(httpx, "get", boom)
+    with pytest.raises(httpx.HTTPError):
+        online.search_scored("보좌 앞으로", _BOJWA_FRAGMENTS)
+
+
+# ---------------------------------------------------------------------------
 # Live integration — real gasazip; skipped off-network
 # ---------------------------------------------------------------------------
 

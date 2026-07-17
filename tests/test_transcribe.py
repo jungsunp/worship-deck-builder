@@ -220,6 +220,7 @@ def test_transcribe_uses_online_match_when_confident(
                 "source": "gasazip", "song_id": "1", "artist": "x",
                 "cand_cov": 0.0, "ocr_cov": 0.0,
             },
+            fragments=seen["fragments"],  # kept for review re-search (#203)
         )
     ]
     assert seen["title"] == "내 주를 가까이"
@@ -308,7 +309,10 @@ def test_transcribe_falls_back_to_reassembly_with_detected_title(
     songs = transcribe("whatever.png")
 
     assert songs == [
-        Song(title="내 주를 가까이", lines=["내 주를 가까이"], provenance={"source": "local"})
+        Song(
+            title="내 주를 가까이", lines=["내 주를 가까이"], provenance={"source": "local"},
+            fragments=T._filter_lyric_fragments([t for _, t in _OCR_LINES]),  # kept for re-search (#203)
+        )
     ]
     # Only the Hangul fragments reach the model — chords/URLs filtered out.
     assert "내 주 를" in seen["prompt"] and "가까이" in seen["prompt"]

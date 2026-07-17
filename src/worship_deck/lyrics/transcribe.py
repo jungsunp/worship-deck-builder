@@ -65,6 +65,10 @@ class Song:
     # "ocr_cov"} — the two coverages are the confidence readout. Local OCR+Ollama fallback:
     # {"source":"local"} (flagged for proofreading). Describes origin, not current text.
     provenance: dict = field(default_factory=dict)
+    # The filtered Hangul OCR fragments that scored this song's lookup, persisted so review
+    # re-search (#203) can re-score gasazip candidates without re-running OCR (the sheet image
+    # may be gone by then). Empty for typed/library songs.
+    fragments: list[str] = field(default_factory=list)
 
 
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
@@ -333,6 +337,7 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
         if match:
             song = Song(title=match.title, lines=linebreak.rebreak(match.lines))
             song.arrangement_hint = detect_arrangement_hint(ocr_lines)
+            song.fragments = fragments  # kept for review re-search scoring (#203)
             song.provenance = {
                 "source": "gasazip",
                 "song_id": match.song_id,
@@ -349,6 +354,7 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
     for song in songs:
         song.lines = linebreak.rebreak(song.lines)
         song.provenance = {"source": "local"}
+        song.fragments = fragments  # kept for review re-search scoring (#203)
     # Attach the sheet's arrangement hint only when one song was read — a multi-song sheet is
     # ambiguous to attribute (#113).
     if len(songs) == 1:

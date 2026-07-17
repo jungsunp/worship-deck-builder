@@ -206,3 +206,26 @@ def lookup(title: str, fragments: list[str]) -> Candidate | None:
         return None
     logger.info("gasazip: no confident match for %r (%d rows)", title, len(rows))
     return None
+
+
+def search_scored(title: str, fragments: list[str], limit: int = _FALLBACK_N) -> list[Candidate]:
+    """Search gasazip and return the top rows scored against the OCR fragments, best first.
+
+    The manual counterpart to ``lookup`` for review re-search (#203): the operator has
+    corrected the title, so this applies **no** acceptance threshold and returns every
+    scored candidate (``lines`` populated) for them to pick from. Rows whose title resembles
+    the query are fetched first, then the rest in site order, capped at ``limit`` pages to
+    bound latency and gasazip's rate limit (each fetch is throttled ``_THROTTLE_S`` apart).
+    Sorted by ``cand_cov`` descending. Raises ``httpx.HTTPError`` on any network failure.
+    """
+    ocr = _bigrams("".join(fragments))
+    rows = search(title)
+    similar = [c for c in rows if _title_similar(title, c.title)]
+    rest = [c for c in rows if not _title_similar(title, c.title)]
+    cands = (similar + rest)[:limit]
+    for cand in cands:
+        cand.lines = fetch_lyrics(cand.song_id)
+        _strip_header(cand)
+        cand.cand_cov, cand.ocr_cov = _covs(ocr, cand.lines)
+    cands.sort(key=lambda c: c.cand_cov, reverse=True)
+    return cands
