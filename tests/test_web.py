@@ -496,7 +496,8 @@ def test_assemble_uses_library_pick_without_transcribing(_assemble_env, monkeypa
     )
     date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
-    assert data.confession_song == {"title": "도는찬양", "lines": ["폴리시된 가사"], "composer": "C"}
+    assert data.confession_song == {"title": "도는찬양", "lines": ["폴리시된 가사"], "composer": "C",
+                                     "sections": [], "arrangement": ""}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched
 
 
