@@ -739,13 +739,15 @@ async function saveConfessionToLibrary() {
   const title = get('input[data-kind="confession-title"]');
   const composer = get('input[data-kind="confession-composer"]');
   readCards('confession');  // DOM cards -> sections; flatten to blank-line-separated lyric lines
-  const secs = run.confession_song.sections || [];
+  const song = run.confession_song;
+  const secs = song.sections || [];
   const lines = secs.flatMap((sec, i) => i ? [''].concat(sec.lines) : sec.lines);
   if (!title) { showStatus('✕ 곡 제목을 입력해야 저장할 수 있습니다', true); return; }
   const btn = document.getElementById('libSave');
+  // Persist the labeled section cards + 진행순서 so a picked song comes back pre-split (not a lone V1).
   const r = await fetch('/library/confession', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({title, composer, lines}),
+    body: JSON.stringify({title, composer, lines, sections: secs, arrangement: song.arrangement || ''}),
   });
   if (btn) {
     btn.textContent = r.ok ? '라이브러리에 저장됨 ✓' : '저장 ✕';

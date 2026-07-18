@@ -6,8 +6,8 @@ from its title) and later picked from the home screen instead of re-uploading th
 
 Unlike `store.py` (per-date run files), this is a flat, non-date-keyed store: one JSON file
 per song under the git-ignored data/library/confession/ tree. It survives the new-week inbox
-reset, which only clears data/inbox/. A song is the same `{title, lines, composer}` dict shape
-as `ServiceData.confession_song` (lyrics/transcribe.py:Song).
+reset, which only clears data/inbox/. A song is the same `{title, lines, composer, sections,
+arrangement}` dict shape as `ServiceData.confession_song` (lyrics/transcribe.py:Song).
 """
 
 from __future__ import annotations
@@ -44,7 +44,10 @@ def _path_for(slug: str) -> Path:
 
 
 def save_song(song: dict) -> str:
-    """Save a `{title, lines, composer}` song; return its slug. Re-saving overwrites."""
+    """Save a `{title, lines, composer, sections, arrangement}` song; return its slug.
+
+    Re-saving overwrites. `sections`/`arrangement` may be absent (legacy/typed songs).
+    """
     title = (song.get("title") or "").strip()
     if not title:
         raise ValueError("song needs a title to save to the library")
@@ -53,6 +56,10 @@ def save_song(song: dict) -> str:
         "title": title,
         "lines": list(song.get("lines") or []),
         "composer": song.get("composer") or "",
+        # Operator-labeled V1/C/B section cards + 진행순서 play-order, persisted so a picked
+        # song comes back pre-split next week instead of being re-labeled from scratch.
+        "sections": list(song.get("sections") or []),
+        "arrangement": song.get("arrangement") or "",
     }
     dest = _path_for(slug)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +77,10 @@ def list_songs() -> list[dict]:
 
 
 def load_song(slug: str) -> dict | None:
-    """Return the full `{title, lines, composer}` song for a slug, or None if absent."""
+    """Return the full song dict for a slug, or None if absent.
+
+    Newer entries carry `sections`/`arrangement`; legacy ones have only title/lines/composer.
+    """
     path = _path_for(slug)
     if not path.is_file():
         return None
