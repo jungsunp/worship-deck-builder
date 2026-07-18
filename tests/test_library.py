@@ -14,12 +14,29 @@ def _library_dir(tmp_path, monkeypatch):
 
 
 def _song() -> dict:
-    return {"title": "주 은혜임을", "lines": ["주 은혜임을", "", "내 모든 삶"], "composer": "작곡가"}
+    return {
+        "title": "주 은혜임을",
+        "lines": ["주 은혜임을", "", "내 모든 삶"],
+        "composer": "작곡가",
+        "sections": [
+            {"label": "V1", "lines": ["주 은혜임을"]},
+            {"label": "C", "lines": ["내 모든 삶"]},
+        ],
+        "arrangement": "V1 C V1 Cx2",
+    }
 
 
 def test_round_trip() -> None:
     slug = library.save_song(_song())
     assert library.load_song(slug) == _song()
+
+
+def test_legacy_song_gets_default_structure() -> None:
+    """A song saved without section info stores empty sections/arrangement (persist-forward)."""
+    slug = library.save_song({"title": "옛곡", "lines": ["가사"], "composer": "작곡가"})
+    loaded = library.load_song(slug)
+    assert loaded["sections"] == []
+    assert loaded["arrangement"] == ""
 
 
 def test_slug_keeps_hangul_and_lowercases() -> None:
