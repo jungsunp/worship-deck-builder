@@ -1248,4 +1248,24 @@ def test_research_apply_rebreaks_chosen_lyrics(_runs, monkeypatch) -> None:
     r = client.post(f"/runs/{_runs}/research/apply",
                     json={"song_id": "111", "title": "보좌 앞으로", "artist": "찬미워십"})
     assert r.status_code == 200
-    assert r.json() == {"lines": ["가사 한 줄", "두 줄", "(rebroken)"]}
+    # no repetition in the text -> no section suggestion (#206), operator labels manually
+    assert r.json() == {"lines": ["가사 한 줄", "두 줄", "(rebroken)"], "sections": [], "arrangement": ""}
+
+
+def test_research_apply_suggests_sections(_runs, monkeypatch) -> None:
+    """POST /research/apply pre-labels section cards from the new canonical text (#206)."""
+    verse = ["첫 소절 가사", "둘째 소절 가사"]
+    chorus = ["후렴 가사 하나", "후렴 가사 둘"]
+    monkeypatch.setattr(
+        app_module.lyrics_online, "fetch_lyrics",
+        lambda sid: verse + chorus + verse + chorus + chorus,
+    )
+    monkeypatch.setattr(app_module.linebreak, "rebreak", lambda lines: lines)
+    r = client.post(f"/runs/{_runs}/research/apply",
+                    json={"song_id": "111", "title": "아무 노래", "artist": "아무 밴드"})
+    assert r.status_code == 200
+    body = r.json()
+    assert body["sections"] == [{"label": "V1", "lines": verse}, {"label": "C", "lines": chorus}]
+    assert body["arrangement"] == "V1 C V1 C C"
+    # lines are the deduped flattened mirror of the cards, matching the assemble path
+    assert body["lines"] == verse + [""] + chorus

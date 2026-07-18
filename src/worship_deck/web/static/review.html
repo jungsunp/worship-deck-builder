@@ -502,18 +502,20 @@ function candCard(ref, c, list, scored) {
 }
 
 // Apply a picked candidate: fetch its rebroken lyrics (same rebreak as assemble) and replace the
-// song's text. Existing #113 section labels are invalidated by new lyrics, so clear them and let
-// the operator relabel. syncFromDom first so other songs' unsaved edits survive the re-render.
+// song's text. Existing #113 section labels are invalidated by new lyrics, so replace them with
+// the server's fresh #206 suggestion for the new text (empty when it has none — operator relabels).
+// syncFromDom first so other songs' unsaved edits survive the re-render.
 async function applyCandidate(ref, c, list) {
   const r = await fetch('/runs/' + date + '/research/apply', {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({song_id: c.song_id, title: c.title, artist: c.artist}),
   });
   if (!r.ok) { showStatus('✕ 가사 적용 오류: ' + r.status, true); return; }
-  const {lines} = await r.json();
+  const {lines, sections, arrangement} = await r.json();
   syncFromDom();
   const song = songByRef(ref);
-  song.title = c.title; song.lines = lines; song.sections = []; song.arrangement = '';
+  song.title = c.title; song.lines = lines;
+  song.sections = sections || []; song.arrangement = arrangement || '';
   song.provenance = {source: 'gasazip', song_id: c.song_id, artist: c.artist,
                      cand_cov: c.cand_cov, ocr_cov: c.ocr_cov};
   edited[editKeyOf(ref)] = true;

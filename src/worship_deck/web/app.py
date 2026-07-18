@@ -25,6 +25,7 @@ from worship_deck.bible import verses
 from worship_deck.keynote import build as keynote_build
 from worship_deck.lyrics import linebreak
 from worship_deck.lyrics import online as lyrics_online
+from worship_deck.lyrics import sections as lyrics_sections
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
 from worship_deck.parse import ServiceData
@@ -836,7 +837,14 @@ def apply_research(service_date: str, body: dict = Body(...)) -> dict:
     except httpx.HTTPError:
         raise HTTPException(status_code=502, detail="가사집 가사 조회 실패")
     lyrics_online._strip_header(cand)
-    return {"lines": linebreak.rebreak(cand.lines)}
+    lines = linebreak.rebreak(cand.lines)
+    # Suggest section cards + arrangement from the fresh canonical text (#206), exactly
+    # like the assemble-time gasazip path; `lines` stays the flattened mirror.
+    suggestion = lyrics_sections.suggest(lines)
+    if suggestion:
+        secs, arrangement = suggestion
+        return {"lines": lyrics_sections.flatten(secs), "sections": secs, "arrangement": arrangement}
+    return {"lines": lines, "sections": [], "arrangement": ""}
 
 
 @app.get("/runs/{service_date}/hymn")

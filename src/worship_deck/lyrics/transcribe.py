@@ -37,7 +37,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from worship_deck.lyrics import linebreak, online
+from worship_deck.lyrics import linebreak, online, sections
 
 # ── Data model ────────────────────────────────────────────────────────────────
 
@@ -336,6 +336,12 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
             steps["gasazip"] = round(time.monotonic() - t, 1)
         if match:
             song = Song(title=match.title, lines=linebreak.rebreak(match.lines))
+            # Canonical text -> suggested section cards + page-order arrangement (#206);
+            # the operator relabels/reorders in review. `lines` stays the flattened mirror.
+            suggestion = sections.suggest(song.lines)
+            if suggestion:
+                song.sections, song.arrangement = suggestion
+                song.lines = sections.flatten(song.sections)
             song.arrangement_hint = detect_arrangement_hint(ocr_lines)
             song.fragments = fragments  # kept for review re-search scoring (#203)
             song.provenance = {
