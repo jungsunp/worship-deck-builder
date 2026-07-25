@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Start the worship-deck review/build web app with the project env loaded.
 #
-# Solves the recurring "ESV_API_KEY not set" / wrong-OLLAMA_MODEL bug: uvicorn FREEZES
+# Solves the recurring "ESV_API_KEY not set" bug: uvicorn FREEZES
 # its environment at launch and does NOT auto-load .env, so the env must be exported
 # into this shell *before* exec'ing uvicorn. Editing .env after the server is up does
 # nothing until you stop it and run this again.
@@ -28,19 +28,8 @@ fi
   exit 1
 }
 echo "✓ ESV_API_KEY loaded"
-echo "✓ OLLAMA_MODEL=${OLLAMA_MODEL:-<unset → code default qwen3:14b>}"
 
-# 3. Ollama powers lyric transcription (the assemble step). Warn but don't block —
-#    reviewing/building an already-assembled run doesn't need it.
-ollama_host="${OLLAMA_HOST:-http://127.0.0.1:11434}"
-if curl -sf -m 2 "$ollama_host/api/tags" >/dev/null 2>&1; then
-  echo "✓ Ollama up at $ollama_host"
-else
-  echo "⚠ Ollama not responding at $ollama_host — run 'ollama serve' in another" \
-       "terminal (lyric transcription will fail without it)" >&2
-fi
-
-# 4. Launch. Bind 0.0.0.0 so the iPhone can reach it over Wi-Fi / Tailscale (#28).
+# 3. Launch. Bind 0.0.0.0 so the iPhone can reach it over Wi-Fi / Tailscale (#28).
 host="${WEB_HOST:-0.0.0.0}"
 port="${WEB_PORT:-8787}"
 lan_ip="$(ipconfig getifaddr en0 2>/dev/null || echo '<mac-lan-ip>')"

@@ -1,36 +1,30 @@
-"""Transcribe Korean lyrics from band lead-sheet images — online lookup, local fallback.
+"""Transcribe Korean lyrics from band lead-sheet images — gasazip lookup, else review.
 
 The band runs the arrangement live from the physical sheets, so the deck only needs the
 *lyrics* present (not the red ×N / X-out / → arrangement marks). Pipeline per sheet:
 
 1. Apple Vision (``ocr_ko.swift``) reads the Korean text with per-line heights. High
    recall over busy musical notation and it never crashes on big images — but it returns
-   each note's syllable as a separate fragment ("가 까 이"), so the lines need rebuilding.
+   each note's syllable as a separate fragment ("가 까 이"), so the text is only usable as
+   *search fragments*, never as slide lines.
 2. Sheet-title candidates — the tallest Hangul lines near the top of the page, tallest
    first — are detected deterministically from the OCR heights (the bulletin names the
    band, not the songs, so the sheet title is the only song identity; #110, #202).
-3. Canonical lyrics are looked up on gasazip.com by each title candidate in turn,
-   ranked against the OCR fragments (``online.lookup``). The first confident match
-   wins: clean text, no note-split syllables, no duplicated key-change repeats.
-4. Otherwise a local Ollama model (default ``qwen2.5:14b``, in *text* mode) reassembles
-   the fragments into clean lyric lines, in top-to-bottom page order — the original
-   free/offline path. Running it as a text task sidesteps the vision-runner crash we hit
-   feeding images directly.
+3. Canonical lyrics are looked up on gasazip.com by each title candidate (expanded into
+   query variants, ``online.query_variants``) and ranked against the OCR fragments. The
+   first confident match wins: clean text, no note-split syllables, no key-change repeats.
+4. On a miss the song comes back **empty**, carrying the candidates the lookup already
+   scored, and the operator picks the right one in review (#213). There is no local-model
+   reassembly: its output was discarded every week and cost ~25s per sheet.
 
-The model returns lyrics *flat* (one line per staff line, page order). It is **not** asked
-to regroup numbered hymn verses whose lyrics span two staff systems — that cross-staff
-stitching is a capability only a ~27B model has, and 27B thrashes on a 24GB Mac. So for
-such hymns the operator regroups the verses in the review app (#25): blank lines between
-stanzas survive into ``Song.lines`` and ``chunk()`` then gives each stanza its own slide.
-
-``transcribe()`` returns one ``Song`` per song on the sheet. Chunking into <= 2-line slides
-(#18), song-to-slot matching (#19), and operator review (#25) happen downstream.
+``transcribe()`` returns one ``Song`` per song on the sheet, or ``[]`` when the sheet has
+no title at all (a continuation page — the caller folds its fragments into the previous
+song). Chunking into <= 2-line slides (#18), song-to-slot matching (#19), and operator
+review (#25) happen downstream.
 """
 
 from __future__ import annotations
 
-import json
-import os
 import re
 import subprocess
 import time
@@ -62,13 +56,18 @@ class Song:
     arrangement_hint: str = ""
     # Lyric origin for the review provenance badge (#200). Empty for typed/library songs
     # (no badge shown). gasazip match: {"source":"gasazip","song_id","artist","cand_cov",
-    # "ocr_cov"} — the two coverages are the confidence readout. Local OCR+Ollama fallback:
-    # {"source":"local"} (flagged for proofreading). Describes origin, not current text.
+    # "ocr_cov"} — the two coverages are the confidence readout. Lookup miss:
+    # {"source":"ocr","titles":[…]} — no lyrics yet, review must pick (#213). May also carry
+    # {"merged_sheets": n} when a continuation page was folded in. Origin, not current text.
     provenance: dict = field(default_factory=dict)
     # The filtered Hangul OCR fragments that scored this song's lookup, persisted so review
     # re-search (#203) can re-score gasazip candidates without re-running OCR (the sheet image
     # may be gone by then). Empty for typed/library songs.
     fragments: list[str] = field(default_factory=list)
+    # gasazip candidates already fetched and scored by a lookup that found no confident match,
+    # best first (``online.candidate_dict`` shape). Review renders the picker straight from
+    # these, so a miss costs the operator one tap instead of a fresh throttled search (#213).
+    candidates: list[dict] = field(default_factory=list)
 
 
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
@@ -113,6 +112,10 @@ _TITLE_REGION = 10  # OCR lines from the top of the page to consider
 _TITLE_MIN_HANGUL_RATIO = 0.5  # of non-space chars; handwriting mixes latin/digits in
 _TITLE_MAX_HANGUL = 16  # longer Hangul runs are note-split lyric lines, not titles
 _TITLE_CANDIDATES = 3  # tall lines to try as lookup queries, tallest first (#202)
+# Sheets print the credit on the title's own baseline ("하나님 아버지의 마음 Words & Music by
+# 설경육"), and the English drags the Hangul ratio under the bar — 2026-07-26 sheet 2 lost its
+# whole song this way. Everything from the credit marker on is cut before the line is judged.
+_CREDIT = re.compile(r"(?i)\b(?:words?\s*&?\s*music|words?\s*by|music\s*by|scored\s*by|arr\.)|작사|작곡|편곡")
 
 
 def _detect_titles(ocr_lines: list[tuple[float, str]]) -> list[str]:
@@ -128,14 +131,15 @@ def _detect_titles(ocr_lines: list[tuple[float, str]]) -> list[str]:
     ``[]`` when nothing qualifies, and the caller then skips the online lookup.
     """
     candidates = []
-    for height, text in ocr_lines[:_TITLE_REGION]:
-        if any(n in text for n in _NOISE):
+    for height, raw in ocr_lines[:_TITLE_REGION]:
+        if any(n in raw for n in _NOISE):
             continue
+        text = _CREDIT.split(raw)[0].strip()
         hangul = len(_HANGUL.findall(text))
         nonspace = len(re.sub(r"\s", "", text))
         if not hangul or hangul > _TITLE_MAX_HANGUL:
             continue
-        if hangul / nonspace < _TITLE_MIN_HANGUL_RATIO:
+        if not nonspace or hangul / nonspace < _TITLE_MIN_HANGUL_RATIO:
             continue
         candidates.append((height, text))
     titles: list[str] = []
@@ -192,131 +196,49 @@ def _filter_lyric_fragments(lines: list[str]) -> list[str]:
     return out
 
 
-# ── Stage 4 (fallback): reassemble fragments into lines via a local model ─────
-
-_OLLAMA_FORMAT = {
-    "type": "object",
-    "properties": {
-        "songs": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "lines": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["title", "lines"],
-            },
-        }
-    },
-    "required": ["songs"],
-}
-
-# Flat reassembly only — recall first. We deliberately do NOT ask the model to regroup
-# cross-staff hymn verses (a ~27B-only skill); the operator regroups in review. Rule
-# order matters on a 14B: recall is stated first so the model never drops the unnumbered
-# second-staff lines or the chorus. The v3 prompt (2026-06-11 bake-off, see
-# docs/gotchas.md): hyphen removal is a hard postcondition, three worked examples cover
-# the real OCR defect patterns, the faithfulness rule blocks word substitution, and
-# 절 번호 are stripped — verse numbers never belong on a lyric slide. Keep the "-" in
-# the model INPUT: pre-stripping them in code degraded qwen3:14b (they are join cues).
-_PROMPT = """\
-아래는 한국어 찬양 악보 한 장에서 OCR로 추출한 가사 조각들입니다. 악보에서는 음표마다 \
-음절이 끊어져 있고, 음을 길게 끄는 멜리스마 표시 "-" 가 섞여 있습니다. 이것을 자연스러운 \
-한국어 가사 줄 목록으로 복원하세요.
-
-규칙(모두 지키세요):
-1. 모든 가사를 하나도 빠짐없이 포함하세요. 번호 없는 줄과 후렴 줄도 전부. 어떤 가사도 \
-생략·요약하지 마세요.
-2. 하는 일은 네 가지뿐입니다: 끊어진 음절 붙이기, "-" 제거, 띄어쓰기 교정, 줄 맨 앞 절 \
-번호 제거. 가사 단어를 비슷한 다른 단어로 바꾸거나 글자를 더하지 마세요.
-3. "-" 는 악보의 길게-끌기 표시일 뿐 가사가 아닙니다. 출력의 어떤 줄에도 "-" 가 한 개도 \
-남으면 안 됩니다.
-4. 끊어진 음절을 단어로 붙이고, 띄어쓰기를 표준 한국어 맞춤법대로 고치세요. 조사(을/를/이/\
-가/은/는/에/의/께 등)는 반드시 앞 단어에 붙여 쓰세요. 예:
-   "주 님 을 가 까 이 함 이 내 게 복 이 라" → "주님을 가까이 함이 내게 복이라"
-   "나 의 생명을드- 리니 주영광위- 하여 - 사용하옵소서" → "나의 생명을 드리니 주 영광 위하여 사용하옵소서"
-   "죄에 서자 유-를 얻게-함은" → "죄에서 자유를 얻게 함은"
-5. 악보 한 단(staff system)의 가사 한 줄을 line 하나로 만드세요(줄바꿈 없이). 줄 순서는 \
-위에서 아래로 그대로 유지하세요.
-6. 절 번호는 가사가 아닙니다. 조각 맨 앞의 절 번호("1." "2." "3." "4.")는 제거하고 가사만 \
-남기세요. 출력의 어떤 줄도 숫자 번호로 시작하면 안 됩니다.
-7. 악보에 곡이 하나면 song 도 하나만 만들고 모든 줄을 그 song.lines 에 순서대로 넣으세요. \
-악보에 여러 곡이 있을 때만 곡별로 나누고 각 곡 제목을 title 로 쓰세요.
-8. title = 악보 맨 위 큰 글씨 제목 한 줄. "Hymn 268" 같은 번호·출처 줄, "L.E.Jones"· \
-"Scored by"·영어·연도, 반복되는 가사는 title 이 아닙니다.
-9. 가사가 아닌 것은 제거: 코드, 마디 번호, 영어, 저작권/워터마크, 편곡 기호(V, C, B, 간주, \
-키업, ×2, →), 섹션 라벨(Verse/Chorus/Bridge/Intro/Outro).
-"""
-
-
-def _reassemble(fragments: list[str], title: str = "") -> list[Song]:
-    """Ask the local Ollama model to rebuild fragments into clean lyric lines.
-
-    When the sheet title was already detected from the OCR heights, it is given to the
-    model so rule 6 (title guessing) no longer applies to it.
-    """
-    import httpx
-
-    host = os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434")
-    model = os.environ.get("OLLAMA_MODEL", "qwen3:14b")
-    prompt = _PROMPT
-    if title:
-        prompt += f'이 악보의 곡 제목은 "{title}" 입니다. title 에 그대로 사용하세요.\n'
-    prompt += "\n가사 조각들:\n"
-    try:
-        response = httpx.post(
-            f"{host}/api/generate",
-            json={
-                "model": model,
-                "prompt": prompt + "\n".join(fragments),
-                "stream": False,
-                "think": True,  # measurably better recall/spacing on qwen3:14b (bake-off)
-                "format": _OLLAMA_FORMAT,
-                "options": {"temperature": 0},
-            },
-            timeout=600,
-        )
-        response.raise_for_status()
-    except httpx.HTTPError as e:
-        raise RuntimeError(
-            f"Ollama request to {host} (model {model}) failed: {e}. "
-            "Is `ollama serve` running and the model pulled?"
-        ) from e
-
-    body = response.json()
-    # Thinking models put the structured output in `thinking` when `response` is empty.
-    data = json.loads(body.get("response") or body.get("thinking") or "")
-    songs = []
-    for song in data.get("songs", []):
-        # Drop blank lyric lines and any empty song (the model occasionally emits an
-        # empty trailing song).
-        lines = [ln.strip() for ln in song.get("lines", []) if ln.strip()]
-        if lines:
-            songs.append(Song(title=song.get("title", "").strip(), lines=lines))
-    return songs
-
-
 # ── Orchestration ─────────────────────────────────────────────────────────────
 
 
-def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[Song]:
-    """Read one band-sheet image into its songs' lyric lines.
+# A continuation page's lyrics are, by definition, already inside the previous song's
+# canonical text. Measured on the 2026-07-26 sheets: the real continuation scores 0.93
+# against its own song and 0.09 against the other, and a genuinely separate song whose
+# title Vision missed scores 0.09 — so the gap is wide and 0.5 sits in the middle of it.
+# "No title detected" is NOT the test: that sheet was a separate song (하나님 아버지의 마음)
+# whose title carried an English credit, while the real continuation had a (misread) title.
+_CONTINUATION_COV = 0.5
+
+
+def _is_continuation(fragments: list[str], previous_lines: list[str]) -> bool:
+    _, ocr_cov = online._covs(online._bigrams("".join(fragments)), previous_lines)
+    return ocr_cov >= _CONTINUATION_COV
+
+
+def transcribe(
+    image_path: str,
+    steps: dict[str, float] | None = None,
+    previous_lines: list[str] | None = None,
+) -> list[Song]:
+    """Read one band-sheet image into its song's lyric lines.
 
     Apple Vision OCR (with line heights) -> deterministic title detection -> canonical
-    lyrics lookup on gasazip ranked by the OCR fragments -> on a confident match, the
+    lyrics lookup on gasazip ranked by the OCR fragments -> on a confident match the
     canonical text wins (a sheet page holds one song, possibly printed twice for a key
-    change). Otherwise falls back to local Ollama reassembly of the fragments, which
-    also handles the rare multi-song page. Either way the lines are re-broken to fit
-    the lyric banner (phrase-boundary splits, ``linebreak.rebreak``, #126) before they
-    reach review.
+    change), re-broken to fit the lyric banner (``linebreak.rebreak``, #126).
+
+    On a lookup miss the returned song has **no lyrics** — only the detected title, the
+    OCR fragments, and the candidates the lookup already scored, so review shows the
+    picker immediately (#213).
+
+    ``previous_lines`` are the previous sheet's canonical lyrics, if it matched. When this
+    sheet's fragments are already contained in them it is a continuation page, and the song
+    comes back flagged ``provenance["continuation"]`` with nothing but its fragments — no
+    lookup is attempted, and the caller folds it into that song.
 
     If `steps` is provided, per-stage durations (seconds) are written into it with keys
-    "ocr", "gasazip" (if looked up), and "ollama" (if used as fallback).
+    "ocr" and "gasazip" (when a lookup ran).
 
     Raises:
-        RuntimeError: if `swift`/OCR fails, or the fallback is needed and Ollama is
-            unreachable.
+        RuntimeError: if `swift`/OCR fails.
     """
     t = time.monotonic()
     ocr_lines = _vision_ocr(image_path)
@@ -325,47 +247,52 @@ def transcribe(image_path: str, steps: dict[str, float] | None = None) -> list[S
 
     titles = _detect_titles(ocr_lines)
     fragments = _filter_lyric_fragments([text for _, text in ocr_lines])
-    if titles:
+    if previous_lines and _is_continuation(fragments, previous_lines):
+        return [
+            Song(
+                title="",
+                fragments=fragments,
+                provenance={"source": "ocr", "continuation": True},
+            )
+        ]
+
+    # Each title candidate expands into search variants (note-split titles need their
+    # syllables rejoined before gasazip finds anything); one budgeted lookup covers them all.
+    queries = list(dict.fromkeys(q for title in titles for q in online.query_variants(title)))
+    match, scored = None, []
+    if queries:
         t = time.monotonic()
-        match = None
-        for title in titles:  # tallest first; stop at the first confident match (#202)
-            match = online.lookup(title, fragments)
-            if match:
-                break
+        match, scored = online.lookup(queries, fragments)
         if steps is not None:
             steps["gasazip"] = round(time.monotonic() - t, 1)
-        if match:
-            song = Song(title=match.title, lines=linebreak.rebreak(match.lines))
-            # Canonical text -> suggested section cards + page-order arrangement (#206);
-            # the operator relabels/reorders in review. `lines` stays the flattened mirror.
-            suggestion = sections.suggest(song.lines)
-            if suggestion:
-                song.sections, song.arrangement = suggestion
-                song.lines = sections.flatten(song.sections)
-            song.arrangement_hint = detect_arrangement_hint(ocr_lines)
-            song.fragments = fragments  # kept for review re-search scoring (#203)
-            song.provenance = {
-                "source": "gasazip",
-                "song_id": match.song_id,
-                "artist": match.artist,
-                "cand_cov": match.cand_cov,
-                "ocr_cov": match.ocr_cov,
-            }
-            return [song]
 
-    t = time.monotonic()
-    songs = _reassemble(fragments, title=titles[0] if titles else "")
-    if steps is not None:
-        steps["ollama"] = round(time.monotonic() - t, 1)
-    for song in songs:
-        song.lines = linebreak.rebreak(song.lines)
-        song.provenance = {"source": "local"}
-        song.fragments = fragments  # kept for review re-search scoring (#203)
-    # Attach the sheet's arrangement hint only when one song was read — a multi-song sheet is
-    # ambiguous to attribute (#113).
-    if len(songs) == 1:
-        songs[0].arrangement_hint = detect_arrangement_hint(ocr_lines)
-    return songs
+    # No title and not a continuation: a separate song Vision couldn't name. It still gets a
+    # card — the operator types the title and re-searches, which beats losing the song.
+    song = Song(title=titles[0] if titles else "",
+                arrangement_hint=detect_arrangement_hint(ocr_lines))
+    song.fragments = fragments  # kept for review re-search scoring (#203)
+    if match:
+        song.title, song.lines = match.title, linebreak.rebreak(match.lines)
+        # Canonical text -> suggested section cards + page-order arrangement (#206);
+        # the operator relabels/reorders in review. `lines` stays the flattened mirror.
+        suggestion = sections.suggest(song.lines)
+        if suggestion:
+            song.sections, song.arrangement = suggestion
+            song.lines = sections.flatten(song.sections)
+        song.provenance = {
+            "source": "gasazip",
+            "song_id": match.song_id,
+            "artist": match.artist,
+            "cand_cov": match.cand_cov,
+            "ocr_cov": match.ocr_cov,
+        }
+    else:
+        # No lyrics: OCR text is note-split and unusable on a slide. The operator picks a
+        # candidate (or corrects the title and re-searches) in review; the build endpoint
+        # refuses a song still empty at that point.
+        song.provenance = {"source": "ocr", "titles": titles}
+        song.candidates = [online.candidate_dict(c) for c in scored]
+    return [song]
 
 
 def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:

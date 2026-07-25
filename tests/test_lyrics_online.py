@@ -139,7 +139,7 @@ def test_lookup_picks_fragment_match_over_site_order(
 ) -> None:
     """The same-title decoy is listed first; the OCR fragments select the right song."""
     _fake_get(monkeypatch)
-    match = online.lookup("보좌 앞으로", _BOJWA_FRAGMENTS)
+    match, _ = online.lookup(["보좌 앞으로"], _BOJWA_FRAGMENTS)
     assert match is not None
     assert match.song_id == "111"
     assert match.title == "보좌 앞으로"
@@ -148,7 +148,12 @@ def test_lookup_picks_fragment_match_over_site_order(
 
 def test_lookup_below_threshold_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_get(monkeypatch)
-    assert online.lookup("보좌 앞으로", ["완전히 무관한 어떤 글자들"]) is None
+    match, scored = online.lookup(["보좌 앞으로"], ["완전히 무관한 어떤 글자들"])
+    assert match is None
+    # Everything it scored rides back for the review picker (#213), best first.
+    assert [c.song_id for c in scored] and scored == sorted(
+        scored, key=lambda c: c.cand_cov, reverse=True
+    )
 
 
 def test_lookup_network_error_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -156,12 +161,41 @@ def test_lookup_network_error_returns_none(monkeypatch: pytest.MonkeyPatch) -> N
         raise httpx.ConnectError("offline")
 
     monkeypatch.setattr(httpx, "get", boom)
-    assert online.lookup("보좌 앞으로", _BOJWA_FRAGMENTS) is None
+    assert online.lookup(["보좌 앞으로"], _BOJWA_FRAGMENTS) == (None, [])
 
 
 def test_lookup_no_results_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse("<html></html>"))
-    assert online.lookup("듣도보도 못한 곡", _BOJWA_FRAGMENTS) is None
+    assert online.lookup(["듣도보도 못한 곡"], _BOJWA_FRAGMENTS) == (None, [])
+
+
+# ---------------------------------------------------------------------------
+# query_variants (#213) — rescuing a title Vision read off the staff
+# ---------------------------------------------------------------------------
+
+def test_query_variants_leaves_a_normal_title_alone() -> None:
+    # No extra variants means no extra searches on the sheets that already work.
+    assert online.query_variants("주님 말씀하시면") == ["주님 말씀하시면"]
+    assert online.query_variants("전능하신 나의 주 하나님") == ["전능하신 나의 주 하나님"]
+    assert online.query_variants("  ") == []
+
+
+def test_query_variants_rejoins_note_split_syllables() -> None:
+    """2026-07-26 sheet 2: verified live — the raw string finds junk, the first
+    segment alone is a 1-row exact hit on 말씀앞에서 / 피아워십."""
+    assert online.query_variants("말 씀 앞 에서- 경 외 함 으로- 주께 홀로 니 다") == [
+        "말씀앞에서",
+        "말씀앞에서 경외함으로 주께홀로니다",
+        "말 씀 앞 에서- 경 외 함 으로- 주께 홀로 니 다",
+    ]
+
+
+def test_query_variants_drops_a_too_short_first_segment() -> None:
+    """2026-07-26 sheet 3: hyphens fall mid-word, so the leading segment is the
+    generic "말씀" — as a query it matches half the site, so it isn't used."""
+    variants = online.query_variants("말씀- 은 - 우 리-를 - 구원-에 - 이르는 지 혜이니")
+    assert variants[0] == "말씀 은 우리 를 구원 에 이르는지혜이니"
+    assert "말씀" not in variants
 
 
 # ---------------------------------------------------------------------------
@@ -185,7 +219,7 @@ def test_lookup_prefilter_reaches_title_similar_row_past_top5(
     """2026-07-12 sheet 001: the right song sits at row 7 under a parenthesized
     title — the title prefilter fetches it without scoring the six rows above."""
     calls = _fake_get(monkeypatch, "gasazip_search_recall.html")
-    match = online.lookup("하늘의 문을 여소서", _IMJAE_FRAGMENTS)
+    match, _ = online.lookup(["하늘의 문을 여소서"], _IMJAE_FRAGMENTS)
     assert match is not None and match.song_id == "507"
     assert match.cand_cov >= 0.5
     # One search + the single title-similar row; nothing else is fetched.
@@ -207,7 +241,7 @@ def test_lookup_falls_back_to_site_rank_when_no_title_similar(
     gasazip's search indexes lyrics — the right song is in the top rows and
     fragment scoring accepts it (early-exiting before row 3)."""
     calls = _fake_get(monkeypatch, "gasazip_search_firstline.html")
-    match = online.lookup("허무한 시절 지날때", _FIRSTLINE_FRAGMENTS)
+    match, _ = online.lookup(["허무한 시절 지날때"], _FIRSTLINE_FRAGMENTS)
     assert match is not None and match.song_id == "602"
     assert match.title == "성령이 오셨네"
     assert [c.rsplit("/", 1)[1] for c in calls[1:]] == ["601", "602"]
@@ -223,7 +257,7 @@ def test_lookup_rule_v2_accepts_subset_sheet_on_title_match(
     """2026-07-12 sermonsong: the canonical hymn page prints every verse, the sheet
     one — cand_cov can never pass, so a matching title + ocr_cov accepts instead."""
     _fake_get(monkeypatch, "gasazip_search_hymn.html")
-    match = online.lookup("예수 사랑하심은", _HYMN_FRAGMENTS)
+    match, _ = online.lookup(["예수 사랑하심은"], _HYMN_FRAGMENTS)
     assert match is not None and match.song_id == "701"
     assert match.cand_cov < 0.5  # the old rule would have rejected this
     assert match.ocr_cov >= 0.5
@@ -235,13 +269,53 @@ def test_lookup_rule_v2_rejects_superset_decoy_without_title_match(
     """High ocr_cov alone must not accept: a long wrong song that happens to contain
     the sheet's text passes only when its title also resembles the query."""
     _fake_get(monkeypatch, "gasazip_search_hymn.html")
-    assert online.lookup("완전 무관한 노래제목", _HYMN_FRAGMENTS) is None
+    assert online.lookup(["완전 무관한 노래제목"], _HYMN_FRAGMENTS)[0] is None
+
+
+def test_lookup_caps_fetches_at_budget(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every fetch costs _THROTTLE_S, so a miss must not scan every query's rows (#213)."""
+    calls = _fake_get(monkeypatch)
+    match, scored = online.lookup(
+        ["보좌 앞으로", "다른 질의"], ["완전히 무관한 어떤 글자들"], budget=1
+    )
+    assert match is None
+    assert len(scored) == 1
+    assert sum(1 for c in calls if "search.html" not in c) == 1
+
+
+def test_lookup_abandons_a_query_after_consecutive_near_zero_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-07-26 sheet 3: a misread title searches unrelated 가요, every row scoring
+    ~0.03 — stop paying 2.5s a page for them (#213)."""
+    calls = _fake_get(monkeypatch)
+    match, _ = online.lookup(["보좌 앞으로"], ["완전히 무관한 어떤 글자들"])
+    assert match is None
+    assert sum(1 for c in calls if "search.html" not in c) == online._DEAD_END
+
+
+def test_lookup_dead_end_never_cuts_a_late_match_short(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The #202 fallback-row win is accepted on row 2, inside the dead-end run."""
+    _fake_get(monkeypatch, "gasazip_search_firstline.html")
+    match, _ = online.lookup(["허무한 시절 지날때"], _FIRSTLINE_FRAGMENTS)
+    assert match is not None and match.song_id == "602"
+
+
+def test_lookup_does_not_refetch_a_row_seen_under_another_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _fake_get(monkeypatch)
+    online.lookup(["보좌 앞으로", "보좌 앞으로"], ["완전히 무관한 어떤 글자들"])
+    fetched = [c for c in calls if "search.html" not in c]
+    assert len(fetched) == len(set(fetched))
 
 
 def test_fetch_lyrics_cached_across_lookups(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _fake_get(monkeypatch, "gasazip_search_hymn.html")
-    online.lookup("예수 사랑하심은", _HYMN_FRAGMENTS)
-    online.lookup("완전 무관한 노래제목", _HYMN_FRAGMENTS)
+    online.lookup(["예수 사랑하심은"], _HYMN_FRAGMENTS)
+    online.lookup(["완전 무관한 노래제목"], _HYMN_FRAGMENTS)
     assert sum(1 for c in calls if c.endswith("/701")) == 1
 
 
@@ -305,7 +379,7 @@ def test_lookup_live_bojwa(monkeypatch: pytest.MonkeyPatch) -> None:
         httpx.get("http://gasazip.com", timeout=5)
     except httpx.HTTPError:
         pytest.skip("gasazip.com unreachable")
-    match = online.lookup("보좌 앞으로", _BOJWA_FRAGMENTS)
+    match, _ = online.lookup(["보좌 앞으로"], _BOJWA_FRAGMENTS)
     assert match is not None
     assert "보좌" in match.title
     assert any("씻기소서" in ln for ln in match.lines)

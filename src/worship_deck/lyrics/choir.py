@@ -1,9 +1,9 @@
 """Parse 성가대 (choir) lyrics from pasted raw text — no image, no OCR, no API.
 
-Unlike worship songs (band lead-sheet images run through Vision+Ollama), choir lyrics
+Unlike worship songs (band lead-sheet images run through Vision OCR + gasazip), choir lyrics
 arrive as raw text pasted into the review app: a title line, a composer/arranger line
 (``… 작곡`` / ``… 편곡``), then lyric lines that already have real line breaks. So this
-is a pure string parser — CI-testable, with no Mac/Keynote/Ollama dependency.
+is a pure string parser — CI-testable, with no Mac/Keynote/network dependency.
 
 ``parse_choir_text`` returns the same ``Song`` dataclass as ``lyrics.transcribe``.
 The ``lines`` it returns are fed to ``lyrics.transcribe.chunk()``, which treats a

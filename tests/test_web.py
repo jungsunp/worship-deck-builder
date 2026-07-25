@@ -299,6 +299,46 @@ def _assemble_env(tmp_path, monkeypatch):
     )
 
 
+def test_assemble_folds_continuation_sheet(_assemble_env, monkeypatch, tmp_path) -> None:
+    """A sheet transcribe flagged as page 2 of the previous song (#213) joins that song's
+    fragments (sharpening re-search) instead of becoming a card of its own."""
+    (tmp_path / "sheet-2.png").write_bytes(b"png")
+    seen: list = []
+    sheets = iter([
+        [Song(title="주 은혜임을", lines=["1절"], fragments=["앞장 조각"],
+              provenance={"source": "gasazip", "song_id": "1"})],
+        [Song(title="", fragments=["뒷장 조각"],
+              provenance={"source": "ocr", "continuation": True})],
+    ])
+
+    def fake(_p, **kw):
+        seen.append(kw.get("previous_lines"))
+        return next(sheets)
+
+    monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", fake)
+    date = client.post("/assemble").json()["service_date"]
+
+    (song,) = store.load(date).worship_songs
+    assert song["fragments"] == ["앞장 조각", "뒷장 조각"]
+    assert song["provenance"]["merged_sheets"] == 2
+    # The previous song's canonical lyrics are what transcribe compares against.
+    assert seen == [None, ["1절"]]
+
+
+def test_assemble_keeps_titleless_song_that_is_not_a_continuation(
+    _assemble_env, monkeypatch
+) -> None:
+    """2026-07-26 sheet 1 was a separate song Vision couldn't name — it must keep its card
+    (operator types the title + 재검색), not vanish into the song before it."""
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda _p, **kw: [Song(title="", fragments=["조각"], provenance={"source": "ocr"})],
+    )
+    date = client.post("/assemble").json()["service_date"]
+    (song,) = store.load(date).worship_songs
+    assert song["title"] == "" and song["provenance"]["source"] == "ocr"
+
+
 def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         app_module.lyrics_transcribe, "transcribe",
@@ -316,7 +356,7 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
     assert data.worship_songs == [
         {"title": "주 은혜임을", "lines": ["1절", "2절"], "composer": "",
          "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
-         "fragments": []}
+         "fragments": [], "candidates": []}
     ]
     assert data.call_to_worship_passage == [
         {"number": 1, "korean": "한글", "english": "english"},
@@ -356,7 +396,7 @@ def test_assemble_no_bulletin_is_400(tmp_path, monkeypatch) -> None:
 
 def test_assemble_step_failure_surfaces_as_error(_assemble_env, monkeypatch) -> None:
     def _boom(_p, **kwargs):
-        raise RuntimeError("ollama down")
+        raise RuntimeError("transcription blew up")
 
     monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", _boom)
     resp = client.post("/assemble")
@@ -364,7 +404,7 @@ def test_assemble_step_failure_surfaces_as_error(_assemble_env, monkeypatch) -> 
     date = resp.json()["service_date"]
     status = client.get(f"/assemble/{date}/status").json()
     assert status["status"] == "error"
-    assert "ollama down" in status["error"]
+    assert "transcription blew up" in status["error"]
 
 
 def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> None:
@@ -383,6 +423,7 @@ def test_assemble_parses_choir_text(_assemble_env, monkeypatch, tmp_path) -> Non
         "arrangement_hint": "",
         "provenance": {},
         "fragments": [],
+        "candidates": [],
     }
 
 
@@ -397,7 +438,7 @@ def test_assemble_transcribes_confession(_assemble_env, monkeypatch, tmp_path) -
     data = store.load(date)
     assert data.confession_song == {"title": "아무것도 두려워말라", "lines": ["x"], "composer": "",
                                      "sections": [], "arrangement": "", "arrangement_hint": "",
-                                     "provenance": {}, "fragments": []}
+                                     "provenance": {}, "fragments": [], "candidates": []}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -512,7 +553,7 @@ def test_assemble_parses_confession_text_without_transcribing(_assemble_env, mon
     data = store.load(date)
     assert data.confession_song == {"title": "고백곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
                                      "sections": [], "arrangement": "", "arrangement_hint": "",
-                                     "provenance": {}, "fragments": []}
+                                     "provenance": {}, "fragments": [], "candidates": []}
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -526,7 +567,7 @@ def test_assemble_parses_sermonsong_text_without_transcribing(_assemble_env, mon
     assert store.load(date).worship_after_sermon == {
         "title": "설교후곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
-        "fragments": [],
+        "fragments": [], "candidates": [],
     }
 
 
@@ -571,7 +612,7 @@ def test_assemble_confession_failure_is_nonfatal(_assemble_env, monkeypatch, tmp
 
     def _transcribe(p, **kwargs):
         if Path(p).name.startswith("confession"):
-            raise RuntimeError("ollama down")
+            raise RuntimeError("transcription blew up")
         return [Song(title="찬양곡", lines=["x"])]
 
     monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", _transcribe)
@@ -1153,6 +1194,30 @@ def test_build_pdf_export_failure_is_nonfatal(_runs, monkeypatch) -> None:
 
 def test_build_missing_run_is_404(_runs) -> None:
     assert client.post(f"/runs/{_runs}/build").status_code == 404
+
+
+def test_build_refuses_song_left_without_lyrics(_runs, monkeypatch) -> None:
+    """A gasazip miss the operator never resolved would ship blank lyric slides (#213)."""
+    data = _fake_run()
+    data.worship_songs[1] = {"title": "말씀앞에서", "lines": [], "provenance": {"source": "ocr"}}
+    store.save(_runs, data)
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: pytest.fail("must not build"))
+
+    resp = client.post(f"/runs/{_runs}/build")
+    assert resp.status_code == 400
+    assert "말씀앞에서" in resp.json()["detail"]
+
+
+def test_build_allows_a_miss_the_operator_typed_lyrics_into(_runs, monkeypatch) -> None:
+    """Provenance stays "ocr" after hand-editing — the lyrics being there is what matters."""
+    data = _fake_run()
+    data.worship_songs[1] = {"title": "말씀앞에서", "lines": ["직접 입력한 가사"],
+                             "provenance": {"source": "ocr"}}
+    store.save(_runs, data)
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.keynote_build, "export_pdf", lambda p: None)
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: None)
+    assert client.post(f"/runs/{_runs}/build").status_code == 200
 
 
 def test_build_records_error(_runs, monkeypatch) -> None:

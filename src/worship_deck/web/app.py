@@ -473,8 +473,19 @@ def _assemble_async(service_date: str) -> None:
             songs = []
             for i, img in enumerate(_sheet_paths()):
                 sheet_steps: dict[str, float] = {}
-                result = lyrics_transcribe.transcribe(str(img), steps=sheet_steps)
-                songs.extend(result)
+                result = lyrics_transcribe.transcribe(
+                    str(img), steps=sheet_steps, previous_lines=songs[-1].lines if songs else None
+                )
+                for song in result:
+                    # Page 2 of the previous song (#213), recognised by its lyrics already being
+                    # in that song's canonical text. Canonical lyrics hold every verse, so only
+                    # the fragments are kept — they sharpen that song's re-search scoring.
+                    if song.provenance.get("continuation") and songs:
+                        songs[-1].fragments += song.fragments
+                        merged = songs[-1].provenance.get("merged_sheets", 1)
+                        songs[-1].provenance["merged_sheets"] = merged + 1
+                        continue
+                    songs.append(song)
                 for k, v in sheet_steps.items():
                     steps[f"{k}_sheet_{i}"] = v
             data.worship_songs = [asdict(s) for s in songs]
@@ -657,7 +668,10 @@ def assemble_status(service_date: str) -> dict:
 
 @app.get("/review/{service_date}")
 def review(service_date: str) -> FileResponse:
-    return FileResponse(STATIC_DIR / "review.html")
+    # no-store: a phone holding a cached review.html silently loses whatever UI shipped
+    # since — a stale copy hid the #213 재검색 button on an unresolved song. The page is a
+    # few KB on a tailnet; correctness beats the round trip.
+    return FileResponse(STATIC_DIR / "review.html", headers={"Cache-Control": "no-store"})
 
 
 @app.get("/history")
@@ -807,14 +821,7 @@ def research_song(service_date: str, body: dict = Body(...)) -> dict:
         # are meaningless, so the UI hides them and the operator picks by lyric preview. A re-assemble
         # re-transcribes the song and stores its fragments, restoring the match scores.
         "scored": bool(fragments),
-        "candidates": [
-            {
-                "song_id": c.song_id, "title": c.title, "artist": c.artist,
-                "cand_cov": c.cand_cov, "ocr_cov": c.ocr_cov,
-                "preview": [ln for ln in c.lines if ln.strip()][:4],
-            }
-            for c in cands
-        ]
+        "candidates": [lyrics_online.candidate_dict(c) for c in cands],
     }
 
 
@@ -896,6 +903,18 @@ def draft_pdf(service_date: str) -> FileResponse:
 # ── Build (Generate) ─────────────────────────────────────────────────────────
 
 
+def _songs_missing_lyrics(data: ServiceData) -> list[str]:
+    """Names of image-derived songs left with no lyric lines (a lookup miss review skipped)."""
+    songs = [*data.worship_songs, data.confession_song, data.worship_after_sermon]
+    return [
+        s.get("title") or "(제목 없음)"
+        for s in songs
+        if s and s.get("provenance", {}).get("source") == "ocr" and not any(
+            ln.strip() for ln in s.get("lines", [])
+        )
+    ]
+
+
 def _build_async(service_date: str) -> None:
     """Drive Keynote to build the draft .key from the reviewed run, then open it on the Mac.
 
@@ -937,6 +956,11 @@ def build_run(service_date: str, background_tasks: BackgroundTasks) -> dict:
         raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
     if not store.exists(service_date):
         raise HTTPException(status_code=404, detail="no run for that date")
+    # A gasazip miss leaves a song with a title but no lyrics for the operator to resolve in
+    # review (#213). Building it would silently ship blank lyric slides, so refuse by name.
+    empty = _songs_missing_lyrics(store.load(service_date))
+    if empty:
+        raise HTTPException(status_code=400, detail=f"가사가 비어 있는 곡: {', '.join(empty)}")
     _BUILD_STATUS[service_date] = {"status": "running", "path": None, "error": None}
     background_tasks.add_task(_build_async, service_date)
     return {"service_date": service_date, "status_url": f"/runs/{service_date}/build/status"}

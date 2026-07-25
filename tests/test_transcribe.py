@@ -1,10 +1,6 @@
-"""Tests for worship_deck.lyrics.transcribe — title detection, online-first, fallback."""
+"""Tests for worship_deck.lyrics.transcribe — title detection, gasazip lookup, misses."""
 
 from __future__ import annotations
-
-import json
-import shutil
-from pathlib import Path
 
 import pytest
 
@@ -33,109 +29,6 @@ def test_filter_drops_known_hangul_noise() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _reassemble — mocked Ollama HTTP (no network, no model)
-# ---------------------------------------------------------------------------
-
-class _FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self._payload = payload
-
-    def raise_for_status(self) -> None:
-        pass
-
-    def json(self) -> dict:
-        return self._payload
-
-
-def _ollama_payload(songs: list[dict]) -> dict:
-    # Ollama returns the model's structured-output text under "response".
-    return {"response": json.dumps({"songs": songs})}
-
-
-def test_reassemble_parses_songs(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
-
-    payload = _ollama_payload(
-        [{"title": "부르신 곳에서", "lines": ["나는 예배하네", "어떤 상황에도 나는 예배하네"]}]
-    )
-    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(payload))
-
-    songs = T._reassemble(["나는예배하네 -", "어떤상황에도 -"])
-    assert songs == [
-        Song(title="부르신 곳에서", lines=["나는 예배하네", "어떤 상황에도 나는 예배하네"])
-    ]
-
-
-def test_reassemble_drops_blank_lines_and_empty_songs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Blank lyric lines are stripped and an empty trailing song is dropped."""
-    import httpx
-
-    payload = _ollama_payload(
-        [
-            {"title": "실제곡", "lines": ["가사 한 줄", "  ", "", "가사 두 줄"]},
-            {"title": "", "lines": []},  # empty trailing song dropped
-        ]
-    )
-    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(payload))
-
-    assert T._reassemble(["x"]) == [Song(title="실제곡", lines=["가사 한 줄", "가사 두 줄"])]
-
-
-def test_reassemble_sends_model_and_format(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
-
-    captured: dict = {}
-
-    def fake_post(url: str, **kw: object) -> _FakeResponse:
-        captured["url"] = url
-        captured["json"] = kw.get("json", {})
-        return _FakeResponse(_ollama_payload([]))
-
-    monkeypatch.setenv("OLLAMA_MODEL", "qwen3:14b")
-    monkeypatch.setenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-    monkeypatch.setattr(httpx, "post", fake_post)
-
-    T._reassemble(["가사"])
-
-    assert captured["url"] == "http://127.0.0.1:11434/api/generate"
-    body = captured["json"]
-    assert body["model"] == "qwen3:14b"
-    assert body["stream"] is False
-    assert body["think"] is True                        # better recall/spacing on qwen3:14b
-    assert body["format"]["required"] == ["songs"]      # structured JSON output
-    assert body["options"]["temperature"] == 0
-
-
-def test_reassemble_reads_thinking_field_when_response_empty(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Thinking models (qwen3.5) put structured output in `thinking`, not `response`."""
-    import httpx
-
-    payload = {
-        "response": "",
-        "thinking": json.dumps({"songs": [{"title": "T", "lines": ["가사"]}]}),
-    }
-    monkeypatch.setattr(httpx, "post", lambda *a, **kw: _FakeResponse(payload))
-
-    songs = T._reassemble(["가사"])
-    assert songs == [Song(title="T", lines=["가사"])]
-
-
-def test_reassemble_raises_when_ollama_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
-    import httpx
-
-    def boom(*a: object, **kw: object) -> None:
-        raise httpx.ConnectError("connection refused")
-
-    monkeypatch.setattr(httpx, "post", boom)
-    with pytest.raises(RuntimeError, match="Ollama request"):
-        T._reassemble(["가사"])
-
-
-# ---------------------------------------------------------------------------
 # _detect_titles — tallest Hangul lines near the top, tallest first, edges trimmed
 # ---------------------------------------------------------------------------
 
@@ -158,6 +51,14 @@ def test_detect_titles_skips_noise_and_handles_empty() -> None:
     assert T._detect_titles([(0.05, "VX3 chords only")]) == []
     # Known Hangul noise (watermark phonetics) never becomes a title candidate.
     assert T._detect_titles([(0.09, "아이자야씩스티원"), (0.04, "나는 예배하네")]) == ["나는 예배하네"]
+
+
+def test_detect_titles_ignores_credit_on_the_title_baseline() -> None:
+    # 2026-07-26 sheet 2: Vision merges the credit into the title's line, and the English
+    # drags the Hangul ratio to 0.46 — under the bar, so the whole song used to be lost.
+    lines = [(0.05, "하나님 아버지의 마음 Words & Music by 설경육")]
+    assert T._detect_titles(lines) == ["하나님 아버지의 마음"]
+    assert T._detect_titles([(0.05, "부흥 작사 고형원")]) == ["부흥"]
 
 
 def test_detect_titles_ignores_taller_handwritten_marks() -> None:
@@ -203,11 +104,11 @@ def test_transcribe_uses_online_match_when_confident(
     monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
     seen: dict = {}
 
-    def fake_lookup(title: str, fragments: list[str]) -> online.Candidate:
-        seen["title"], seen["fragments"] = title, fragments
+    def fake_lookup(queries: list[str], fragments: list[str]) -> tuple:
+        seen["queries"], seen["fragments"] = queries, fragments
         return online.Candidate(
             song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]
-        )
+        ), []
 
     monkeypatch.setattr(online, "lookup", fake_lookup)
     songs = transcribe("whatever.png")
@@ -223,17 +124,17 @@ def test_transcribe_uses_online_match_when_confident(
             fragments=seen["fragments"],  # kept for review re-search (#203)
         )
     ]
-    assert seen["title"] == "내 주를 가까이"
+    # The tallest line leads; the shorter tall lines follow as further candidates (#202).
+    assert seen["queries"][0] == "내 주를 가까이"
     # Lookup ranks against the filtered Hangul fragments only.
     assert "https://x" not in seen["fragments"] and "G" not in seen["fragments"]
 
 
-def test_transcribe_tries_next_title_candidate_when_lookup_misses(
+def test_transcribe_queries_every_title_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """2026-07-12 sheet 003 shape (#202): the tallest Hangul line is garbled
-    handwriting; the lookup misses on it and succeeds on the second candidate
-    (the printed title)."""
+    handwriting, so the printed title below it must also reach the lookup."""
     from worship_deck.lyrics import online
 
     ocr = [
@@ -241,31 +142,27 @@ def test_transcribe_tries_next_title_candidate_when_lookup_misses(
         (0.03, "허무한 시절 지날때"),  # printed title
     ]
     monkeypatch.setattr(T, "_vision_ocr", lambda p: ocr)
-    tried: list[str] = []
+    seen: dict = {}
 
-    def fake_lookup(title: str, fragments: list[str]) -> online.Candidate | None:
-        tried.append(title)
-        if title == "허무한 시절 지날때":
-            return online.Candidate(
-                song_id="602",
-                title="성령이 오셨네",
-                artist="심형진",
-                lines=["성령이 오셨네 내 맘에 오셨네"],
-            )
-        return None
+    def fake_lookup(queries: list[str], fragments: list[str]) -> tuple:
+        seen["queries"] = queries
+        return online.Candidate(
+            song_id="602",
+            title="성령이 오셨네",
+            artist="심형진",
+            lines=["성령이 오셨네 내 맘에 오셨네"],
+        ), []
 
     monkeypatch.setattr(online, "lookup", fake_lookup)
     (song,) = transcribe("whatever.png")
-    assert tried == ["그런가 보시면 탄생", "허무한 시절 지날때"]
+    assert seen["queries"] == ["그런가 보시면 탄생", "허무한 시절 지날때"]
     assert song.title == "성령이 오셨네"
 
 
-def test_transcribe_rebreaks_overlong_online_lines_without_ollama(
+def test_transcribe_rebreaks_overlong_online_lines(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An over-long gasazip line is re-broken (#126) even with no Ollama running."""
-    import httpx
-
+    """An over-long gasazip line is re-broken to fit the lyric banner (#126)."""
     from worship_deck.lyrics import online
 
     monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
@@ -273,52 +170,76 @@ def test_transcribe_rebreaks_overlong_online_lines_without_ollama(
     monkeypatch.setattr(
         online,
         "lookup",
-        lambda *a, **kw: online.Candidate(
-            song_id="1", title="내 주를 가까이", artist="x", lines=[long_line]
+        lambda *a, **kw: (
+            online.Candidate(song_id="1", title="내 주를 가까이", artist="x", lines=[long_line]),
+            [],
         ),
     )
-
-    def fake_post(*a: object, **kw: object) -> None:
-        raise httpx.ConnectError("refused")
-
-    monkeypatch.setattr(httpx, "post", fake_post)
     (song,) = transcribe("whatever.png")
 
     assert len(song.lines) > 1  # split, not passed through
-    assert " ".join(song.lines) == long_line  # rule-based fallback, text preserved
+    assert " ".join(song.lines) == long_line  # text preserved
 
 
-def test_transcribe_falls_back_to_reassembly_with_detected_title(
+def test_transcribe_miss_returns_empty_song_with_candidates(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import httpx
-
+    """No confident match (#213): no lyrics, but the scored candidates ride along so
+    review can offer the picker without another throttled search."""
     from worship_deck.lyrics import online
 
     monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
-    monkeypatch.setattr(online, "lookup", lambda *a, **kw: None)  # no online match
-    seen: dict = {}
-
-    def fake_post(url: str, **kw: object) -> _FakeResponse:
-        seen["prompt"] = kw["json"]["prompt"]
-        return _FakeResponse(
-            _ollama_payload([{"title": "내 주를 가까이", "lines": ["내 주를 가까이"]}])
-        )
-
-    monkeypatch.setattr(httpx, "post", fake_post)
-    songs = transcribe("whatever.png")
-
-    assert songs == [
-        Song(
-            title="내 주를 가까이", lines=["내 주를 가까이"], provenance={"source": "local"},
-            fragments=T._filter_lyric_fragments([t for _, t in _OCR_LINES]),  # kept for re-search (#203)
-        )
+    scored = [
+        online.Candidate(song_id="9", title="다른 곡", artist="y", lines=["가사 한 줄", ""],
+                         cand_cov=0.2, ocr_cov=0.1)
     ]
-    # Only the Hangul fragments reach the model — chords/URLs filtered out.
-    assert "내 주 를" in seen["prompt"] and "가까이" in seen["prompt"]
-    assert "https://x" not in seen["prompt"] and "\nG\n" not in seen["prompt"]
-    # The deterministically detected title is handed to the model, not guessed.
-    assert '곡 제목은 "내 주를 가까이"' in seen["prompt"]
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: (None, scored))
+    (song,) = transcribe("whatever.png")
+
+    assert song.title == "내 주를 가까이"  # the detected title, for the operator to correct
+    assert song.lines == [] and song.sections == []  # note-split OCR never becomes slide text
+    assert song.provenance["source"] == "ocr"
+    assert song.provenance["titles"][0] == "내 주를 가까이"  # chips for correcting a misread
+    assert song.candidates == [
+        {"song_id": "9", "title": "다른 곡", "artist": "y",
+         "cand_cov": 0.2, "ocr_cov": 0.1, "preview": ["가사 한 줄"]}
+    ]
+    assert song.fragments  # kept for review re-search scoring (#203)
+
+
+def test_transcribe_detects_continuation_by_lyric_overlap(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-07-26 sheet 3: a continuation page whose *misread* title looks like a real one.
+    Its lyrics are already inside the previous song, which is the actual signal (#213) —
+    and knowing that up front skips the doomed lookup entirely."""
+    from worship_deck.lyrics import online
+
+    prev = ["말씀 앞에서 경외함으로", "주께 홀로 섭니다", "생명의 말씀 읽고 순종해"]
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: [(0.05, "말씀 앞에서 경외함으로 주께 홀로 섭니다")])
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: pytest.fail("should not look up"))
+    (song,) = transcribe("whatever.png", previous_lines=prev)
+
+    assert song.provenance == {"source": "ocr", "continuation": True}
+    assert song.title == "" and song.fragments
+
+
+def test_transcribe_titleless_separate_song_is_not_folded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """2026-07-26 sheet 1: no title survived detection, but the lyrics are nothing like the
+    previous song's — a separate song, so it keeps its own card instead of being folded
+    into (and lost inside) the one before it."""
+    from worship_deck.lyrics import online
+
+    prev = ["주님 말씀하시면 내가 나아가리다", "주님 뜻이 아니면 내가 멈춰서리다"]
+    lyric = "이 세상 그 어떤 것도 주님의 사랑에서 나를 끊을 수 없네"
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: [(0.03, lyric)])
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: pytest.fail("no title to search"))
+    (song,) = transcribe("whatever.png", previous_lines=prev)
+
+    assert "continuation" not in song.provenance
+    assert song.title == "" and song.lines == [] and song.fragments == [lyric]
 
 
 # ---------------------------------------------------------------------------
@@ -472,38 +393,13 @@ def test_transcribe_attaches_arrangement_hint_online(
     monkeypatch.setattr(
         online,
         "lookup",
-        lambda *a, **kw: online.Candidate(
-            song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]
+        lambda *a, **kw: (
+            online.Candidate(
+                song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]
+            ),
+            [],
         ),
     )
     (song,) = transcribe("whatever.png")
     assert song.arrangement_hint == "V-C-V-Cx2-B-Cx3"
     assert song.arrangement == ""  # hint is never auto-applied
-
-
-# ---------------------------------------------------------------------------
-# Live integration — real Vision + Ollama; skipped without the toolchain/sheets
-# ---------------------------------------------------------------------------
-
-_DATA = Path(__file__).parent.parent / "data"
-
-
-@pytest.mark.local_only
-def test_transcribe_live_hybrid() -> None:
-    """Vision + Qwen on real sheets, incl. sheet-3 which crashed the vision-mode runner."""
-    import httpx
-
-    if shutil.which("swift") is None:
-        pytest.skip("swift (Xcode CLT) not available")
-    sheet = _DATA / "sheet-3.jpeg"
-    if not sheet.exists():
-        pytest.skip("real band sheet not present in data/")
-    host = "http://127.0.0.1:11434"
-    try:
-        httpx.get(f"{host}/api/version", timeout=2)
-    except httpx.HTTPError:
-        pytest.skip("ollama server not running")
-
-    songs = transcribe(str(sheet))
-    all_lyrics = " ".join(line for s in songs for line in s.lines)
-    assert "예배하네" in all_lyrics

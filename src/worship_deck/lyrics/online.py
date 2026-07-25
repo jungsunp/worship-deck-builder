@@ -5,7 +5,8 @@ each lead sheet's big top title is the only song identity. gasazip.com is a plai
 Korean CCM lyrics site whose search covers the church's repertoire; titles are ambiguous
 there (dozens of songs share a name), so candidates are ranked against the Vision-OCR
 fragments we already have and only a confident match is used. Anything less — no match,
-site change, offline — returns ``None`` and the caller falls back to local reassembly.
+site change, offline — returns ``None`` along with everything it scored, and the operator
+picks from those candidates in review (#213).
 
 godpeople 403s scrapers and CCLI's API is paid/NDA'd; gasazip needs only a browser UA.
 """
@@ -36,6 +37,12 @@ _MATCH_THRESHOLD = 0.5
 _OCR_COV_MIN = 0.5
 _FALLBACK_N = 5  # site-ranked rows to fetch when no title-similar row is accepted
 _THROTTLE_S = 2.5  # spacing between requests — gasazip 429s after ~10 rapid ones
+_FETCH_BUDGET = 8  # lyric pages fetched per sheet across all query variants (#213)
+# Consecutive near-zero rows that mean a query landed in unrelated territory and its
+# remaining rows aren't worth 2.5s each. The #202 fallback-row win (허무한 시절 지날 때 →
+# 성령이 오셨네) was accepted on row 2, so a run of 3 never cuts a real match short.
+_DEAD_END = 3
+_DEAD_END_COV = 0.1
 
 
 @dataclass
@@ -173,39 +180,114 @@ def _title_similar(a: str, b: str) -> bool:
     return len(na) >= 2 and na in nb
 
 
-def lookup(title: str, fragments: list[str]) -> Candidate | None:
-    """Find the song matching the sheet: search by title, rank by OCR-fragment overlap.
+_MELISMA = re.compile(r"[-‐–—]")
+_MIN_SEGMENT_QUERY = 4  # Hangul chars; shorter first segments ("말씀") match half the site
+
+
+def _note_split(title: str) -> bool:
+    """Is this "title" really a lyric line Vision read syllable-by-syllable off the staff?"""
+    tokens = title.split()
+    singles = sum(1 for t in tokens if len(t) == 1)
+    return len(tokens) >= 4 and singles * 2 >= len(tokens)
+
+
+def query_variants(title: str) -> list[str]:
+    """Search queries to try for one detected sheet title, best guess first (#213).
+
+    A title read off the staff comes back note-split — ``말 씀 앞 에서- 경 외 함 으로-`` — and
+    gasazip matches literally, so the raw string finds nothing related (it tokenizes on
+    spaces and matches stray syllables). The melisma hyphens mark where a sung word ends,
+    so splitting on them and joining the syllables inside each segment reconstructs the
+    words: ``말씀앞에서 경외함으로 주께홀로니다``, whose first segment alone is an exact title
+    hit. Joining *everything* is wrong — the site stores spaced text and returns 0 rows.
+
+    Normal titles (no note-splitting) yield just themselves, so nothing extra is fetched.
+    """
+    title = title.strip()
+    if not title or not _note_split(title):
+        return [title] if title else []
+    segments = [s for s in ("".join(p.split()) for p in _MELISMA.split(title)) if s]
+    variants = []
+    if segments and len(_HANGUL_ONLY.sub("", segments[0])) >= _MIN_SEGMENT_QUERY:
+        variants.append(segments[0])
+    if len(segments) > 1:
+        variants.append(" ".join(segments))
+    variants.append(title)  # last: the raw string rarely wins, but costs one search
+    return list(dict.fromkeys(variants))
+
+
+def lookup(
+    queries: list[str], fragments: list[str], budget: int = _FETCH_BUDGET
+) -> tuple[Candidate | None, list[Candidate]]:
+    """Find the song matching the sheet: search each query, rank by OCR-fragment overlap.
 
     All search rows are considered — the right song often sits past the first few
     (#202): rows whose title resembles the query are fetched and scored first; if none
     is accepted, the first ``_FALLBACK_N`` remaining rows in site order are tried —
     gasazip's search indexes lyrics, so a first-line "title" still surfaces the right
-    song under a dissimilar name. Stops at the first accepted candidate (``lines``
-    populated); returns ``None`` on no confident match or any network failure — the
-    caller falls back to local transcription.
+    song under a dissimilar name. ``queries`` are tried in order (see `query_variants`)
+    until a candidate passes the acceptance gate, with at most ``budget`` lyric pages
+    fetched across all of them — each fetch waits ``_THROTTLE_S``, so an unbounded scan
+    is the difference between a 5s and a 40s sheet.
+
+    Returns ``(match, scored)``: the accepted candidate or ``None``, plus everything
+    scored along the way (best first, ``lines`` populated). On a miss the caller stashes
+    ``scored`` on the song so review can offer the picker with no further fetching (#213).
     """
     ocr = _bigrams("".join(fragments))
+    scored: list[Candidate] = []
+    seen: set[str] = set()
+
+    def by_score() -> list[Candidate]:
+        return sorted(scored, key=lambda c: c.cand_cov, reverse=True)
+
     try:
-        rows = search(title)
-        similar = [c for c in rows if _title_similar(title, c.title)]
-        rest = [c for c in rows if not _title_similar(title, c.title)]
-        for cand in similar + rest[:_FALLBACK_N]:
-            cand.lines = fetch_lyrics(cand.song_id)
-            _strip_header(cand)
-            cand.cand_cov, cand.ocr_cov = _covs(ocr, cand.lines)
-            logger.info(
-                "gasazip %s '%s' (%s): cand_cov=%.2f ocr_cov=%.2f",
-                cand.song_id, cand.title, cand.artist, cand.cand_cov, cand.ocr_cov,
-            )
-            if cand.cand_cov >= _MATCH_THRESHOLD or (
-                cand in similar and cand.ocr_cov >= _OCR_COV_MIN
-            ):
-                logger.info("gasazip match for %r: %s '%s'", title, cand.song_id, cand.title)
-                return cand
+        for query in queries:
+            rows = search(query)
+            similar = [c for c in rows if _title_similar(query, c.title)]
+            rest = [c for c in rows if not _title_similar(query, c.title)]
+            cold = 0
+            for cand in similar + rest[:_FALLBACK_N]:
+                if cand.song_id in seen:
+                    continue
+                if budget <= 0:
+                    logger.info("gasazip: fetch budget exhausted for %r", query)
+                    return None, by_score()
+                seen.add(cand.song_id)
+                cand.lines = fetch_lyrics(cand.song_id)
+                budget -= 1
+                _strip_header(cand)
+                cand.cand_cov, cand.ocr_cov = _covs(ocr, cand.lines)
+                scored.append(cand)
+                logger.info(
+                    "gasazip %s '%s' (%s): cand_cov=%.2f ocr_cov=%.2f",
+                    cand.song_id, cand.title, cand.artist, cand.cand_cov, cand.ocr_cov,
+                )
+                if cand.cand_cov >= _MATCH_THRESHOLD or (
+                    cand in similar and cand.ocr_cov >= _OCR_COV_MIN
+                ):
+                    logger.info("gasazip match for %r: %s '%s'", query, cand.song_id, cand.title)
+                    return cand, by_score()
+                cold = cold + 1 if max(cand.cand_cov, cand.ocr_cov) < _DEAD_END_COV else 0
+                if cold >= _DEAD_END:
+                    logger.info("gasazip: %r is a dead end, skipping its remaining rows", query)
+                    break
+            logger.info("gasazip: no confident match for %r (%d rows)", query, len(rows))
     except httpx.HTTPError:
-        return None
-    logger.info("gasazip: no confident match for %r (%d rows)", title, len(rows))
-    return None
+        return None, by_score()
+    return None, by_score()
+
+
+def candidate_dict(cand: Candidate) -> dict:
+    """JSON shape the review candidate picker consumes (assemble-time and /research)."""
+    return {
+        "song_id": cand.song_id,
+        "title": cand.title,
+        "artist": cand.artist,
+        "cand_cov": cand.cand_cov,
+        "ocr_cov": cand.ocr_cov,
+        "preview": [ln for ln in cand.lines if ln.strip()][:4],
+    }
 
 
 def search_scored(title: str, fragments: list[str], limit: int = _FALLBACK_N) -> list[Candidate]:
