@@ -63,9 +63,9 @@ class Candidate:
 _RESULT = re.compile(
     r'<a href="/(\d+)" class="[^"]*gz-candy-song-row[^"]*">'
     r".*?<strong>(.*?)</strong>\s*<em>(.*?)</em>",
-    re.S,
+    re.DOTALL,
 )
-_LYRICS_DIV = re.compile(r'id="gasa-desktop"[^>]*>(.*?)</div>', re.S)
+_LYRICS_DIV = re.compile(r'id="gasa-desktop"[^>]*>(.*?)</div>', re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
 _HANGUL_ONLY = re.compile(r"[^가-힣]")
 # Trailing repeat marks some song pages embed in the lyric text ("…함없네(x2)") — repeats

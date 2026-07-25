@@ -21,9 +21,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+# Import order is load-bearing here; sorting it moves `pb` below the *_pb2 imports that
+# depend on its side effect, and the module then fails to import.
+# isort: off
 from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare *_pb2 imports
 
 import slide_pb2
+
+# isort: on
 
 # The prototype presets the generator clones from. Each maps to exactly one exemplar slide in
 # the style-kit .pro. Keep this list and the authored kit (#170) in agreement.

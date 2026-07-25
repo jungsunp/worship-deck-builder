@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from worship_deck.bible.ref import BibleRef, _KOREAN_BOOKS, parse_ref
-
+from worship_deck.bible.ref import _KOREAN_BOOKS, BibleRef, parse_ref
 
 # ---------------------------------------------------------------------------
 # Happy-path parsing

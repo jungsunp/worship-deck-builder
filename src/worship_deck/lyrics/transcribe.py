@@ -90,6 +90,7 @@ def _vision_ocr(image_path: str) -> list[tuple[float, str]]:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,  # returncode is inspected below, to attach stderr to the error
         )
     except FileNotFoundError as e:  # `swift` not installed
         raise RuntimeError(

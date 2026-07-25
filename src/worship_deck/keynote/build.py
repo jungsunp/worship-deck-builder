@@ -91,6 +91,7 @@ def _run_osascript(script: Path, *args: str) -> str:
             capture_output=True,
             text=True,
             timeout=120,
+            check=False,  # returncode is inspected below, to attach stderr to the error
         )
     except FileNotFoundError as e:  # `osascript` only exists on macOS
         raise RuntimeError("`osascript` not found — Keynote automation needs macOS.") from e
@@ -113,7 +114,7 @@ def _ensure_keynote_ready(settle: int = 8, tries: int = 20) -> None:
     for _ in range(tries):
         if subprocess.run(
             ["osascript", "-e", 'tell application "Keynote" to get name'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         ).returncode == 0:
             break
         time.sleep(1)
@@ -126,7 +127,7 @@ def _ensure_keynote_ready(settle: int = 8, tries: int = 20) -> None:
         )
         r = subprocess.run(
             ["osascript", "-e", 'tell application "Keynote" to count documents'],
-            capture_output=True, text=True,
+            capture_output=True, text=True, check=False,
         )
         if r.returncode == 0 and r.stdout.strip() == "0":
             return
@@ -290,7 +291,7 @@ def _fit_title(text: str, box_w: int, box_h: int, base_font: int) -> tuple[str, 
         )
         options.append((len(wrapped), font, wrapped))
     pool = [o for o in options if o[1] >= _MIN_FONT_TITLE] or options
-    line_count, font, lines = max(pool, key=lambda o: (o[1], -o[0]))
+    _, font, lines = max(pool, key=lambda o: (o[1], -o[0]))
     return "\n".join(lines), font
 
 

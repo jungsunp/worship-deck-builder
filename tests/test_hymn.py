@@ -9,7 +9,6 @@ import pytest
 
 from worship_deck.hymn import download_hymn_ppt, fetch_hymn_slides
 
-
 # ---------------------------------------------------------------------------
 # download_hymn_ppt — mocked HTTP (two-step token flow)
 # ---------------------------------------------------------------------------

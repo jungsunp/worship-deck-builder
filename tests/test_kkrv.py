@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from worship_deck.bible.ref import BibleRef, parse_ref
 from worship_deck.bible.kkrv import fetch_korean
-
+from worship_deck.bible.ref import BibleRef, parse_ref
 
 # ---------------------------------------------------------------------------
 # Happy-path — content checks

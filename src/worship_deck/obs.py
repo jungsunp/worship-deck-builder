@@ -93,7 +93,8 @@ def write_run_record(
         "phase": phase,
         "ok": ok,
         "seconds": seconds,
-        "ts": datetime.now().isoformat(timespec="seconds"),
+        # Local wall-clock (the operator reads these), made tz-aware so the offset is recorded.
+        "ts": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     if steps:
         rec["steps"] = steps
@@ -118,7 +119,7 @@ def run_record(service_date: str, phase: str = "build"):
     try:
         yield timer
         ok = True
-    except Exception as e:  # noqa: BLE001 - record then re-raise
+    except Exception as e:  # record then re-raise
         error = repr(e)
         notify(f"Deck build FAILED for {service_date}: {e}")
         raise

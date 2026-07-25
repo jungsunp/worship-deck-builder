@@ -7,7 +7,6 @@ import pytest
 from worship_deck.lyrics import transcribe as T
 from worship_deck.lyrics.transcribe import Song, transcribe
 
-
 # ---------------------------------------------------------------------------
 # _filter_lyric_fragments — pure, no I/O
 # ---------------------------------------------------------------------------

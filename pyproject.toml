@@ -16,10 +16,7 @@ dependencies = [
 [project.optional-dependencies]
 # playwright + Pillow are only used by scripts/make_fixtures.py to generate the
 # pdfplumber-readable sample-bulletin fixture PDF — not by the runtime pipeline.
-# ruff is pinned: 0.16.0 turned several rules on by default (PLW1510, I001, B008,
-# RUF100, ISC004) and CI installs unpinned, so a release day broke lint on every branch
-# while local venvs stayed green. Unpin when the new rules are adopted deliberately.
-dev = ["pytest", "ruff<0.16", "Pillow", "playwright"]
+dev = ["pytest", "ruff", "Pillow", "playwright"]
 
 [build-system]
 requires = ["hatchling"]
@@ -36,3 +33,12 @@ markers = ["local_only: requires a Mac with Keynote; skipped in CI"]
 line-length = 100
 # Generated protobuf bindings (scripts/gen_proto.sh) — don't lint machine output.
 extend-exclude = ["src/worship_deck/propresenter/pb"]
+
+# No `select` on purpose (#217): the repo tracks ruff's DEFAULT rule set, which widens on
+# minor releases, so new checks arrive for free. The cost is that a release can redden CI on
+# untouched files (0.16.0 did, with 44 errors) — the /ship agent classifies that case by
+# checking whether the violations are outside the PR's diff, and files an issue instead of
+# blaming the change.
+[tool.ruff.lint.per-file-ignores]
+# FastAPI's dependency injection *is* calls in argument defaults (Body/File/Depends).
+"src/worship_deck/web/app.py" = ["B008"]

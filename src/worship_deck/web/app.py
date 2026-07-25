@@ -515,7 +515,7 @@ def _assemble_async(service_date: str) -> None:
                         data.confession_song = asdict(confession[0])
                     else:
                         warnings.append("고백의 찬양 transcription found no lyrics")
-                except Exception:  # noqa: BLE001 - best-effort, surface as a warning
+                except Exception:  # best-effort, surface as a warning
                     logger.exception("고백의 찬양 transcription failed for %s", service_date)
                     warnings.append("고백의 찬양 transcription failed — edit it in review")
 
@@ -537,7 +537,7 @@ def _assemble_async(service_date: str) -> None:
                         data.worship_after_sermon = asdict(result[0])
                     else:
                         warnings.append("설교후 찬양 transcription found no lyrics")
-                except Exception:  # noqa: BLE001 - best-effort, surface as a warning
+                except Exception:  # best-effort, surface as a warning
                     logger.exception("설교후 찬양 transcription failed for %s", service_date)
                     warnings.append("설교후 찬양 transcription failed — edit it in review")
 
@@ -570,7 +570,7 @@ def _assemble_async(service_date: str) -> None:
                     data.offering_hymn_number, HYMN_DIR / service_date / "hymn"
                 )
                 data.offering_hymn_images = [str(p) for p in pngs]
-            except Exception:  # noqa: BLE001 - download is best-effort, surface as a warning
+            except Exception:  # download is best-effort, surface as a warning
                 logger.exception(
                     "Hymn fetch failed for %s (hymn %s)", service_date, data.offering_hymn_number
                 )
@@ -589,7 +589,7 @@ def _assemble_async(service_date: str) -> None:
         }
         obs.write_run_record(service_date, "assemble", True, total, steps)
         logger.info("Assembled run for %s (%d song(s)) in %.1fs", service_date, len(data.worship_songs), total)
-    except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
+    except Exception as e:  # surface to the page, don't crash the worker
         logger.exception("Assemble failed for %s", service_date)
         total = round(time.monotonic() - t0, 1)
         _STATUS[service_date] = {"status": "error", "step": None, "error": repr(e), "seconds": total, "steps": steps}
@@ -934,7 +934,7 @@ def _build_async(service_date: str) -> None:
         try:
             keynote_build.export_pdf(str(Path(path).with_suffix(".pdf")))
             pdf_url = f"/runs/{service_date}/draft.pdf"
-        except Exception:  # noqa: BLE001 - preview is optional; the deck itself is the deliverable
+        except Exception:  # preview is optional; the deck itself is the deliverable
             logger.exception("PDF preview export failed for %s", service_date)
         # Open the draft in Keynote on the Mac (operator is at the machine). Best-effort:
         # the build already succeeded, so a failed `open` shouldn't flip the status to error.
@@ -942,7 +942,7 @@ def _build_async(service_date: str) -> None:
         total = round(time.monotonic() - t0, 1)
         _BUILD_STATUS[service_date] = {"status": "done", "path": path, "pdf": pdf_url, "error": None, "seconds": total}
         logger.info("Built draft for %s at %s in %.1fs", service_date, path, total)
-    except Exception as e:  # noqa: BLE001 - surface to the page, don't crash the worker
+    except Exception as e:  # surface to the page, don't crash the worker
         logger.exception("Build failed for %s", service_date)
         _BUILD_STATUS[service_date] = {"status": "error", "path": None, "error": repr(e), "seconds": round(time.monotonic() - t0, 1)}
 

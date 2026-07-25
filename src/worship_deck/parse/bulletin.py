@@ -230,7 +230,7 @@ def _parse_worship_order(page) -> list[dict]:
     for row in _cluster_rows(words):
         part, gutter = _part_cell([w for w in row if w["x0"] < _X_SPLIT])
         title_words, perf_words = _split_performer([w for w in row if w["x0"] >= _X_SPLIT])
-        if (not part or part.startswith("인도") or part.startswith("(*")
+        if (not part or part.startswith(("인도", "(*"))
                 or not (gutter or title_words or perf_words)):
             continue  # column title, the 인도 line, the (*표는…) footnote
         content = " ".join(gutter + [w["text"] for w in title_words])
