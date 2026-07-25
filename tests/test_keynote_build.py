@@ -1086,6 +1086,7 @@ def _on_canvas_text(key_path: str, slide_index: int) -> str:
         capture_output=True,
         text=True,
         timeout=120,
+        check=True,  # a failed read yields empty stdout — fail here, not on the parse below
     ).stdout
 
 
@@ -1142,6 +1143,7 @@ def test_save_draft_binds_open_doc_to_draft_not_template(
         capture_output=True,
         text=True,
         timeout=120,
+        check=True,
     ).stdout.strip()
     assert Path(open_path) == draft
     assert Path(open_path) != real_template_key
@@ -1218,7 +1220,7 @@ def test_fill_verse_slides_live_fills_call_to_worship(
         "end tell\n"
     )
     size = subprocess.run(
-        ["osascript", "-e", script], capture_output=True, text=True, timeout=120
+        ["osascript", "-e", script], capture_output=True, text=True, timeout=120, check=True
     ).stdout.strip()
     assert size == f"{B._TARGET_FONT_KO}.0"
 
@@ -1414,6 +1416,7 @@ def _last_image_frame(
         capture_output=True,
         text=True,
         timeout=120,
+        check=True,  # a failed read yields empty stdout — fail here, not on the unpack below
     ).stdout
     n, px, py, w, h, dw, dh = out.split()
     return int(n), float(px), float(py), float(w), float(h), float(dw), float(dh)
@@ -1451,14 +1454,17 @@ def _slide_count(key_path: str) -> int:
         [
             "osascript",
             "-e",
-            'on run argv\ntell application "Keynote"\n'
-            "set d to front document\nset n to count of slides of d\n"
-            "return n as text\nend tell\nend run\n",
+            (
+                'on run argv\ntell application "Keynote"\n'
+                "set d to front document\nset n to count of slides of d\n"
+                "return n as text\nend tell\nend run\n"
+            ),
             key_path,
         ],
         capture_output=True,
         text=True,
         timeout=120,
+        check=True,
     ).stdout
     return int(out.strip())
 
@@ -1469,16 +1475,19 @@ def _image_count(key_path: str, slide_index: int) -> int:
         [
             "osascript",
             "-e",
-            'on run argv\ntell application "Keynote"\n'
-            "set d to front document\n"
-            "set n to count of images of slide ((item 2 of argv) as integer) of d\n"
-            "return n as text\nend tell\nend run\n",
+            (
+                'on run argv\ntell application "Keynote"\n'
+                "set d to front document\n"
+                "set n to count of images of slide ((item 2 of argv) as integer) of d\n"
+                "return n as text\nend tell\nend run\n"
+            ),
             key_path,
             str(slide_index),
         ],
         capture_output=True,
         text=True,
         timeout=120,
+        check=True,
     ).stdout
     return int(out.strip())
 

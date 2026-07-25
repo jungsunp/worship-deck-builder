@@ -30,12 +30,16 @@ analog of today's single ``.key``. Service sections become ProPresenter *groups*
 
 from __future__ import annotations
 
+# Import order is load-bearing here; sorting it moves `pb` below the *_pb2 imports that
+# depend on its side effect, and the module then fails to import.
+# isort: off
 from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare *_pb2 imports
 
 import presentation_pb2
 import slide_pb2
 import uuid_pb2
 
+# isort: on
 from worship_deck.parse import ServiceData
 
 # Service order, top to bottom — the fixed liturgy sequence build() walks. Weekly groups draw

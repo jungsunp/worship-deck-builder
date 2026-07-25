@@ -15,9 +15,14 @@ does for ASCII ``Hello World``) corrupts Hangul. ``_rtf_escape`` owns that.
 
 from __future__ import annotations
 
+# Import order is load-bearing here; sorting it moves `pb` below the *_pb2 imports that
+# depend on its side effect, and the module then fails to import.
+# isort: off
 from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare *_pb2 imports
 
 import graphicsData_pb2
+
+# isort: on
 
 
 def set_placeholder(element: graphicsData_pb2.Graphics.Element, token: str, text: str) -> None:

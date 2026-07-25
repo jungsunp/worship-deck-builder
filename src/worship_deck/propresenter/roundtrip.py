@@ -17,10 +17,15 @@ from __future__ import annotations
 import uuid as _uuid
 from pathlib import Path
 
+# Import order is load-bearing here; sorting it moves `pb` below the *_pb2 imports that
+# depend on its side effect, and the module then fails to import.
+# isort: off
 from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare *_pb2 imports
 
 import cue_pb2
 import presentation_pb2
+
+# isort: on
 
 _SAMPLE_TEXT = b"Point #1"  # the visible run on the sample deck's first slide
 

@@ -8,7 +8,7 @@ from worship_deck.propresenter import pb  # noqa: F401 -- puts pb/ on sys.path
 presentation_pb2 = pytest.importorskip(
     "presentation_pb2", reason="run scripts/gen_proto.sh to generate protobuf bindings"
 )
-from worship_deck.propresenter import roundtrip  # noqa: E402 -- after importorskip guard
+from worship_deck.propresenter import roundtrip  # deliberately after the importorskip guard
 
 
 def test_bindings_load_and_roundtrip_in_memory():

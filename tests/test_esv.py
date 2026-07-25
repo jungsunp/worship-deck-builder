@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from worship_deck.bible.ref import BibleRef, parse_ref
 from worship_deck.bible.esv import _ref_to_query, fetch_esv
-
+from worship_deck.bible.ref import BibleRef, parse_ref
 
 # ---------------------------------------------------------------------------
 # _ref_to_query — pure function, no mocking needed
