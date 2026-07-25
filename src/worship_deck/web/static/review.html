@@ -50,18 +50,25 @@
   .cardhd button { width: auto; border: 0; background: transparent; padding: 0.2rem 0.4rem;
                    font-size: 1rem; line-height: 1; color: var(--gray-600); }
   .cardhd button.x { color: var(--red); }
-  .splitbtn { width: auto; margin-top: 0.4rem; padding: 0.3rem 0.6rem; font-size: 0.85rem;
-              border: 1px dashed var(--gray-300); border-radius: var(--radius);
-              background: #fff; color: var(--gray-700); }
+  .splitbtn { width: auto; margin-top: 0.4rem; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+              border: 1px solid var(--green); border-radius: var(--radius);
+              background: #fff; color: var(--green); cursor: pointer; }
   .addcard { width: auto; margin-top: 0.5rem; padding: 0.4rem 0.8rem; font-size: 0.9rem;
              border: 1px dashed var(--gray-300); border-radius: var(--radius);
              background: #fff; color: var(--gray-700); }
-  /* Lyric provenance badge (#200): gasazip match (green, with score) vs local OCR fallback (amber). */
+  /* Lyric provenance badge (#200): gasazip match (green, with score) vs unresolved lookup (red). */
   .provrow { margin: 0.4rem 0; }
   .prov { display: inline-block; padding: 0.2rem 0.6rem; font-size: 0.85rem;
           border-radius: 999px; border: 1px solid currentColor; text-decoration: none; }
   .prov.ok { color: var(--green); }
   .prov.warn { color: var(--amber); }
+  .prov.bad { color: var(--red); font-weight: 600; }
+  .provnote { color: var(--gray-600); font-size: 0.8rem; }
+  /* Alternate OCR title readings (#213) — one tap to fix a misread title, then 재검색. */
+  .titlechips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.3rem 0; }
+  .titlechip { width: auto; padding: 0.2rem 0.6rem; font-size: 0.8rem; flex: none;
+               border: 1px dashed var(--gray-300); border-radius: 999px;
+               background: #fff; color: var(--gray-700); cursor: pointer; }
   /* Re-search (#203): 재검색 button + inline gasazip candidate picker under the song card. */
   .research { width: auto; margin-left: auto; padding: 0.35rem 0.9rem; font-size: 0.85rem;
               border: 0; border-radius: var(--radius); background: var(--blue); color: #fff;
@@ -329,7 +336,12 @@ function renderChips() {
 
 // Auto-grow textareas (#112): the whole song is visible — no inner scroll, no manual resize.
 // Grown on input, after render, and when a collapsed section (scrollHeight 0) is expanded.
-function autogrow(ta) { ta.style.height = 'auto'; ta.style.height = (ta.scrollHeight + 4) + 'px'; }
+function autogrow(ta) {
+  const y = window.scrollY;  // height:auto momentarily shrinks the page; browser clamps scroll
+  ta.style.height = 'auto';
+  ta.style.height = (ta.scrollHeight + 4) + 'px';
+  window.scrollTo(0, y);
+}
 function growVisible() {
   document.querySelectorAll('#order .secbody:not([hidden]) textarea').forEach(autogrow);
 }
@@ -408,7 +420,8 @@ const editKeyOf = ref => (ref === 'confession' ? 'confession'
 
 // Provenance badge (#200): where a song's lyrics came from, so the operator knows what to trust.
 // gasazip match → green pill linking to the source, with both coverage %s (low on either = worth
-// proofreading). Local OCR+Ollama fallback → amber ⚠ flag. Typed/library songs → no badge.
+// proofreading). Lookup miss → red pill; the song has no lyrics until one is picked (#213).
+// Typed/library songs → no badge.
 // Reads run data (not DOM), so it survives the medley tab round-trip; syncFromDom never writes it.
 function provBadge(song) {
   const p = (song && song.provenance) || {};
@@ -420,10 +433,10 @@ function provBadge(song) {
     a.textContent = `가사집 ✓ ${p.artist || ''} · 일치 ${pct(p.cand_cov)}% · 악보 ${pct(p.ocr_cov)}%`;
     return a;
   }
-  if (p.source === 'local') {
+  if (p.source === 'ocr') {
     const s = document.createElement('span');
-    s.className = 'prov warn'; s.title = '자동 복원된 가사 — 직접 확인 필요';
-    s.textContent = 'OCR 복원 ⚠︎';
+    s.className = 'prov bad'; s.title = '가사집에서 곡을 찾지 못했습니다 — 후보를 고르거나 제목을 고쳐 재검색하세요';
+    s.textContent = '가사 미확인 — 후보 선택 필요';
     return s;
   }
   return null;
@@ -432,25 +445,64 @@ function provBadge(song) {
 // Wrap a provBadge in a .provrow and append to `sd` when there's a badge to show. Image-derived
 // songs (any badge) also get a 재검색 button + an inline candidate-list host: the operator
 // corrects the title and re-runs the gasazip lookup right here (#203).
+// On a lookup miss, assemble already fetched and scored candidates — render them straight away so
+// resolving the song is one tap instead of a fresh throttled search (#213).
 function appendProvRow(sd, song, ref) {
   const b = provBadge(song);
   if (!b) return;  // no badge (typed/library) → no re-search either
+  const p = song.provenance || {};
   const row = document.createElement('div'); row.className = 'provrow';
   row.appendChild(b);
+  if (p.merged_sheets > 1) {
+    const n = document.createElement('span'); n.className = 'provnote';
+    n.textContent = `악보 ${p.merged_sheets}장 병합됨`;
+    row.appendChild(n);
+  }
   const list = document.createElement('div'); list.className = 'candlist'; list.hidden = true;
   const btn = document.createElement('button'); btn.type = 'button';
   btn.className = 'research'; btn.textContent = '재검색';
   btn.onclick = () => researchSong(ref, btn, list);
-  row.appendChild(btn); sd.appendChild(row); sd.appendChild(list);
+  row.appendChild(btn); sd.appendChild(row);
+  // Alternate title readings from the OCR — the tallest line isn't always the real title.
+  const titles = (p.titles || []).filter(t => t && t !== song.title);
+  if (titles.length) {
+    const chips = document.createElement('div'); chips.className = 'titlechips';
+    const lbl = document.createElement('span'); lbl.className = 'provnote';
+    lbl.textContent = '다른 제목 후보:'; chips.appendChild(lbl);
+    titles.forEach(t => {
+      const c = document.createElement('button'); c.type = 'button';
+      c.className = 'titlechip'; c.textContent = t;
+      c.onclick = () => { titleInput(ref).value = t; researchSong(ref, btn, list); };
+      chips.appendChild(c);
+    });
+    sd.appendChild(chips);
+  }
+  sd.appendChild(list);
+  if (p.source === 'ocr' && (song.candidates || []).length) {
+    list.hidden = false;
+    // All-weak scores mean the search never got near the song (usually a misread title) —
+    // say so, or the operator reads three 3% 가요 rows as if they were real options.
+    if (Math.max(...song.candidates.map(c => c.cand_cov || 0)) < 0.1) {
+      const msg = document.createElement('div'); msg.className = 'candmsg';
+      msg.textContent = '악보 가사와 맞는 후보가 없습니다 — 제목을 고쳐 재검색하세요';
+      list.appendChild(msg);
+    }
+    song.candidates.forEach(c => list.appendChild(candCard(ref, c, list, true)));
+  }
+}
+
+// The title <input> backing a song ref — the operator's corrected title is read from the DOM.
+function titleInput(ref) {
+  return ref === 'confession' || ref === 'sermonsong'
+    ? document.querySelector('#order input[data-kind="' + ref + '-title"]')
+    : document.querySelector('#order input[data-kind="worship-title"][data-i="' + ref + '"]');
 }
 
 // Read the operator-corrected title from the song's title input, re-run the gasazip lookup, and
 // render the scored candidates into `list` for picking (#203). Scores against the OCR fragments
 // persisted at assemble, so no re-OCR — but the throttled fetches take several seconds.
 async function researchSong(ref, btn, list) {
-  const ti = ref === 'confession' || ref === 'sermonsong'
-    ? document.querySelector('#order input[data-kind="' + ref + '-title"]')
-    : document.querySelector('#order input[data-kind="worship-title"][data-i="' + ref + '"]');
+  const ti = titleInput(ref);
   const title = (ti ? ti.value : (songByRef(ref).title || '')).trim();
   if (!title) { alert('먼저 곡 제목을 입력하세요'); return; }
   btn.disabled = true; btn.textContent = '검색 중…';
@@ -517,7 +569,10 @@ async function applyCandidate(ref, c, list) {
   song.title = c.title; song.lines = lines;
   song.sections = sections || []; song.arrangement = arrangement || '';
   song.provenance = {source: 'gasazip', song_id: c.song_id, artist: c.artist,
-                     cand_cov: c.cand_cov, ocr_cov: c.ocr_cov};
+                     cand_cov: c.cand_cov, ocr_cov: c.ocr_cov,
+                     ...(song.provenance && song.provenance.merged_sheets
+                         ? {merged_sheets: song.provenance.merged_sheets} : {})};
+  song.candidates = [];  // resolved — the assemble-time picker shouldn't reappear (#213)
   edited[editKeyOf(ref)] = true;
   list.hidden = true;
   render();
@@ -586,7 +641,6 @@ function renderCards(host, s) {
     );
     card.appendChild(cardhd);
     card.appendChild(ta);
-    autogrow(ta);
     const split = mk('여기서 나누기', 'splitbtn', () => {
       const lineIdx = ta.value.slice(0, ta.selectionStart).split('\n').length - 1;  // cursor's line
       const all = ta.value.split('\n');
@@ -601,6 +655,7 @@ function renderCards(host, s) {
     card.appendChild(split);
     host.appendChild(card);
   });
+  host.querySelectorAll('textarea').forEach(autogrow);  // scrollHeight is 0 before append
 }
 
 // transcribe.chunk in JS: blank line breaks a slide, <=2 non-blank lines per slide.

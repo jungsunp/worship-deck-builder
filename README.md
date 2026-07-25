@@ -43,7 +43,7 @@ flowchart TD
         bulletin["bulletin.pdf"] --> parse["parse/bulletin.py"]
         parse --> parsed["worship order, announcements,<br/>refs, title, 봉헌 hymn (찬 no./title/verses)"]
 
-        sheets["band lead sheets"] --> transcribe["lyrics/transcribe.py<br/>(Vision OCR → title → gasazip lookup;<br/>fallback: local Ollama reassembly)"]
+        sheets["band lead sheets"] --> transcribe["lyrics/transcribe.py<br/>(Vision OCR → title → gasazip lookup;<br/>no match → operator picks in review)"]
         transcribe --> lyrics["lyric lines"]
 
         choir["choir lyrics (raw text)"] --> choirp["strip title/composer<br/>→ chunk into ≤2-line slides"]
@@ -113,15 +113,6 @@ changed enough that the CI tests' reference map should follow.
 - **Keynote** installed, with Terminal/automation permission granted to control it.
 - **Xcode Command Line Tools** — `xcode-select --install`. Provides `swift`, used for the
   Apple Vision OCR step (`src/worship_deck/lyrics/ocr_ko.swift`).
-- **Ollama** running locally, for the lyric-reassembly fallback when a sheet's song
-  isn't matched on gasazip.com (free, offline — no API key):
-
-  ```bash
-  brew install ollama
-  ollama serve                 # leave running (or: brew services start ollama)
-  ollama pull qwen3:14b        # ~9 GB; the default model for both lyric tasks
-  ```
-
 - **LibreOffice + poppler**, for converting the downloaded 봉헌 hymn PowerPoint to slide
   PNGs (`brew install --cask libreoffice && brew install poppler`).
 - **Tailscale** for reaching the web app from phones while away — see
@@ -144,7 +135,6 @@ Fill in `.env` (git-ignored):
 |----------|-------------|
 | `ESV_API_KEY` | Free non-commercial key from [api.esv.org](https://api.esv.org/) — English verse text. |
 | `TEMPLATE_KEY` | Path to the master Keynote template deck (`templates/master.key`; git-ignored, place locally). |
-| `OLLAMA_MODEL` / `OLLAMA_HOST` | One model for both lyric tasks (reassembly + line splitting) + Ollama address. Defaults (`qwen3:14b`, `http://127.0.0.1:11434`) work out of the box. |
 | `WEB_HOST` / `WEB_PORT` | Web app bind address (defaults `127.0.0.1:8787`). Keep it on loopback in production — `tailscale serve` provides remote access; see [Remote access & deployment](#remote-access--deployment). |
 | `NTFY_TOPIC` | *(optional)* [ntfy.sh](https://ntfy.sh/) topic for phone push on failure — leave blank to disable. |
 
