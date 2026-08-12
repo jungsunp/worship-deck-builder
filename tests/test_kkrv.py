@@ -48,6 +48,36 @@ def test_revelation_name_fix() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 세례 vs 침례 — the bundled text must read 세례 (Presbyterian usage)
+# ---------------------------------------------------------------------------
+
+def test_baptism_reads_serye_not_chimrye() -> None:
+    """scrollmapper's KorRV dump was a Baptist redaction that wrote 침례 for 세례.
+
+    The dataset now comes from bolls.life (scripts/fetch_krv.py); guard against a
+    re-import of the bad text.
+    """
+    text = fetch_korean(parse_ref("요 1:33"))
+    assert "세례" in text
+    assert "침례" not in text
+
+
+def test_no_chimrye_anywhere_in_dataset() -> None:
+    from worship_deck.bible.kkrv import _DATA_PATH
+
+    # count, not `in`, so a failure doesn't dump the whole 8 MB file into the report
+    assert _DATA_PATH.read_text(encoding="utf-8").count("침례") == 0
+
+
+def test_original_1961_orthography_preserved() -> None:
+    """The church's master.key renders 시 147:7 with the original 찌 spelling.
+
+    The old dataset had modernised these to 지, silently diverging from the deck.
+    """
+    assert fetch_korean(parse_ref("시 147:7")).endswith("찬양할찌어다")
+
+
+# ---------------------------------------------------------------------------
 # Error paths
 # ---------------------------------------------------------------------------
 

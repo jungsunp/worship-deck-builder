@@ -1,7 +1,17 @@
-"""Fetch 개역한글 verse text from the bundled KorRV dataset.
+"""Fetch 개역한글 verse text from the bundled KRV dataset.
 
-Source: scrollmapper/bible_databases (MIT); text is public domain
-(Korean Revised Version 개역한글, 1961; copyright expired ~2012).
+Source: bolls.life KRV (개역한글, 1961) — regenerate with scripts/fetch_krv.py.
+
+This deck previously bundled scrollmapper/bible_databases' `KorRV.json`, which
+turned out to be a **Baptist redaction**: it wrote 침례 wherever 개역한글 reads
+세례 (101 occurrences), modernised the 1961 orthography (찬양할지어다 for the
+original 찬양할찌어다), and carried OCR typos (어호와, 죄우). getbible.net's
+`korean` mirrors that same corrupted module — avoid both.
+
+The bolls.life text matches 대한성서공회 (bskorea.or.kr) and, importantly, matches
+the church's own master.key template character-for-character. We are a
+Presbyterian church: the text must read 세례, never 침례 (guarded by
+tests/test_kkrv.py).
 """
 
 from __future__ import annotations
