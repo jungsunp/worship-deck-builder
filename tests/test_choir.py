@@ -85,6 +85,19 @@ def test_interior_blank_lines_preserved_as_stanza_breaks() -> None:
     ]
 
 
+def test_zero_width_lines_are_stanza_breaks() -> None:
+    """The pasted source separates stanzas with U+200B-only lines (2026-08-09 \uc131\uac00\ub300):
+    invisible, but `strip()` leaves them non-blank, so each one used to ride onto the next
+    slide as a lyric line and shift the whole rest of the section."""
+    raw = "\uc81c\ubaa9\n\uc791\uace1\uc790 \uc791\uace1\n\n\ub192\uc740 \uc0b0\uc774\n\uac70\uce5c \ub4e4\uc774\n\u200b\n\uadf8 \uc5b4\ub514\ub098\n\ud560\ub810\ub8e8\uc57c\n"
+    song = parse_choir_text(raw)
+    assert song.lines == ["\ub192\uc740 \uc0b0\uc774", "\uac70\uce5c \ub4e4\uc774", "", "\uadf8 \uc5b4\ub514\ub098", "\ud560\ub810\ub8e8\uc57c"]
+    assert chunk(song.lines) == [
+        ["\ub192\uc740 \uc0b0\uc774", "\uac70\uce5c \ub4e4\uc774"],
+        ["\uadf8 \uc5b4\ub514\ub098", "\ud560\ub810\ub8e8\uc57c"],
+    ]
+
+
 def test_interlude_marker_dropped() -> None:
     """A 간주 line (with or without parens) is dropped, not paired into a lyric slide."""
     raw = "제목\n작곡자 작곡\n\n높은 산이\n간주\n(간주)\n그 어디나\n"

@@ -70,6 +70,16 @@ class Song:
     candidates: list[dict] = field(default_factory=list)
 
 
+# Invisible characters that survive `str.strip()` — pasted lyrics (Kakao, blog copies) use
+# U+200B-only lines as stanza separators, and soft hyphens/BOMs ride along inside lines.
+_ZERO_WIDTH = re.compile(r"[\u200b-\u200f\u2060\ufeff\u00ad]")
+
+
+def strip_zero_width(line: str) -> str:
+    """Drop zero-width characters, so a line that looks blank actually is."""
+    return _ZERO_WIDTH.sub("", line)
+
+
 # ── Stage 1: Apple Vision OCR ─────────────────────────────────────────────────
 
 _OCR_SCRIPT = Path(__file__).with_name("ocr_ko.swift")
@@ -302,10 +312,15 @@ def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:
     A blank/whitespace-only line forces a slide break (stanza boundary) and is not
     emitted as content. Returns a list of slides, each a list of 1..max_lines
     non-empty lines; an empty or all-blank input returns ``[]``.
+
+    Zero-width characters are stripped first: pasted choir lyrics separate stanzas with
+    U+200B-only lines that look blank but aren't, and they used to ride onto the next
+    slide as a lyric line and shift every slide after it (2026-08-09 성가대).
     """
     slides: list[list[str]] = []
     current: list[str] = []
-    for line in lines:
+    for raw in lines:
+        line = strip_zero_width(raw)
         if not line.strip():  # stanza break
             if current:
                 slides.append(current)

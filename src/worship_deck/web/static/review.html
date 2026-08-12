@@ -946,10 +946,13 @@ function renderSermon(div) {
   });
 }
 
-const splitLines = v => v.split('\n').map(s => s.trim()).filter(Boolean);
+// Pasted lyrics carry zero-width chars (a U+200B-only line looks blank but isn't, and
+// would ride onto the next slide as a lyric line) — strip them before trimming.
+const cleanLine = s => s.replace(/[\u200b-\u200f\u2060\ufeff\u00ad]/g, '').trim();
+const splitLines = v => v.split('\n').map(cleanLine).filter(Boolean);
 // Keeps interior blank lines (stanza breaks, #101) — trims only leading/trailing ones.
 const splitKeepBlanks = v => {
-  const a = v.split('\n').map(s => s.trim());
+  const a = v.split('\n').map(cleanLine);
   while (a.length && !a[0]) a.shift();
   while (a.length && !a[a.length - 1]) a.pop();
   return a;

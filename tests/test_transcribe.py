@@ -279,6 +279,17 @@ def test_chunk_whitespace_only_line_is_a_break() -> None:
     assert T.chunk(["a", "   ", "b"]) == [["a"], ["b"]]
 
 
+def test_chunk_zero_width_only_line_is_a_break() -> None:
+    """Pasted lyrics separate stanzas with U+200B-only lines — `strip()` alone keeps them
+    non-blank, so they used to land on a slide as a lyric line and shift every slide after
+    it (2026-08-09 \uc131\uac00\ub300)."""
+    assert T.chunk(["a", "\u200b", "b", "c"]) == [["a"], ["b", "c"]]
+
+
+def test_chunk_strips_zero_width_inside_a_line() -> None:
+    assert T.chunk(["\ufeffa\u200bb"]) == [["ab"]]
+
+
 def test_chunk_custom_max_lines() -> None:
     assert T.chunk(["a", "b", "c", "d"], max_lines=3) == [["a", "b", "c"], ["d"]]
 
