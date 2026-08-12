@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>슬라이드 스타일 샘플 비교 (#189)</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: 'Apple SD Gothic Neo', Pretendard, sans-serif; background: #fff; color: #1a1a1a;
+  max-width: 1500px; margin: 0 auto; padding: 40px 24px 80px; }
+h1 { font-size: 28px; margin-bottom: 8px; }
+.sub { color: #666; margin-bottom: 36px; }
+h2 { font-size: 21px; margin: 48px 0 6px; }
+.note { color: #666; font-size: 14px; margin-bottom: 14px; }
+.row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.cell img { width: 100%; display: block; border: 1px solid #ddd; border-radius: 4px; }
+.cap { font-size: 13px; color: #444; margin-top: 6px; }
+.cap b { font-size: 14px; }
+table { border-collapse: collapse; margin: 16px 0 8px; width: 100%; font-size: 14px; }
+th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; vertical-align: top; }
+th { background: #f5f5f5; }
+.check { background: #f8f8f4; border: 1px solid #e2e2d8; border-radius: 6px; padding: 20px 26px; margin-top: 56px; }
+.check h2 { margin-top: 0; }
+.check li { margin: 10px 0 10px 20px; }
+@media print { .row { break-inside: avoid; } h2 { break-before: auto; } body { padding: 0; } }
+</style>
+</head>
+<body>
+
+<h1>예배 슬라이드 스타일 샘플</h1>
+<p class="sub">2026-07 · 스타일 결정 모임 자료 (#189) · 내용은 실제 7/5 주일예배 본문 ·
+가사(lower-third) 3옵션 + 전체 화면 5옵션 · 글꼴/색은 예시이며 최종 서체는 별도 결정</p>
+
+<h2>가사 lower-third — 옵션 A · B · C</h2>
+<table>
+  <tr><th></th><th>A — 검정 스트립</th><th>B — 플레인</th><th>C — 블러 박스</th></tr>
+  <tr><th>참고 모델</th>
+    <td>Hillsong — 줄마다 글자에 딱 맞는 검정 스트립</td>
+    <td>IN2 뉴욕 · KCPC · 남가주사랑의교회 — 박스 없이 흰 글씨 + 그림자</td>
+    <td>현재 NPC 네이비 배너의 현대화 (반투명 블러 박스)</td></tr>
+  <tr><th>특징</th>
+    <td>배경이 밝아도 항상 선명</td>
+    <td>화면이 가장 시원하고 현대적 — 카메라가 주인공</td>
+    <td>익숙한 모양, 배경과 부드럽게 분리</td></tr>
+</table>
+
+<h2>전체 화면 — 옵션 1 – 5</h2>
+<table>
+  <tr><th></th><th>1 클래식 세리프</th><th>2 차콜 골드</th><th>3 네이비 프레임</th><th>4 로열 블루</th><th>5 버건디</th></tr>
+  <tr><th>분위기</th>
+    <td>전통 예식서/찬송가 — 명조체 + 상아색 + 금색 괘선</td>
+    <td>따뜻하고 우아한 차콜 + 골드</td>
+    <td>현재 덱과 가장 비슷 — 네이비 + 흐린 사진 + 프레임</td>
+    <td>베델(어바인)식 로열 블루 — 모던하지만 교회색</td>
+    <td>전통 교회색(포도주) + 크림 명조</td></tr>
+  <tr><th>글꼴 (예시)</th><td>Noto Serif KR</td><td>SUIT</td><td>Noto Sans KR</td><td>Pretendard</td><td>Noto Serif KR</td></tr>
+  <tr><th>성격</th><td>클래식</td><td>모던-클래식</td><td>익숙함</td><td>모던</td><td>클래식</td></tr>
+</table>
+
+<h2>1. 예배 찬양 — 한글 2줄 (lower-third)</h2>
+<p class="note">실제 7/5 찬양 「다시 한 번」 후렴. 밴드 화면은 우리 교회 예배 영상입니다.</p>
+<div class="row">
+  <div class="cell"><img src="a-lyric-ko.png"><div class="cap"><b>A</b> — 검정 스트립</div></div>
+  <div class="cell"><img src="b-lyric-ko.png"><div class="cap"><b>B</b> — 박스 없음</div></div>
+  <div class="cell"><img src="c-lyric-ko.png"><div class="cap"><b>C</b> — 블러 박스</div></div>
+</div>
+
+<h2>2. 예배 찬양 — 한글 + 영어 (lower-third)</h2>
+<p class="note">확정된 요구사항: 한글 큰 줄 + 영어 작은 줄. 6/28 찬양 「주 하나님 지으신 모든 세계」.</p>
+<div class="row">
+  <div class="cell"><img src="a-lyric-bi.png"><div class="cap"><b>A</b> — 영어는 대문자·자간 넓게 (Hillsong 방식)</div></div>
+  <div class="cell"><img src="b-lyric-bi.png"><div class="cap"><b>B</b> — 영어 일반 표기</div></div>
+  <div class="cell"><img src="c-lyric-bi.png"><div class="cap"><b>C</b> — 박스 안에 두 언어</div></div>
+</div>
+
+<h2>3. 성경 봉독 (전체 화면)</h2>
+<p class="note">실제 7/5 예배의 부름 본문 (요 1:9-12 중 9-10절) — 한글(개역한글) 위 + 영어(ESV) 아래, 현재 방식과 같은 구조.</p>
+<div class="row">
+  <div class="cell"><img src="f1-verse.png"><div class="cap"><b>1</b> — 클래식 세리프</div></div>
+  <div class="cell"><img src="f2-verse.png"><div class="cap"><b>2</b> — 차콜 골드</div></div>
+  <div class="cell"><img src="f3-verse.png"><div class="cap"><b>3</b> — 네이비 프레임</div></div>
+  <div class="cell"><img src="f4-verse.png"><div class="cap"><b>4</b> — 로열 블루</div></div>
+  <div class="cell"><img src="f5-verse.png"><div class="cap"><b>5</b> — 버건디</div></div>
+</div>
+
+<h2>4. 교회 소식 (전체 화면)</h2>
+<p class="note">실제 7/5 주보 소식 4건 (이름은 제외).</p>
+<div class="row">
+  <div class="cell"><img src="f1-announce.png"><div class="cap"><b>1</b> — 클래식 세리프</div></div>
+  <div class="cell"><img src="f2-announce.png"><div class="cap"><b>2</b> — 차콜 골드</div></div>
+  <div class="cell"><img src="f3-announce.png"><div class="cap"><b>3</b> — 네이비 프레임</div></div>
+  <div class="cell"><img src="f4-announce.png"><div class="cap"><b>4</b> — 로열 블루</div></div>
+  <div class="cell"><img src="f5-announce.png"><div class="cap"><b>5</b> — 버건디</div></div>
+</div>
+
+<h2>5. 섹션 표제 — 봉헌 (전체 화면)</h2>
+<p class="note">실제 7/5 봉헌송 (찬 283장 「나 속죄함을 받은 후」) — 현재 덱의 표제 형식 그대로.</p>
+<div class="row">
+  <div class="cell"><img src="f1-divider.png"><div class="cap"><b>1</b> — 클래식 세리프</div></div>
+  <div class="cell"><img src="f2-divider.png"><div class="cap"><b>2</b> — 차콜 골드</div></div>
+  <div class="cell"><img src="f3-divider.png"><div class="cap"><b>3</b> — 네이비 프레임 (현재와 유사)</div></div>
+  <div class="cell"><img src="f4-divider.png"><div class="cap"><b>4</b> — 로열 블루</div></div>
+  <div class="cell"><img src="f5-divider.png"><div class="cap"><b>5</b> — 버건디</div></div>
+</div>
+
+<h2>6. 사도신경 (전체 화면)</h2>
+<p class="note">현재 덱의 사도신경 슬라이드 본문 그대로 (앞 7줄) — 실제 밀도로 각 스타일을 비교합니다.</p>
+<div class="row">
+  <div class="cell"><img src="f1-liturgy.png"><div class="cap"><b>1</b> — 클래식 세리프</div></div>
+  <div class="cell"><img src="f2-liturgy.png"><div class="cap"><b>2</b> — 차콜 골드</div></div>
+  <div class="cell"><img src="f3-liturgy.png"><div class="cap"><b>3</b> — 네이비 프레임</div></div>
+  <div class="cell"><img src="f4-liturgy.png"><div class="cap"><b>4</b> — 로열 블루</div></div>
+  <div class="cell"><img src="f5-liturgy.png"><div class="cap"><b>5</b> — 버건디</div></div>
+</div>
+
+<div class="check">
+<h2>모임에서 결정할 것</h2>
+<ol>
+  <li><b>찬양 가사 lower-third 방식</b> — 검정 스트립(A) vs 박스 없음(B) vs 블러 박스(C)?</li>
+  <li><b>전체 화면 방향</b> — 클래식(1, 5) vs 모던(2, 4) vs 익숙함(3)? 색은 네이비 / 차콜 / 로열 블루 / 버건디 중 어느 계열?</li>
+  <li><b>세리프(명조) vs 산세리프(고딕)</b> — 전체 화면 본문을 명조체(1, 5)로 가는 것에 대한 반응?</li>
+  <li><b>서체 느낌</b> — 각 옵션의 글꼴은 예시입니다. 눈에 띄게 좋거나 불편한 것만 메모 — 최종 서체는 별도 결정(#168).</li>
+  <li>섹션별로 다른 옵션을 섞는 것도 가능합니다 (예: 찬양은 B, 성경/사도신경은 1, 소식은 4).</li>
+</ol>
+<p class="note">참고: 이미 확정된 사항 — 어두운 배경에 흰 글씨 · 가사 최대 2줄 · 한/영 병기 · 찬양은 lower-third, 나머지는 전체 화면 · 설교 중 성경 구절 슬라이드 없음(Glossa 실시간 번역 사용).<br>
+참고 교회: Hillsong · IN2 뉴욕 · KCPC(와싱톤중앙) · 남가주사랑의교회 · 베델교회(어바인) — 교회 홈페이지(npcwheeling.com)의 네이비·화이트 톤과 어울리는 방향으로 구성.</p>
+</div>
+
+</body>
+</html>
