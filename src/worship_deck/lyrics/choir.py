@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import re
 
-from worship_deck.lyrics.transcribe import Song
+from worship_deck.lyrics.transcribe import Song, strip_zero_width
 
 # The composer/arranger credit line, e.g. "홍길동 작곡 / 김철수 편곡".
 _COMPOSER_MARK = re.compile(r"작곡|편곡")
@@ -34,9 +34,12 @@ def parse_choir_text(raw: str) -> Song:
     the composer only when it stands alone — set off from the lyrics by a blank line — so
     a multi-line first stanza with no credit is not mistaken for one. Blank lines between
     stanzas are preserved (leading/trailing ones trimmed) so ``chunk()`` keeps each
-    stanza on its own slide; interlude markers (``간주``) are dropped.
+    stanza on its own slide; interlude markers (``간주``) are dropped, and zero-width
+    characters are stripped so an invisible "blank" line reads as a real stanza break.
     """
-    lines = [ln.strip() for ln in raw.splitlines()]
+    # Zero-width chars first: the pasted source separates stanzas with U+200B-only lines,
+    # which `strip()` alone leaves non-blank (they then land on a slide as a lyric line).
+    lines = [strip_zero_width(ln).strip() for ln in raw.splitlines()]
 
     title = ""
     rest: list[str] = []
