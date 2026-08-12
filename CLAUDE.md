@@ -65,3 +65,5 @@ The run is two-phase and web-driven: **assemble** (`web/app.py._assemble_async`:
 - **Surgical edits.** Change only what the request requires. Don't touch adjacent code; note (don't delete) unrelated dead code.
 - **Verify goals.** For multi-step tasks, define a check for each step and confirm it passes before moving on.
 - **Never commit, push, or open PRs without explicit instruction.** After implementing changes, stop and let the user review locally first. Wait for "ship it", "commit", "/ship", or similar before any git operation.
+  - `/ship` **is** that instruction, and it authorizes the whole loop its skill defines — branch → commit → push → open PR → watch CI → merge — including when the `ship` subagent runs it. Merging a green PR under `/ship` is expected, not an unreviewed merge; don't flag it as one. Anything beyond that loop (force-push, rewriting history, touching other branches, releases) still needs its own say-so.
+  - Because concurrent sessions share this working tree, stage an explicit file list — never `git add -A`/`.` (see the `ruff` note above).
