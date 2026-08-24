@@ -1,8 +1,9 @@
 # JSON → `.pro` generator — architecture (#171)
 
 Design for the ProPresenter deck generator that replaces `keynote/build.py` +
-`keynote/anchors.py` in the v3 migration (epic #184). This issue is **design + a stubbed
-module skeleton**; #172 implements the serialization, #175–#179 fill in per-section detail.
+`keynote/anchors.py` in the v3 migration (epic #184). #171 was **design + a stubbed module
+skeleton**; #172 implemented the serialization library (primitives, styles, RTF); #175–#179
+fill in per-section detail and #180 wires it up.
 
 ## Goal & shape
 
@@ -63,36 +64,81 @@ New package modules under `src/worship_deck/propresenter/`:
     `fill_verse_slides`, `fill_announcements`, `fill_offering_hymn`, `fill_liturgy`,
     `fill_sermon_extra`.
   - Primitives (pure protobuf — the analog of Keynote's AppleScript primitives, minus
-    macOS): `new_presentation`, `clone_slide`, `add_cue`, `add_group`, `add_arrangement`,
-    `place_image`, `serialize`.
-- **`style_kit.py`** — loads the authored style-kit `.pro`, `prototype(style_key) -> Slide`;
-  `STYLE_KEYS` enumerates the presets.
-- **`rtf.py`** — `set_placeholder` / `set_text` + `_rtf_escape`; the Korean-RTF substitution.
+    macOS), **implemented in #172**: `new_presentation`, `new_slide`, `add_cue`, `add_group`,
+    `add_arrangement`, `place_image`, `serialize`, `load`. (No `set_transition` — see the
+    anatomy notes below.)
+- **`styles.py`** — `STYLE_KEYS`, the palette/geometry constants, and one slide builder per
+  key (replaces the planned `style_kit.py`; see Decision 2).
+- **`elements.py`** — `text` / `shape` / `image` / `web` / `line_strip` element factories.
+- **`rtf.py`** — `escape` / `document` / `plain`; builds the styled RTF runs, Korean included.
 - **`content.py`** — `DIVIDER_LABELS` + fixed liturgy texts (`APOSTLES_CREED`, `LORDS_PRAYER`).
 
-## Decision 2 — theme: **baked prototypes, not runtime reference**
+## Decision 2 — theme: **styles baked in code, not referenced or cloned**
 
 ProPresenter has **no runtime theme reference** on a slide — `PresentationSlide` carries no
-theme field, and font/color/size live on each text element (`Graphics.Text.Attributes`). So
-the look must be *in the document bytes* we generate. Therefore:
+theme field, `Action.SlideType` has `reserved "template"` (the reference was *removed* from
+the wire format), and font/color/size live on each element (`Graphics.Text.Attributes`). So
+the look must be *in the document bytes* we generate.
 
-1. The designer authors a **style-kit `.pro`** once in ProPresenter (chosen Theme applied,
-   #170): one exemplar slide per `STYLE_KEYS` preset. Each editable run holds a placeholder
-   token (`{{TEXT}}`, `{{TEXT_KO}}`, `{{TEXT_EN}}`) in its `rtf_data`.
-2. Each `fill_*` **clones** the matching prototype (`clone_slide` → deep-copy `base_slide`,
-   fresh UUIDs) and **swaps only the text** (`rtf.set_placeholder`), preserving all baked
-   styling.
-3. Section-specific looks are simply different prototypes — no per-section config lives
-   outside the deck.
+The original plan was to clone exemplar slides out of an authored style-kit `.pro` (#170).
+**#170 was closed instead (2026-08-12)**: under ground-up generation there is no separate
+"author a Theme in ProPresenter" step, and Phase 5 (#222/#223) wants the look adjustable at
+review time — which a binary style kit works against. So:
 
-Consequence: evolving the look = re-author the style-kit (#170) and regenerate; the operator
-reconfigures nothing on import. The style-kit is **version-sensitive like the protos**
-(re-pin at #191). Its binary is #170's deliverable; `style_kit.STYLE_KIT_PATH` is the
-interface point here.
+1. `styles.py` holds the look as **code constants** — the #168 interim pick (lyric Option A
+   검정 스트립, full-screen Option 3 네이비 프레임) transcribed from
+   `scripts/render_style_samples.py`; `docs/style-samples/*.png` is the rendering to match.
+2. One builder per `STYLE_KEYS` entry composes a finished `Slide` out of `elements.py`
+   (text / shape / image / web elements) and `rtf.py` (the styled text runs).
+3. Section-specific looks are just different builders. `build.new_slide(style_key, …)`
+   dispatches; there is no `clone_slide` and no `STYLE_KIT_PATH`.
 
-> **The main #172 risk** is `rtf.py`: Korean must be emitted as RTF `\uN?` unicode escapes.
-> The existing `roundtrip.hello_world` byte-replaces ASCII text directly — that corrupts
-> Hangul, so `_rtf_escape` is genuinely new work.
+One happy find: ProPresenter's own `LineFillMask(LINE_MASK_STYLE_LINE_WIDTH)` is exactly the
+per-line black strip Option A wants, so the 검정 스트립 look is native and tracks the text as
+it wraps. Its counterpart `Fill.backgroundEffect.backgroundBlur` looked like a free blurred
+backdrop but crashes the app — the blur needs a real background image (#224).
+
+> **The main #172 risk was `rtf.py`**: Korean must be emitted as RTF `\uN` escapes, and
+> RTF's `\u` is **signed 16-bit**, so Hangul (U+AC00–U+D7A3) has to wrap negative
+> (`cp - 65536`). A raw UTF-8 byte replace — what `roundtrip.hello_world` does for ASCII —
+> corrupts it. Covered by unit tests plus a `local_only` test that re-parses the generated
+> RTF with Cocoa's own parser (`textutil`), which is what ProPresenter renders with.
+
+### Decoded `.pro` anatomy (the ground truth #172 is built on)
+
+Read off real PP 21.4 documents (`~/Documents/ProPresenter/Libraries/Default/CMG - *.pro`)
+and our own generated decks:
+
+- `Presentation` sets `uuid` (UPPERCASE canonical), `name`, `application_info`,
+  `chord_chart.platform`, and empty-but-present `background` / `ccli`. The canvas size is
+  **per slide** (`base_slide.size` = 1920×1080), not per document.
+- `Cue` → `Action.type = ACTION_TYPE_PRESENTATION_SLIDE (11)` — mandatory; the oneof alone
+  isn't enough — → `action.slide.presentation.base_slide`.
+- Groups reference **cue** UUIDs (`cue_identifiers`); arrangements reference **group** UUIDs.
+- Every element carries a closed unit-square `path` with `shape.type = TYPE_RECTANGLE`, and
+  `fill.enable` / `stroke.enable` are the gates — media with no `fill.enable` never draws.
+  `Slide.Element.info` is a bitmask: `3` for text (template|text), `1` for shapes.
+- Media: images use `fill.media.url.absolute_string = "file:///…"` (percent-encoded) plus
+  `media.image.drawing`; the Glossa iframe uses the same slot with `media.web_content`.
+- **Element order is front-to-back**: `elements[0]` is the *topmost* layer. In a PP-authored
+  deck the full-bleed background box is the *last* element. Building back-to-front and
+  reversing on the way out (`styles._front_to_back`) is what keeps text above the backdrop —
+  get this wrong and the tint paints over everything.
+- **Do not write `PresentationSlide.transition`.** ProPresenter 21.4 silently *drops every
+  slide that carries one* unless it references a real built-in `Effect` (the group reports
+  zero slides and the thumbnail 404s); a deck-level `Presentation.transition` makes the whole
+  document unreadable to the app. The `Effect` identity is an opaque `render_id` that no deck
+  on disk or string in the app bundle reveals — #174 must decode a hand-authored slide first.
+- **Do not use `Fill.backgroundEffect` (background blur).** It looked like a free blurred
+  backdrop; 21.4 draws it as an unrendered placeholder and **crashes**
+  (`SlideDataLinkResolver::ProcessCueState`) when the slide is selected. The 네이비 프레임 blur
+  needs a pre-blurred background image (#224) instead.
+- Web elements render as a placeholder in thumbnails (live content only) — placement can be
+  verified statically, loading cannot.
+- RTF: `\fsN` is the point size **doubled**, `\slleadingN` is leading in twips (points × 20),
+  an in-slide line break is backslash + LF (not `\par`), the color table's index 0 is a
+  reserved blank so the first usable color is `\cf1`, and `text.attributes` duplicates the
+  font/color/alignment the RTF also encodes — write both from the same `Style`.
 
 ## Decision 3 — how static vs weekly slides assemble into the deck
 
@@ -123,7 +169,7 @@ single-`.pro` scope.
 
 | Work | Issue |
 |---|---|
-| Real serialization bodies, RTF escaping, style-kit binary | #172, #170 |
+| Real serialization bodies, RTF escaping, baked styles | #172 ✅ |
 | Lyric re-chunk into ≤2-line slides | #175 |
 | Arrangement marks → groups + `Arrangement` | #176 |
 | Glossa iframe element on bilingual lyric slides | #177 |
@@ -131,15 +177,36 @@ single-`.pro` scope.
 | Offering hymn (봉헌) image path | #179 |
 | Wire generator + dual build buttons | #180 |
 
-## Verification (this issue)
-
-Skeleton only — bodies raise `NotImplementedError`:
+## Verification
 
 ```bash
-ruff check src/worship_deck/propresenter/build.py src/worship_deck/propresenter/style_kit.py \
-           src/worship_deck/propresenter/rtf.py src/worship_deck/propresenter/content.py
-python -c "from worship_deck.propresenter import build, style_kit, rtf, content"
-python -c "from worship_deck.propresenter.build import build; build(None, '/tmp/x.pro')"  # NotImplementedError
+ruff check src/worship_deck/propresenter tests/test_propresenter_build.py scripts/make_pro_demo.py
+pytest -m "not local_only" tests/test_propresenter_build.py   # pure protobuf, CI-safe
+pytest -m local_only tests/test_propresenter_build.py         # Cocoa RTF re-parse (textutil)
+python scripts/make_pro_demo.py                               # -> the local ProPresenter library
 ```
 
-#172 adds the round-trip test (generated `.pro` re-parses and opens in ProPresenter).
+### Seeing what ProPresenter actually renders
+
+Enable *Preferences → Network* in ProPresenter and it serves a local HTTP API that returns
+**rendered slide JPEGs** — the fastest feedback loop for anything visual, and the only way to
+tell "wrong bytes" from "wrong layout" without a human at the screen:
+
+```bash
+PORT=<from Preferences → Network>
+LIB=$(curl -s localhost:$PORT/v1/libraries | jq -r '.[0].uuid')
+curl -s localhost:$PORT/v1/library/$LIB                      # name -> presentation uuid
+curl -s localhost:$PORT/v1/presentation/<uuid>               # groups[].slides[] — EMPTY means
+                                                             # ProPresenter rejected the slides
+curl -s -o s0.jpg localhost:$PORT/v1/presentation/<uuid>/thumbnail/0?quality=900
+```
+
+The library UUID is regenerated on every restart, so look it up each time. ProPresenter only
+rescans the library folder at launch, so writing a `.pro` needs a restart before it appears.
+Crashes land in `~/Library/Logs/DiagnosticReports/ProPresenter-*.ips` — the faulting frame
+names the subsystem that rejected the document.
+
+`scripts/make_pro_demo.py` writes one cue per style key (grouped by section, with a Glossa
+web element) using the #189 sample content — open it in ProPresenter and compare against
+`docs/style-samples/`. The per-section `fill_*` bodies remain `NotImplementedError` until
+#175–#179, and `build()` until #180.
