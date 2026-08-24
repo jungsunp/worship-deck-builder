@@ -27,7 +27,7 @@ import presentation_pb2
 
 # isort: on
 
-_SAMPLE_TEXT = b"Point #1"  # the visible run on the sample deck's first slide
+_SAMPLE_TEXT = b"He is here"  # the visible run on the sample deck's first slide
 
 
 def _has_sample_text(action) -> bool:
@@ -73,11 +73,7 @@ def hello_world(sample_pro: str | Path, out_pro: str | Path, text: str = "Hello 
 
 
 def _default_sample() -> Path:
-    return (
-        Path.home()
-        / "Library/Application Support/RenewedVision/ProPresenter"
-        / "UserWorkspaces/ProPresenter/Libraries/Sample 1/Sample Presentation.pro"
-    )
+    return Path.home() / "Documents/ProPresenter/Libraries/Default/CMG - Worship 1.pro"
 
 
 if __name__ == "__main__":
