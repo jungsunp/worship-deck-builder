@@ -14,6 +14,7 @@ presentation_pb2 = pytest.importorskip(
 )
 import graphicsData_pb2  # deliberately after the importorskip guard
 
+from worship_deck.lyrics import linebreak
 from worship_deck.propresenter import build, elements, rtf, styles
 
 _KO = "주 하나님"
@@ -153,6 +154,117 @@ def test_web_element_carries_the_url_as_web_content():
     assert media.web_content.url.absolute_string == "https://glossa.live/"
 
 
+# ── Sung-lyric slides + fillers (#175) ────────────────────────────────────────
+
+def _slide_of(pres, index):
+    return pres.cues[index].actions[0].slide.presentation.base_slide
+
+
+def _line_count(pres, index) -> int:
+    """How many text lines a cue's slide carries — an in-slide break is backslash + LF."""
+    return _rtf_text(_slide_of(pres, index)).count("\\\n") + 1
+
+
+def _green(slide) -> bool:
+    r, g, b = (round(c * 255) for c in (
+        slide.background_color.red, slide.background_color.green, slide.background_color.blue))
+    return slide.draws_background_color and (r, g, b) == styles.CHROMA_GREEN
+
+
+def test_sung_lyric_slides_are_backed_with_the_church_key_green():
+    """Left transparent they render black over the camera instead of keying out (#192)."""
+    assert styles.CHROMA_GREEN == (0x81, 0xD6, 0x54)
+    assert _green(styles.worship_lyric_ko([_KO]))
+    assert _green(styles.song_banner("다시 한 번"))
+    assert _green(styles.blank_green())
+    # Full-screen sections deliberately stay opaque — they replace the camera, not overlay it.
+    assert not _green(styles.section_divider("봉 헌"))
+
+
+def test_song_banner_puts_the_title_on_one_strip_in_the_lyric_zone():
+    slide = styles.song_banner("다시 한 번")
+    element = slide.elements[0].element
+
+    assert element.text_line_mask.enabled  # same Option A strip idiom as the lyrics
+    assert element.bounds.origin.y + element.bounds.size.height == (
+        styles.CANVAS[1] - styles.LYRIC_ZONE_BOTTOM
+    )
+
+
+def test_fill_song_emits_banner_then_lyrics_then_a_trailing_blank():
+    pres = build.new_presentation("demo")
+    build.fill_song(pres, {"title": "다시 한 번", "lines": ["가", "나", "다"]})
+
+    # 3 lines -> 2 slides (2 + 1), between the title banner and the blank.
+    assert len(pres.cues) == 4
+    assert _line_count(pres, 1) == 2 and _line_count(pres, 2) == 1
+    assert rtf.escape("가\n나") in _rtf_text(_slide_of(pres, 1))
+    assert rtf.escape("다") in _rtf_text(_slide_of(pres, 2))
+    assert not _slide_of(pres, 3).elements  # the blank green cue
+    group = pres.cue_groups[0]
+    assert group.group.name == "다시 한 번"
+    assert len(group.cue_identifiers) == 4
+
+
+def test_fill_song_breaks_a_stanza_and_survives_empty_lyrics():
+    pres = build.new_presentation("demo")
+    build.fill_song(pres, {"title": "A", "lines": ["가", "", "나"]})
+    assert len(pres.cues) == 4  # blank line forces a slide break: 가 | 나
+
+    empty = build.new_presentation("demo")
+    build.fill_song(empty, {"title": "B", "lines": []})
+    assert len(empty.cues) == 2  # banner + blank only
+
+
+def test_fill_song_rebreaks_overlong_lines_that_never_saw_assemble():
+    """Choir pastes / typed lyrics skip linebreak.rebreak at assemble; an unbroken line would
+    wrap inside a strip box measured for fewer lines, clipping the last one."""
+    long_line = "주의 사랑이 내 안에 넘쳐 흐르네 언제나 나와 함께 하시네"
+    assert len(long_line) > linebreak.MAX_CHARS
+    pres = build.new_presentation("demo")
+    build.fill_song(pres, {"title": "A", "lines": [long_line]})
+
+    assert len(pres.cues) == 3  # banner + one lyric slide + blank
+    assert _line_count(pres, 1) == 2  # the one long line, re-broken and packed onto one slide
+
+
+def test_fill_song_labels_lyric_cues_and_plays_the_arrangement():
+    """Labeled sections (#113) play in arrangement order with the label as the cue name; they
+    stay in one group until #176 gives each label its own group + Arrangement."""
+    pres = build.new_presentation("demo")
+    build.fill_song(pres, {
+        "title": "A",
+        "lines": ["v1", "", "c1"],
+        "sections": [{"label": "V1", "lines": ["v1"]}, {"label": "C", "lines": ["c1"]}],
+        "arrangement": "V1 C V1",
+    })
+
+    assert [c.name for c in pres.cues] == ["A", "V1", "C", "V1", ""]
+    assert len(pres.cue_groups) == 1
+    assert not pres.arrangements
+
+
+def test_fill_worship_songs_gives_each_medley_song_its_own_group():
+    pres = build.new_presentation("demo")
+    build.fill_worship_songs(pres, [
+        {"title": "첫째", "lines": ["가"]},
+        {"title": "둘째", "lines": ["나"]},
+    ])
+
+    assert [g.group.name for g in pres.cue_groups] == ["첫째", "둘째"]
+    assert len(pres.cues) == 6  # (banner + lyric + blank) x 2
+
+
+def test_fill_confession_leads_with_a_divider_carrying_the_bracketed_title():
+    pres = build.new_presentation("demo")
+    build.fill_confession(pres, {"title": "예수 나의 첫사랑", "lines": ["가"]})
+
+    assert [g.group.name for g in pres.cue_groups] == ["고백의 찬양", "예수 나의 첫사랑"]
+    divider = _rtf_text(_slide_of(pres, 0))
+    assert rtf.escape("고백의 찬양") in divider
+    assert rtf.escape("[ 예수 나의 첫사랑 ]") in divider
+
+
 # ── Presentation / cue / group wiring ─────────────────────────────────────────
 
 def test_new_presentation_identifies_itself_as_propresenter():
@@ -205,7 +317,8 @@ def test_arrangement_references_groups_and_becomes_the_selected_one():
 
 def test_no_slide_carries_a_transition():
     """ProPresenter 21.4 drops any slide that carries a transition without a real Effect, so
-    the generator must not write one at all (see the note in build.py; #174 owns this)."""
+    the generator must not write one at all. Decks instead inherit the global cut transition
+    set in the ProPresenter UI (#174, closed: no deck-level transition, ever)."""
     pres = build.new_presentation("demo")
     build.add_cue(pres, build.new_slide("liturgy", "사도신경", ["전능하사"]), "s")
 

@@ -1,9 +1,10 @@
 """Ground-up ProPresenter ``.pro`` generator (v3 migration, epic #184).
 
-**The protobuf primitives are implemented (#172); the per-section ``fill_*`` bodies
-are not** — those land with their content details in #175–#179, as does ``build()``
-itself. See ``docs/propresenter-generator-design.md`` for the design rationale and
-the decoded ``.pro`` anatomy these primitives are built from.
+**The protobuf primitives are implemented (#172), and the sung-lyric fillers with
+them (#175: ``fill_worship_songs`` / ``fill_song`` / ``fill_confession``).** The
+remaining ``fill_*`` bodies land with their content details in #176–#179, as does
+``build()`` itself. See ``docs/propresenter-generator-design.md`` for the design
+rationale and the decoded ``.pro`` anatomy these primitives are built from.
 
 How this differs from the Keynote builder it replaces:
 
@@ -30,6 +31,7 @@ analog of today's single ``.key``. Service sections become ProPresenter *groups*
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 # Import order is load-bearing here; sorting it moves `pb` below the *_pb2 imports that
@@ -45,9 +47,11 @@ import uuid_pb2
 import url_pb2
 
 # isort: on
+from worship_deck.lyrics import linebreak
+from worship_deck.lyrics.transcribe import Song, arranged_chunks
 from worship_deck.parse import ServiceData
 
-from . import elements, styles
+from . import content, elements, styles
 
 # The dev/church ProPresenter build the vendored protos are pinned to (#191 re-pins to 18.4).
 PP_VERSION = (21, 4)
@@ -84,24 +88,72 @@ def fill_date(pres: presentation_pb2.Presentation, date: str, sermon_title: str)
     raise NotImplementedError("#178")
 
 
+def _chunks(song: Song) -> list[tuple[str, list[str]]]:
+    """The song's ``(section label, ≤2 lines)`` slides, in play order (#175).
+
+    Two Korean lines per slide is what the church shows today and what the #189 samples are
+    drawn at — a lower-third over the live band only has room for that much. So the grouping is
+    ``lyrics.transcribe.arranged_chunks`` unchanged; what is ProPresenter-specific is
+    *re-breaking first*.
+
+    ``linebreak.rebreak`` runs at assemble time, but only over gasazip lookups — choir pastes,
+    typed lyrics, library songs and anything the operator edited in review reach the builder
+    unbroken. Keynote survives that (its banners autoshrink); here ``styles.worship_lyric_ko``
+    sizes its strip block from ``len(lines)``, so an over-long line wraps inside a box measured
+    for fewer lines and the last line is clipped. Same cap as Keynote (22 chars — the strips
+    hug the text, and a wider line reads as a full-bleed bar), applied a second time here.
+    """
+    song = replace(
+        song,
+        lines=linebreak.rebreak(song.lines),
+        sections=[{**s, "lines": linebreak.rebreak(s["lines"])} for s in song.sections],
+    )
+    return arranged_chunks(song)
+
+
 def fill_worship_songs(pres: presentation_pb2.Presentation, songs: list[dict]) -> None:
-    """찬양 medley — one title + lyric group per song. Delegates to ``fill_song`` per song."""
-    raise NotImplementedError("lyric re-chunk #175 / arrangement #176")
+    """찬양 medley — one keyed title banner + lyric group per song (#175)."""
+    for song in songs:
+        fill_song(pres, song)
 
 
 def fill_song(pres: presentation_pb2.Presentation, song: dict) -> None:
-    """One song: a title slide + ≤2-line lyric slides. Shared by worship + confession.
+    """One song: a keyed title banner, its ≤2-line lyric slides, and a trailing blank (#175).
 
-    When ``song['sections']`` is populated (operator-labeled V1/C/B, #113), each becomes
-    its own ``CueGroup`` and ``song['arrangement']`` drives an ``Arrangement`` (#176);
-    otherwise the flat ``song['lines']`` are chunked into one group (#175).
+    Shared by the worship medley and 고백의 찬양. Everything sits over the live camera, so all
+    three slide kinds are chroma-green backed; the trailing ``blank_green`` is what the operator
+    arrows onto between songs (ProPresenter's Clear blanks to black and drops the key).
+
+    The whole song is one ``CueGroup`` named after it. When ``song['sections']`` is populated
+    (operator-labeled V1/C/B, #113) the lyrics still play in arrangement order, with each
+    slide's label as its cue name; splitting those labels into their own groups plus a real
+    ``Arrangement`` is #176. An empty ``lines`` yields banner + blank only.
     """
-    raise NotImplementedError("#175 / #176")
+    parsed = Song(**song)
+    cue_uuids = [add_cue(pres, new_slide("song_banner", parsed.title), parsed.title)]
+    for label, lines in _chunks(parsed):
+        cue_uuids.append(add_cue(pres, new_slide("worship_lyric_ko", lines), label))
+    cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
+    add_group(pres, parsed.title, styles.GROUP_COLORS["찬양"], cue_uuids)
 
 
 def fill_confession(pres: presentation_pb2.Presentation, song: dict) -> None:
-    """고백의 찬양 — divider + title + lyric slides. Delegates to ``fill_song``."""
-    raise NotImplementedError("#175")
+    """고백의 찬양 — full-screen divider + blank, then the song's banner + lyrics (#175).
+
+    Mirrors ``keynote.build.fill_confession_slides``: the divider carries the section heading
+    over the week's bracketed song title, and the rest of the section is exactly a worship-song
+    unit, so it delegates to ``fill_song``. Two groups result: the section divider, then the
+    song under its own title.
+    """
+    label = content.DIVIDER_LABELS["confession_song"]
+    color = styles.GROUP_COLORS[label]
+    parsed = Song(**song)
+    cue_uuids = [
+        add_cue(pres, new_slide("section_divider", label, f"[ {parsed.title} ]"), label),
+        add_cue(pres, new_slide("blank_green"), ""),
+    ]
+    add_group(pres, label, color, cue_uuids)
+    fill_song(pres, song)
 
 
 def fill_choir(pres: presentation_pb2.Presentation, song: dict) -> None:
@@ -246,7 +298,12 @@ def place_image(slide: slide_pb2.Slide, image_path: str) -> None:
 # document (its group reports zero slides and its thumbnail 404s), and a deck-level
 # `Presentation.transition` makes the whole document unreadable to the app. The Effect
 # identity is an opaque `render_id` that no deck on disk and no string in the app bundle
-# reveals, so #174 has to capture it by decoding a hand-authored slide first.
+# reveals, so it cannot be synthesized.
+#
+# DECIDED (#174, closed 2026-08-24): worship runs the *global* cut transition set in the
+# ProPresenter UI, which every generated deck inherits because it carries no transition of
+# its own. Do not add a transition primitive, a per-deck default, or a `Transition` field —
+# there is nothing to gain and a silently destroyed deck to lose.
 
 
 def serialize(pres: presentation_pb2.Presentation, out_pro: str) -> str:
