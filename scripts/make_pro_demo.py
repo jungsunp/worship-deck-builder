@@ -19,7 +19,9 @@ from pathlib import Path
 from worship_deck.propresenter import build, elements, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
-# The lyric slides carry the Glossa live-translation pane (#177); any page works for a look.
+# A web element stands in for the Glossa live-translation pane; any page works for a look.
+# Glossa's real home is the sermon/announcement lower third over live camera (#177) — it is
+# parked on a lyric slide here only to show a web element renders.
 GLOSSA_URL = "https://glossa.live/"
 
 LYRIC_KO = ["다시 한 번 외쳐 부르니", "예수여 나를 돌아 보소서"]
@@ -56,7 +58,7 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
 
     lyric = styles.worship_lyric_ko(LYRIC_KO)
     bilingual = styles.worship_lyric_bilingual(*LYRIC_BI)
-    # The Glossa pane is a web element on the bilingual lyric slide (#177).
+    # Web-element placement check (see the GLOSSA_URL note above).
     elements.web(bilingual, (0.0, 0.0, 640.0, 200.0), GLOSSA_URL)
 
     section(
@@ -70,11 +72,15 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
     section(
         "찬양",
         [
-            ("다시 한 번", styles.song_title("다시 한 번", "[ 예수 나의 첫사랑 되시네 ]")),
+            ("다시 한 번", styles.song_banner("다시 한 번")),
             ("C1", lyric),
             ("C1 (Glossa)", bilingual),
             ("blank", styles.blank_green()),
         ],
+    )
+    section(
+        "성가대 찬양",
+        [("주 은혜라", styles.song_title("주 은혜라", "(노희석 편곡)"))],
     )
     section("사도신경", [("사도신경", styles.liturgy("사도신경", CREED))])
     section(

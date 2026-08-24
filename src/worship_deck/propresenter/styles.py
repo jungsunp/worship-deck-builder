@@ -7,7 +7,10 @@ from; the generator bakes the look per slide from the values here.
 
 Those values are the interim pick recorded on #168: lyric **Option A (검정 스트립)** and
 full-screen **Option 3 (네이비 프레임)**. ``scripts/render_style_samples.py`` holds the same
-numbers as HTML/CSS and ``docs/style-samples/*.png`` is the rendering to match. Selectable
+numbers as HTML/CSS and ``docs/style-samples/*.png`` is the rendering to match — except the
+Option A strip metrics (``LYRIC_STRIP_PAD``, ``LYRIC_KO`` tracking/line spacing), which were
+re-tuned in #175 against ``docs/style-references/ref-hillsong.png`` on real ProPresenter
+renders: the sample CSS left the strips loose around the text and touching each other. Selectable
 presets and live restyling are Phase 5 (#222/#223) — which is exactly why these are plain
 module constants rather than a binary.
 
@@ -31,8 +34,9 @@ from . import rtf
 # The slide types the generator can produce. Each maps to one builder function below.
 STYLE_KEYS = (
     "worship_lyric_ko",         # sung lyrics, lower-third, up to 2 Korean lines
-    "worship_lyric_bilingual",  # 1 dominant KO line + 1 smaller EN line (Glossa/#177 lives here)
-    "song_title",               # song / section title banner
+    "worship_lyric_bilingual",  # 1 dominant KO line + 1 smaller EN line (needs a KO+EN source, #228)
+    "song_banner",              # keyed lower-third song title (worship medley)
+    "song_title",               # full-screen song / section title banner
     "verse_fullscreen",         # bilingual scripture body (개역한글 + ESV)
     "announcement",             # 교회소식 item (gold title + muted detail)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
@@ -51,7 +55,10 @@ ACCENT = (0xFF, 0xD4, 0x47)  # gold: verse numbers, rules, labels
 INK = (0xFF, 0xFF, 0xFF)
 MUTED = (0xBC, 0xC0, 0xC7)  # white .72 over navy — ESV body, announcement detail
 BLACK = (0x00, 0x00, 0x00)  # Option A lyric strips
-CHROMA_GREEN = (0x00, 0xFF, 0x00)  # keyed out by the ATEM (#192); see blank_green()
+# The church's exact key green, read off the current Keynote lyric slides (#192): reusing it
+# guarantees the ATEM upstream keyer treats a generated lyric slide exactly like today's.
+# It backs every sung-lyric slide, not just blank_green() — an unbacked slide renders black.
+CHROMA_GREEN = (0x81, 0xD6, 0x54)
 
 TINT_RGBA = (*NAVY, 0.62)  # sits over the (future #224) background image
 FRAME_FILL_RGBA = (0x0A, 0x14, 0x28, 0.35)
@@ -70,7 +77,12 @@ FONT_REGULAR = "AppleSDGothicNeo-Regular"
 # ── Geometry (1920×1080; transcribed from scripts/render_style_samples.py) ─────
 FRAME_INSET = (140.0, 96.0)  # x, y — the 네이비 프레임 box
 LYRIC_ZONE_BOTTOM = 72.0     # Option A: distance from the bottom edge
-LYRIC_STRIP_PAD = (34.0, 12.0)  # x, y padding of the black strip around each line
+# Half-padding of the black strip around each lyric line (``line_strip`` doubles it into
+# ProPresenter's width/height *offset*, which is the total added to the line box). Kept tight
+# so the strip hugs the text the way ref-hillsong.png does; the y value is also what opens
+# the gap between consecutive strips — the line pitch is fixed by size + line_spacing, so
+# less vertical padding means more daylight between lines.
+LYRIC_STRIP_PAD = (22.0, 4.0)
 CONTENT_INSET = (100.0, 64.0)  # padding inside the frame box
 
 
@@ -91,7 +103,7 @@ class Style:
 
 
 # Per-section type scale, matching the sample PNGs.
-LYRIC_KO = Style(FONT_BOLD, 68, bold=True, line_spacing=10.0)
+LYRIC_KO = Style(FONT_BOLD, 68, bold=True, tracking=3.0, line_spacing=20.0)
 LYRIC_EN = Style(FONT_REGULAR, 34, MUTED, tracking=1.5, line_spacing=10.0)
 TITLE = Style(FONT_BOLD, 72, bold=True, tracking=2.0, line_spacing=14.0)
 VERSE_LABEL = Style(FONT_BOLD, 31, ACCENT, bold=True, line_spacing=42.0, align="left")
@@ -165,8 +177,12 @@ def _rule(slide: slide_pb2.Slide, y: float, width: float = 96.0, height: float =
 
 
 def worship_lyric_ko(lines: list[str]) -> slide_pb2.Slide:
-    """Option A lower-third: bold white lyrics on per-line black strips, over live camera."""
-    slide = _slide()
+    """Option A lower-third: bold white lyrics on per-line black strips, over live camera.
+
+    Backed with CHROMA_GREEN, not left transparent — ProPresenter renders an empty background
+    as black, which would cover the camera instead of keying out on the ATEM (#192).
+    """
+    slide = _slide(background=CHROMA_GREEN)
     height = LYRIC_KO.size * 1.6 * len(lines) + 2 * LYRIC_STRIP_PAD[1]
     rect = (0.0, CANVAS[1] - LYRIC_ZONE_BOTTOM - height, CANVAS[0], height)
     element = el.text(slide, rect, rtf.plain("\n".join(lines), LYRIC_KO), LYRIC_KO)
@@ -175,8 +191,12 @@ def worship_lyric_ko(lines: list[str]) -> slide_pb2.Slide:
 
 
 def worship_lyric_bilingual(korean: str, english: str) -> slide_pb2.Slide:
-    """Option A lower-third with a smaller English line under the Korean (Glossa slot, #177)."""
-    slide = _slide()
+    """Option A lower-third with a smaller English line under the Korean.
+
+    Unused for now: worship lyrics are Korean-only until a pre-filled KO+EN lyric source
+    exists (#228). Keyed green for the same reason as ``worship_lyric_ko``.
+    """
+    slide = _slide(background=CHROMA_GREEN)
     ko_style = replace(LYRIC_KO, size=66)
     ko_h = ko_style.size * 1.6 + 2 * LYRIC_STRIP_PAD[1]
     en_h = LYRIC_EN.size * 1.8 + 2 * LYRIC_STRIP_PAD[1]
@@ -193,8 +213,30 @@ def worship_lyric_bilingual(korean: str, english: str) -> slide_pb2.Slide:
     return _front_to_back(slide)
 
 
+def song_banner(title: str) -> slide_pb2.Slide:
+    """Keyed lower-third song-title banner — the worship medley's per-song title.
+
+    The congregation sees a song title as a *narrow banner over the live band shot* today
+    (config/slide_map.yaml: "per song: blank-green separator + title slide + N lyric slides"),
+    so this is the Option A strip idiom in the lyric zone, one line, set exactly like the
+    lyrics — same type as the lyrics it introduces, so the two read as one banner that simply
+    changes text. ``song_title`` stays the full-screen plate for the sections that genuinely
+    read as a title card (#178).
+    """
+    slide = _slide(background=CHROMA_GREEN)
+    height = LYRIC_KO.size * 1.6 + 2 * LYRIC_STRIP_PAD[1]
+    rect = (0.0, CANVAS[1] - LYRIC_ZONE_BOTTOM - height, CANVAS[0], height)
+    element = el.text(slide, rect, rtf.plain(title, LYRIC_KO), LYRIC_KO)
+    el.line_strip(element, (*BLACK, 1.0), pad=LYRIC_STRIP_PAD)
+    return _front_to_back(slide)
+
+
 def song_title(title: str, subtitle: str = "") -> slide_pb2.Slide:
-    """Song / section title banner (worship medley, 고백의 찬양, 성가대 with its composer credit)."""
+    """Full-screen song / section title plate (고백의 찬양, 성가대 with its composer credit).
+
+    The worship medley uses ``song_banner`` instead — a title over the band shot, not a plate
+    that replaces it.
+    """
     slide = _slide(background=NAVY)
     content = _framed(slide)
     runs: list[rtf.Run] = [(title, TITLE)]
@@ -290,8 +332,11 @@ def liturgy(title: str, lines: list[str]) -> slide_pb2.Slide:
 
 
 def blank_green() -> slide_pb2.Slide:
-    """Blank chroma-green separator. The ATEM keys this green out (#192); the exact shade must
-    be matched to the church's key settings when the generator is wired up (#180)."""
+    """Blank chroma-green separator — the cue that leaves the live camera alone.
+
+    One trails every song: ProPresenter's Clear button blanks to *black*, dropping the chroma
+    overlay entirely, so the operator arrows onto a real green cue instead of reaching for it.
+    """
     return _slide(background=CHROMA_GREEN)
 
 
@@ -305,6 +350,7 @@ def image(path: str) -> slide_pb2.Slide:
 BUILDERS = {
     "worship_lyric_ko": worship_lyric_ko,
     "worship_lyric_bilingual": worship_lyric_bilingual,
+    "song_banner": song_banner,
     "song_title": song_title,
     "verse_fullscreen": verse_fullscreen,
     "announcement": announcement,

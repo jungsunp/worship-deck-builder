@@ -2,8 +2,8 @@
 
 Design for the ProPresenter deck generator that replaces `keynote/build.py` +
 `keynote/anchors.py` in the v3 migration (epic #184). #171 was **design + a stubbed module
-skeleton**; #172 implemented the serialization library (primitives, styles, RTF); #175–#179
-fill in per-section detail and #180 wires it up.
+skeleton**; #172 implemented the serialization library (primitives, styles, RTF); #175 filled the
+sung-lyric sections; #176–#179 fill in the rest and #180 wires it up.
 
 ## Goal & shape
 
@@ -48,6 +48,7 @@ generator does **not** touch `pipeline.py` or `web/app.py`.
 |---|---|
 | a service section | one `CueGroup` (label from `content.DIVIDER_LABELS`, section color) |
 | one slide's text | one `Cue` (`base_slide.elements[*].text.rtf_data`) |
+| a song (title banner + ≤2-line lyric slides + blank) | one `CueGroup` |
 | `Song.sections` (V1/C/B labels, #113) | one `CueGroup` each |
 | `Song.arrangement` (play-order string) | one `Presentation.Arrangement` (#176) |
 | offering-hymn PNG pages / lead sheets | image element on the slide (#179) |
@@ -95,7 +96,11 @@ review time — which a binary style kit works against. So:
 
 One happy find: ProPresenter's own `LineFillMask(LINE_MASK_STYLE_LINE_WIDTH)` is exactly the
 per-line black strip Option A wants, so the 검정 스트립 look is native and tracks the text as
-it wraps. Its counterpart `Fill.backgroundEffect.backgroundBlur` looked like a free blurred
+it wraps. Its `width_offset` / `height_offset` are the *total* added to each line box (half per
+side), and because the line pitch is fixed by font size + `line_spacing`, `height_offset` is
+also what sets the daylight between consecutive strips — shrink it and the strips separate.
+The #175 values (`LYRIC_STRIP_PAD`, tracking, `line_spacing`) were tuned on rendered PP output
+against `docs/style-references/ref-hillsong.png`, not taken from the sample CSS. Its counterpart `Fill.backgroundEffect.backgroundBlur` looked like a free blurred
 backdrop but crashes the app — the blur needs a real background image (#224).
 
 > **The main #172 risk was `rtf.py`**: Korean must be emitted as RTF `\uN` escapes, and
@@ -135,6 +140,13 @@ and our own generated decks:
   needs a pre-blurred background image (#224) instead.
 - Web elements render as a placeholder in thumbnails (live content only) — placement can be
   verified statically, loading cannot.
+- **Sung-lyric slides must be backed with `styles.CHROMA_GREEN` (`#81D654`, #192)**, the exact
+  green of today's Keynote lyric slides, so the ATEM's upstream keyer drops them over the live
+  camera. A slide with no background renders *black*, covering the shot. This covers the
+  worship/고백 lyric slides, the `song_banner` title, and the blank separator that trails every
+  song — ProPresenter's Clear button blanks to black and loses the key, so the operator arrows
+  onto a real green cue instead. Full-screen sections (verses, liturgy, announcements, dividers)
+  stay opaque navy: they replace the camera rather than overlay it.
 - RTF: `\fsN` is the point size **doubled**, `\slleadingN` is leading in twips (points × 20),
   an in-slide line break is backslash + LF (not `\par`), the color table's index 0 is a
   reserved blank so the first usable color is `\cf1`, and `text.attributes` duplicates the
@@ -170,7 +182,7 @@ single-`.pro` scope.
 | Work | Issue |
 |---|---|
 | Real serialization bodies, RTF escaping, baked styles | #172 ✅ |
-| Lyric re-chunk into ≤2-line slides | #175 |
+| Lyric slides (≤2-line chunks, keyed green) | #175 ✅ |
 | Arrangement marks → groups + `Arrangement` | #176 |
 | Glossa iframe element on bilingual lyric slides | #177 |
 | Verse / announcement / choir / liturgy fill detail | #178 |
@@ -201,12 +213,25 @@ curl -s localhost:$PORT/v1/presentation/<uuid>               # groups[].slides[]
 curl -s -o s0.jpg localhost:$PORT/v1/presentation/<uuid>/thumbnail/0?quality=900
 ```
 
-The library UUID is regenerated on every restart, so look it up each time. ProPresenter only
-rescans the library folder at launch, so writing a `.pro` needs a restart before it appears.
+The library UUID is regenerated on every restart, so look it up each time. ProPresenter picks
+up a **new** file in the library folder within a second or two, but it **caches one it has
+already read** — overwriting a `.pro` in place leaves the app serving the old slides (the
+library listing even keeps the stale presentation UUID). So iterate by writing a *new
+filename* each round rather than restarting the app.
 Crashes land in `~/Library/Logs/DiagnosticReports/ProPresenter-*.ips` — the faulting frame
 names the subsystem that rejected the document.
 
-`scripts/make_pro_demo.py` writes one cue per style key (grouped by section, with a Glossa
-web element) using the #189 sample content — open it in ProPresenter and compare against
-`docs/style-samples/`. The per-section `fill_*` bodies remain `NotImplementedError` until
-#175–#179, and `build()` until #180.
+`scripts/make_pro_demo.py` writes one cue per style key (grouped by section, with a web
+element standing in for Glossa) using the #189 sample content — open it in ProPresenter and
+compare against `docs/style-samples/`. The sung-lyric `fill_*` bodies are live (#175); the
+rest remain `NotImplementedError` until #176–#179, and `build()` until #180.
+
+**Lines per lyric slide is 2, not a ProPresenter-specific density.** A lower-third over the
+live band has room for two Korean lines, which is what the church shows today and what the
+#189 samples are drawn at (`render_style_samples.py`: *"1. 예배 찬양 — 한글 2줄"*), so
+`build._chunks` reuses `lyrics.transcribe.arranged_chunks` unchanged. What *is* specific here
+is re-running `lyrics.linebreak.rebreak` at build time: it runs at assemble over gasazip
+lookups only, and `styles.worship_lyric_ko` sizes its strip block from `len(lines)`, so an
+unbroken choir/typed line wraps inside a box measured for fewer lines and clips. Bilingual
+lyric slides (1 dominant KO line + 1 smaller EN line) wait on a pre-filled KO+EN lyric source
+(#228) — Glossa is the *sermon and announcement* lower third (#177), not a worship one.
