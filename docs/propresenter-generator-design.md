@@ -3,7 +3,8 @@
 Design for the ProPresenter deck generator that replaces `keynote/build.py` +
 `keynote/anchors.py` in the v3 migration (epic #184). #171 was **design + a stubbed module
 skeleton**; #172 implemented the serialization library (primitives, styles, RTF); #175 filled the
-sung-lyric sections; #176–#179 fill in the rest and #180 wires it up.
+sung-lyric sections; #176 was built and rejected (Decision 4); #178–#179 fill in the rest and
+#180 wires it up.
 
 ## Goal & shape
 
@@ -40,17 +41,17 @@ generator does **not** touch `pipeline.py` or `web/app.py`.
   - Groups reference cues by UUID (`cue_identifiers`), so ordering is: build cues, collect
     their UUIDs, add a group listing them.
   - `Presentation.arrangements` — `Arrangement{ name; repeated group_identifiers }`, a
-    play-order over groups. Used for worship-song repeats (#176).
+    play-order over groups. **Deliberately not written** — see Decision 4.
 
 ### Content → proto mapping
 
 | `ServiceData` | `.pro` |
 |---|---|
 | a service section | one `CueGroup` (label from `content.DIVIDER_LABELS`, section color) |
+| a medley song | one `CueGroup`, hue cycled from `styles.SONG_COLORS` so songs read apart |
 | one slide's text | one `Cue` (`base_slide.elements[*].text.rtf_data`) |
 | a song (title banner + ≤2-line lyric slides + blank) | one `CueGroup` |
-| `Song.sections` (V1/C/B labels, #113) | one `CueGroup` each |
-| `Song.arrangement` (play-order string) | one `Presentation.Arrangement` (#176) |
+| `Song.sections` / `Song.arrangement` (#113) | expanded cues + per-slide `Action.Label` — **not** groups (Decision 4) |
 | offering-hymn PNG pages / lead sheets | image element on the slide (#179) |
 
 ## Decision 1 — module layout (mirror the `fill_*` decomposition)
@@ -124,7 +125,8 @@ and our own generated decks:
   `fill.enable` / `stroke.enable` are the gates — media with no `fill.enable` never draws.
   `Slide.Element.info` is a bitmask: `3` for text (template|text), `1` for shapes.
 - Media: images use `fill.media.url.absolute_string = "file:///…"` (percent-encoded) plus
-  `media.image.drawing`; the Glossa iframe uses the same slot with `media.web_content`.
+  `media.image.drawing`; web content uses the same slot with `media.web_content` (that is how
+  the Glossa **prop** is shaped, though the app authors it, not us — see "Glossa is a Prop").
 - **Element order is front-to-back**: `elements[0]` is the *topmost* layer. In a PP-authored
   deck the full-bleed background box is the *last* element. Building back-to-front and
   reversing on the way out (`styles._front_to_back`) is what keeps text above the backdrop —
@@ -166,6 +168,43 @@ in `build()` (the liturgy order — no landmark detection). Two content origins:
 Keynote pipeline doesn't generate it either; the operator handles it. This is why no
 `.proPlaylist` is generated (see below).
 
+## Decision 4 — song sections stay cue names, not groups (#176 closed, not built)
+
+#176 planned to port the #113 arrangement model natively: each operator-labeled section
+(`V1`/`C`/`B`) as its own colored `CueGroup`, its cues stored **once**, and repeats expressed as
+repeated group references in a `Presentation.Arrangement` the operator could reorder live.
+
+It was implemented and verified end-to-end against ProPresenter 21.4 on the real 2026-08-23
+medley. **It works** — that is not why it was dropped:
+
+- PP accepts the same group UUID referenced many times in one arrangement. 36 stored cues played
+  back as **59 slides** (thumbnails 0–58, 404 at 59), matching the expanded deck exactly, and the
+  repeated positions rendered byte-identical thumbnails.
+- PP names the library item `<deck> - [ <arrangement> ]`, confirming it read and selected ours.
+
+It was rejected on **operability**, after looking at it in the app:
+
+- **Groups do not nest.** `Group` (`proto/groups.proto:14`) has `uuid / name / color / hotKey`
+  and no parent field; `Presentation.cue_groups` is a flat repeated list. Nesting exists only for
+  playlists (folders of whole presentations). So section bars are *siblings* of the song bar —
+  collapsing a song leaves its `V1`/`C`/`B` bars open and looking like separate songs.
+- The weekly medley went from **5 bars to 18**, each with its own color, for a volunteer operator
+  to navigate on a Sunday morning. That cost is paid every week; live reordering is wanted rarely.
+- Nothing is actually lost by skipping it: `transcribe.arranged_chunks` already expands repeats
+  into cues, and each lyric cue carries its section label as a ProPresenter **slide label** —
+  so the V1/C/B structure stays visible in the grid. Only reorderability goes.
+
+  Note the label is `Action.Label` (`text` + its own `color`, `action.proto:40`), **not**
+  `Cue.name`: PP does not surface the cue name in the grid, and its HTTP API reports a
+  named-but-unlabeled cue as `{"label": ""}`. `build.add_cue` writes it when given a
+  `label_color`; `styles.section_color` supplies the per-label tint.
+
+Consequences for the generator: `build.fill_song` keeps one `CueGroup` per song, `add_arrangement`
+stays an unused #172 primitive, and **no deck should write `Presentation.arrangements` or
+`selected_arrangement`**. Revisit only if a service actually needs to re-sequence a song live —
+and note the fix would be re-adding the flat section bars, not nesting them, which the format
+cannot express.
+
 ## Future: playlists & per-section theming (recorded, not built)
 
 Because the look is baked *inside each `.pro`*, a generated **playlist** buys nothing for
@@ -183,8 +222,8 @@ single-`.pro` scope.
 |---|---|
 | Real serialization bodies, RTF escaping, baked styles | #172 ✅ |
 | Lyric slides (≤2-line chunks, keyed green) | #175 ✅ |
-| Arrangement marks → groups + `Arrangement` | #176 |
-| Glossa iframe element on bilingual lyric slides | #177 |
+| Arrangement marks → groups + `Arrangement` | #176 — built, measured, rejected (Decision 4) |
+| Glossa translation | #177 — it's a Prop, not a slide; generator writes nothing |
 | Verse / announcement / choir / liturgy fill detail | #178 |
 | Offering hymn (봉헌) image path | #179 |
 | Wire generator + dual build buttons | #180 |
@@ -221,10 +260,51 @@ filename* each round rather than restarting the app.
 Crashes land in `~/Library/Logs/DiagnosticReports/ProPresenter-*.ips` — the faulting frame
 names the subsystem that rejected the document.
 
-`scripts/make_pro_demo.py` writes one cue per style key (grouped by section, with a web
-element standing in for Glossa) using the #189 sample content — open it in ProPresenter and
-compare against `docs/style-samples/`. The sung-lyric `fill_*` bodies are live (#175); the
-rest remain `NotImplementedError` until #176–#179, and `build()` until #180.
+`scripts/make_pro_demo.py` writes one cue per style key (grouped by section) using the #189
+sample content — open it in ProPresenter and compare against `docs/style-samples/`. The
+sung-lyric `fill_*` bodies are live (#175); the rest remain `NotImplementedError` until
+#178–#179, and `build()` until #180. No cue anywhere carries a Glossa web element — that is a
+prop, set up once on the church mini.
+
+**Glossa is a Prop, so the generator writes nothing for it.** Glossa is the live KO→EN
+translation, and #177 first built it as a chroma-green cue holding a web element, placed before
+말씀 and 교회 소식. That was wrong on two counts and the code was removed.
+
+*Wrong tool.* A slide-borne web element **replaces** whatever is under it, so the operator would
+have to choose between a verse plate and the translation, and translation would only start and
+stop at cue boundaries the generator guessed at a week in advance. A ProPresenter **Prop** is its
+own layer (`Action.ClearType.CLEAR_TARGET_LAYER_PROP`): it composites *over* the current slide —
+green lyric slides, navy plates, announcements alike — and the operator toggles it whenever a
+moment calls for it, including sections nobody scripted.
+
+*Wrong place.* A prop cannot ride in the weekly file even if we wanted it to. `Presentation` has
+no props field; props live in the machine-local `~/Documents/ProPresenter/Configuration/Props`
+store (sibling of `Groups`, `Labels`, `Macros`), and a cue can only *reference* one through
+`Action.PropType.identification` → `CollectionElementType{parameter_uuid, parameter_name}` — a
+UUID from one machine's library, the same non-portability that sank group presets in #176. So the
+Glossa prop is a **one-time setup on the church Mac mini**, and it survives every weekly rebuild
+because the generator never touches it:
+
+1. **Props** panel → add a prop, name it `Glossa`.
+2. Add a **Web** element to it; URL = the church's `glossa.live/embed/<service-id>`.
+3. Size it as a lower third and tick **Continuous Render** (without it the web view is captured
+   once and the translation never ticks).
+4. Confirm it toggles on and off over a live slide, and that clearing the slide layer leaves the
+   prop up — props clear on their own layer (`CLEAR_TARGET_LAYER_PROP`).
+
+The URL carries the service id, so if Glossa ever issues a per-service room the prop needs
+re-pointing; a stable room means step 2 is done forever. Either way it is operator config on one
+machine, never a build input.
+
+That last detail is the clincher: **no message in the vendored protos models Continuous Render** —
+`Media.WebContentTypeProperties` is exactly `{drawing, url}`, and nothing anywhere matches
+`refresh|continuous|render|reload`. A *generated* web cue provably could not request
+re-rasterization; a hand-made prop just checks the box.
+
+Two things still want a human at the church: the ATEM keys ProPresenter's output, so the prop is
+only visible over camera while something **green** is on screen — a cleared (black) output keys
+nothing, so the 말씀 section (#178) needs a `blank_green` cue to sit on. And browser-rendered text
+antialiases against `#81D654` differently than native text, so the key may fringe (from #192).
 
 **Lines per lyric slide is 2, not a ProPresenter-specific density.** A lower-third over the
 live band has room for two Korean lines, which is what the church shows today and what the
@@ -234,4 +314,5 @@ is re-running `lyrics.linebreak.rebreak` at build time: it runs at assemble over
 lookups only, and `styles.worship_lyric_ko` sizes its strip block from `len(lines)`, so an
 unbroken choir/typed line wraps inside a box measured for fewer lines and clips. Bilingual
 lyric slides (1 dominant KO line + 1 smaller EN line) wait on a pre-filled KO+EN lyric source
-(#228) — Glossa is the *sermon and announcement* lower third (#177), not a worship one.
+(#228). Note that #228 is the *only* bilingual worship path: Glossa is not a slide feature at
+all — it is a prop the operator toggles over any section (#177).

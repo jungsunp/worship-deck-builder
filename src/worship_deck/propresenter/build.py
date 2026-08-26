@@ -2,7 +2,7 @@
 
 **The protobuf primitives are implemented (#172), and the sung-lyric fillers with
 them (#175: ``fill_worship_songs`` / ``fill_song`` / ``fill_confession``).** The
-remaining ``fill_*`` bodies land with their content details in #176–#179, as does
+remaining ``fill_*`` bodies land with their content details in #178–#179, as does
 ``build()`` itself. See ``docs/propresenter-generator-design.md`` for the design
 rationale and the decoded ``.pro`` anatomy these primitives are built from.
 
@@ -112,29 +112,47 @@ def _chunks(song: Song) -> list[tuple[str, list[str]]]:
 
 
 def fill_worship_songs(pres: presentation_pb2.Presentation, songs: list[dict]) -> None:
-    """찬양 medley — one keyed title banner + lyric group per song (#175)."""
-    for song in songs:
-        fill_song(pres, song)
+    """찬양 medley — one keyed title banner + lyric group per song (#175).
+
+    Each song gets the next color in ``styles.SONG_COLORS``: the weekly deck is one flat list of
+    group bars, so a distinct hue per song is what marks where one ends and the next begins.
+    """
+    for i, song in enumerate(songs):
+        fill_song(pres, song, styles.SONG_COLORS[i % len(styles.SONG_COLORS)])
 
 
-def fill_song(pres: presentation_pb2.Presentation, song: dict) -> None:
+def fill_song(
+    pres: presentation_pb2.Presentation,
+    song: dict,
+    color: tuple[int, int, int] | None = None,
+) -> None:
     """One song: a keyed title banner, its ≤2-line lyric slides, and a trailing blank (#175).
 
     Shared by the worship medley and 고백의 찬양. Everything sits over the live camera, so all
     three slide kinds are chroma-green backed; the trailing ``blank_green`` is what the operator
     arrows onto between songs (ProPresenter's Clear blanks to black and drops the key).
 
-    The whole song is one ``CueGroup`` named after it. When ``song['sections']`` is populated
-    (operator-labeled V1/C/B, #113) the lyrics still play in arrangement order, with each
-    slide's label as its cue name; splitting those labels into their own groups plus a real
-    ``Arrangement`` is #176. An empty ``lines`` yields banner + blank only.
+    The whole song is one ``CueGroup`` named after it, colored by ``color`` (the medley cycles
+    ``styles.SONG_COLORS`` so songs read apart). When ``song['sections']`` is populated
+    (operator-labeled V1/C/B, #113) the lyrics play in arrangement order and each lyric cue
+    carries its label as a colored ProPresenter **slide label**, so the V1/C/B structure stays
+    readable in the grid without any of it becoming a group.
+
+    Giving each label its own group + a real ``Arrangement`` was built and measured under #176 and
+    **rejected**: ProPresenter groups do not nest (``Group`` has no parent field), so section bars
+    end up siblings of the song bar — collapsing a song leaves them open, and the weekly medley
+    went from 5 bars to 18 for a volunteer to navigate. See design doc Decision 4; don't redo it.
+
+    An empty ``lines`` yields banner + blank only.
     """
     parsed = Song(**song)
     cue_uuids = [add_cue(pres, new_slide("song_banner", parsed.title), parsed.title)]
     for label, lines in _chunks(parsed):
-        cue_uuids.append(add_cue(pres, new_slide("worship_lyric_ko", lines), label))
+        cue_uuids.append(
+            add_cue(pres, new_slide("worship_lyric_ko", lines), label, styles.section_color(label))
+        )
     cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
-    add_group(pres, parsed.title, styles.GROUP_COLORS["찬양"], cue_uuids)
+    add_group(pres, parsed.title, color or styles.GROUP_COLORS["찬양"], cue_uuids)
 
 
 def fill_confession(pres: presentation_pb2.Presentation, song: dict) -> None:
@@ -229,10 +247,20 @@ def new_slide(style_key: str, *args, **kwargs) -> slide_pb2.Slide:
 
 
 def add_cue(
-    pres: presentation_pb2.Presentation, slide: slide_pb2.Slide, name: str = ""
+    pres: presentation_pb2.Presentation,
+    slide: slide_pb2.Slide,
+    name: str = "",
+    label_color: tuple[int, int, int] | None = None,
 ) -> uuid_pb2.UUID:
     """Wrap ``slide`` in a ``Cue`` (via ``Action`` -> ``PresentationSlide``), append it to
-    ``pres.cues``, and return the cue's UUID (for the owning group's ``cue_identifiers``)."""
+    ``pres.cues``, and return the cue's UUID (for the owning group's ``cue_identifiers``).
+
+    Passing ``label_color`` also writes ``Action.Label`` — ProPresenter's per-slide **label**,
+    the colored caption on the slide in the grid. That is a different field from ``Cue.name``,
+    which PP does *not* surface there: the HTTP API reports a named-but-unlabeled cue as
+    ``{"label": ""}``. It is how a song's V1/C/B structure stays readable without promoting each
+    section to its own group (see design doc Decision 4).
+    """
     cue = pres.cues.add()
     cue.uuid.string = elements.new_uuid()
     cue.name = name
@@ -245,6 +273,9 @@ def add_cue(
     action.isEnabled = True
     # Mandatory: without the explicit type ProPresenter doesn't route the action to the slide.
     action.type = action_pb2.Action.ACTION_TYPE_PRESENTATION_SLIDE
+    if label_color is not None and name:
+        action.label.text = name
+        elements.set_color(action.label.color, label_color)
     presentation_slide = action.slide.presentation
     presentation_slide.chord_chart.platform = url_pb2.URL.PLATFORM_MACOS
     presentation_slide.base_slide.CopyFrom(slide)
@@ -272,10 +303,14 @@ def add_group(
 def add_arrangement(
     pres: presentation_pb2.Presentation, name: str, group_uuids: list[uuid_pb2.UUID]
 ) -> uuid_pb2.UUID:
-    """Append a ``Presentation.Arrangement`` sequencing ``group_uuids`` in play order (#176).
+    """Append a ``Presentation.Arrangement`` sequencing ``group_uuids`` in play order.
 
-    Arrangements reference *group* UUIDs (not cue UUIDs) — a song's V1/C/B groups replayed in
-    the operator-labeled order. The first arrangement added becomes the selected one.
+    Arrangements reference *group* UUIDs (not cue UUIDs), and the first one added becomes the
+    selected one. **Unused by the generator**: #176 built song repeats on this and rejected the
+    result (flat group bars, no nesting — design doc Decision 4), so no deck writes
+    ``arrangements`` or ``selected_arrangement``. Kept as a #172 primitive, and note that a
+    selected arrangement is document-level and singular — any group missing from it stops
+    playing at all.
     """
     arrangement = pres.arrangements.add()
     arrangement.uuid.string = elements.new_uuid()
@@ -291,6 +326,23 @@ def place_image(slide: slide_pb2.Slide, image_path: str) -> None:
     """Add a full-bleed media element to ``slide`` (hymn PNG pages, band lead sheets) (#179)."""
     elements.image(slide, (0.0, 0.0, *styles.CANVAS), image_path)
 
+
+# NOTE: there is deliberately no Glossa fill either, though #177 originally scoped one.
+# Glossa (live KO→EN translation) is a ProPresenter **Prop**, not a slide. Props are their own
+# layer (`Action.ClearType.CLEAR_TARGET_LAYER_PROP`), so the translation composites over whatever
+# is on screen — green lyric slides, navy verse plates, announcements alike — and the operator
+# shows/hides it whenever a moment calls for it, instead of at cue boundaries the generator
+# guessed at in advance. A web element on its own cue *replaces* the slide under it, which would
+# force a choice between showing a verse plate and showing the translation.
+#
+# It also cannot be shipped in the weekly file: `Presentation` has no props field, and props live
+# in the machine-local `~/Documents/ProPresenter/Configuration/Props` store. A cue can only
+# *reference* one (`Action.PropType.identification` -> `CollectionElementType`), i.e. a UUID from
+# one machine's library — the same non-portability that sank group presets in #176. So the prop is
+# a one-time setup on the church Mac mini, and the generator writes nothing for it.
+#
+# DECIDED (#177, 2026-08-26). Do not add a `fill_glossa`, a `styles.glossa` slide, or a
+# `GLOSSA_URL` env var — all three were built and removed. See the design doc, "Glossa is a Prop".
 
 # NOTE: there is deliberately no `set_transition` primitive, though #172 listed one.
 # ProPresenter 21.4 *drops every slide that carries a `PresentationSlide.transition`* unless

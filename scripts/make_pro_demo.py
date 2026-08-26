@@ -16,13 +16,9 @@ Usage:
 import argparse
 from pathlib import Path
 
-from worship_deck.propresenter import build, elements, styles
+from worship_deck.propresenter import build, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
-# A web element stands in for the Glossa live-translation pane; any page works for a look.
-# Glossa's real home is the sermon/announcement lower third over live camera (#177) — it is
-# parked on a lyric slide here only to show a web element renders.
-GLOSSA_URL = "https://glossa.live/"
 
 LYRIC_KO = ["다시 한 번 외쳐 부르니", "예수여 나를 돌아 보소서"]
 LYRIC_BI = ("주 하나님 지으신 모든 세계", "O Lord my God, when I in awesome wonder")
@@ -58,8 +54,6 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
 
     lyric = styles.worship_lyric_ko(LYRIC_KO)
     bilingual = styles.worship_lyric_bilingual(*LYRIC_BI)
-    # Web-element placement check (see the GLOSSA_URL note above).
-    elements.web(bilingual, (0.0, 0.0, 640.0, 200.0), GLOSSA_URL)
 
     section(
         "예배의 부름",
@@ -74,7 +68,7 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
         [
             ("다시 한 번", styles.song_banner("다시 한 번")),
             ("C1", lyric),
-            ("C1 (Glossa)", bilingual),
+            ("C1 (KO+EN)", bilingual),  # the pre-filled bilingual lyric style (#228)
             ("blank", styles.blank_green()),
         ],
     )
