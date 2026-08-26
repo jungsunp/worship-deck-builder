@@ -2,7 +2,7 @@
 
 Every visible thing on a ProPresenter slide is a ``Slide.Element`` wrapping a
 ``Graphics.Element``: text runs, shapes (the 네이비 프레임 box, gold rules, the blur
-backdrop), images (봉헌 hymn pages, lead sheets) and web content (the Glossa iframe, #177).
+backdrop), images (봉헌 hymn pages, lead sheets) and web content.
 The field recipes below were read off real PP 21.4 documents — the ones that bite:
 
 * every element carries a closed unit-square ``path`` with ``shape.type = TYPE_RECTANGLE``;
@@ -189,7 +189,14 @@ def image(
 
 
 def web(slide: slide_pb2.Slide, rect: Rect, url: str) -> slide_pb2.Slide.Element:
-    """Add a web (iframe) element — the live Glossa KO→EN translation pane (#177)."""
+    """Add a web (iframe) element.
+
+    **Nothing in the generator calls this.** It was built for Glossa live translation, but #177
+    settled that Glossa is a ProPresenter *Prop* — its own layer, toggled by the operator over
+    whatever is on screen, and stored per-machine outside any ``.pro`` (see ``build.py``'s NOTE).
+    Kept as a #172 primitive because the format slot is real and correct; if you are reaching for
+    it to put a translation on a slide, read that NOTE first.
+    """
     wrapper = _element(slide, rect)
     element = wrapper.element
     element.name = "Web"

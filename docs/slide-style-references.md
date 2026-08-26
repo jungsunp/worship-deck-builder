@@ -400,6 +400,13 @@ frame. So #169 still has to decide where the Glossa iframe sits relative to the
 KO/EN text (a third element IN2's layout doesn't budget for). Whatever wins gets
 baked into the lyric-stanza preset in #170.
 
+> **RESOLVED 2026-08-26 (#177): it doesn't sit anywhere in the layout.** Glossa is
+> a ProPresenter **Prop** — its own layer, composited over whatever slide is on
+> screen and toggled by the operator, in any section. So it never had to be budgeted
+> as "a third element", and no slide style reserves room for it. That also means the
+> pre-prepared KO/EN pairing this section describes stands on its own: it is #228,
+> and it is the only bilingual treatment the *slides* carry.
+
 ---
 
 ## 7. What this hands to the decisions
@@ -416,15 +423,16 @@ For the worship team meeting, the questions to settle:
   both confirm this: lower-third for worship/sermon verse, full-screen for creed
   and communal reading.
 - **#169 bilingual:** **stacked, Korean-dominant** has two real precedents
-  (KCPC + IN2, §4) and matches our current verse slides — the live decision left
-  is where the **Glossa iframe** sits relative to the KO/EN pair.
+  (KCPC + IN2, §4) and matches our current verse slides. (The "where does the
+  Glossa iframe sit" follow-on was answered in #177: nowhere — it is a Prop on its
+  own layer, not part of any slide layout.)
 
 What the references settle cleanly: **white, sans-serif, ≤2 lines, no heavy
 background.** What the Korean-American churches newly settle: **bilingual =
 Korean-over-English, stacked, lower-third for sung/sermon text and full-screen for
 liturgy** — with KCPC (§4.2) proving the *whole liturgy* has a bilingual reference,
-not just worship. So the only genuinely open piece is fitting the live Glossa
-iframe into that layout.
+not just worship. (The live Glossa iframe was the last open piece; #177 settled
+that it is a Prop and never enters the slide layout at all.)
 
 ---
 

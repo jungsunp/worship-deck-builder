@@ -20,6 +20,10 @@ from worship_deck.propresenter import build, elements, rtf, styles
 _KO = "주 하나님"
 
 
+def _rgb(color) -> tuple[int, int, int]:
+    return tuple(round(c * 255) for c in (color.red, color.green, color.blue))
+
+
 def _rtf_text(slide) -> str:
     return b"".join(
         e.element.text.rtf_data for e in slide.elements if e.element.HasField("text")
@@ -242,6 +246,32 @@ def test_fill_song_labels_lyric_cues_and_plays_the_arrangement():
     assert [c.name for c in pres.cues] == ["A", "V1", "C", "V1", ""]
     assert len(pres.cue_groups) == 1
     assert not pres.arrangements
+
+
+def test_lyric_cues_carry_a_colored_slide_label_without_becoming_groups():
+    """ProPresenter's per-slide label (Action.Label) is a different field from Cue.name — the one
+    PP actually shows in the grid — so V1/C/B stay readable with one group per song (Decision 4)."""
+    pres = build.new_presentation("demo")
+    build.fill_song(pres, {
+        "title": "A",
+        "lines": ["v1", "", "c1"],
+        "sections": [{"label": "V1", "lines": ["v1"]}, {"label": "C", "lines": ["c1"]}],
+        "arrangement": "V1 C V1",
+    })
+
+    labels = [c.actions[0].label.text for c in pres.cues]
+    assert labels == ["", "V1", "C", "V1", ""]  # banner and trailing blank stay unlabeled
+    v1, c = pres.cues[1].actions[0].label, pres.cues[2].actions[0].label
+    assert _rgb(v1.color) == styles.section_color("V1") != _rgb(c.color)
+    assert len(pres.cue_groups) == 1
+
+
+def test_medley_songs_get_distinct_group_colors():
+    pres = build.new_presentation("demo")
+    build.fill_worship_songs(pres, [{"title": t, "lines": ["가"]} for t in "ABC"])
+
+    colors = [_rgb(g.group.color) for g in pres.cue_groups]
+    assert colors == list(styles.SONG_COLORS[:3])  # one hue per song, so songs read apart
 
 
 def test_fill_worship_songs_gives_each_medley_song_its_own_group():

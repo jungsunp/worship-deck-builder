@@ -372,3 +372,35 @@ GROUP_COLORS: dict[str, tuple[int, int, int]] = {
     "말씀": (0x3B, 0x6E, 0xA5),
     "주기도문": (0x7A, 0x6B, 0xA8),
 }
+
+
+# One hue per song in the medley (#176 follow-up): the weekly deck is one flat list of group
+# bars, so cycling the color is what lets the operator see where one song ends and the next
+# begins. Cycles if a medley ever runs longer than the palette.
+SONG_COLORS: tuple[tuple[int, int, int], ...] = (
+    (0x2E, 0x8B, 0x6B),  # green
+    (0x3B, 0x6E, 0xA5),  # blue
+    (0xA8, 0x6B, 0x8E),  # mauve
+    (0xA8, 0x8B, 0x4B),  # amber
+)
+
+# Slide-label colors for the operator-labeled song sections (#113). These tint the per-slide
+# label (`Action.Label`), not a group — see design doc Decision 4. Keyed by the label with
+# trailing digits stripped, so V1/V2 and B/B2 read alike; `간주` and the other Korean labels the
+# review dropdown offers are matched verbatim.
+SECTION_COLORS: dict[str, tuple[int, int, int]] = {
+    "V": (0x3B, 0x6E, 0xA5),        # verse — blue
+    "C": (0xA8, 0x4B, 0x4B),        # chorus — rose
+    "PC": (0x3B, 0x8E, 0x8E),       # pre-chorus — teal
+    "B": (0x7A, 0x6B, 0xA8),        # bridge — purple
+    "TAG": (0xA8, 0x8B, 0x4B),      # amber
+    "ENDING": (0xA8, 0x8B, 0x4B),
+    "INTRO": (0x6B, 0x7A, 0x8E),    # slate
+    "\uac04\uc8fc": (0x6B, 0x7A, 0x8E),
+}
+
+
+def section_color(label: str) -> tuple[int, int, int]:
+    """The slide-label color for a song-section label; operator-typed customs fall back to slate."""
+    key = label.strip().upper().rstrip("0123456789") or label.strip().upper()
+    return SECTION_COLORS.get(key, SECTION_COLORS["INTRO"])
