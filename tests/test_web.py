@@ -902,6 +902,25 @@ def test_put_run_persists_edits(_runs) -> None:
     assert saved.offering_hymn_verses == [1, 3]
 
 
+def test_put_run_persists_added_and_deleted_songs(_runs) -> None:
+    """＋ 곡 / ✕ edit the medley list itself, not just its lyrics (#231)."""
+    store.save(_runs, _fake_run())
+    run = client.get(f"/runs/{_runs}").json()
+    del run["worship_songs"][0]
+    run["worship_songs"].append(
+        {"title": "", "lines": [], "composer": "", "sections": [], "arrangement": "",
+         "arrangement_hint": "", "provenance": {"source": "added"},
+         "fragments": [], "candidates": []}
+    )
+    assert client.put(f"/runs/{_runs}", json=run).status_code == 200
+
+    saved = store.load(_runs)
+    assert [s["title"] for s in saved.worship_songs] == ["마라나타", ""]
+    assert saved.worship_songs[1]["provenance"] == {"source": "added"}
+    # marked edited so a later re-assemble doesn't resurrect the deleted song (#105)
+    assert "worship_songs" in saved.edited_fields
+
+
 def test_put_run_persists_song_arrangement(_runs) -> None:
     # The labeled sections + play-order string and OCR hint survive PUT -> store.load (#113).
     store.save(_runs, _fake_run())
@@ -1056,6 +1075,14 @@ def test_review_page_has_labeled_song_editors() -> None:
     assert "songByRef" in body
 
 
+def test_review_page_can_add_and_delete_medley_songs() -> None:
+    """찬양 medley list is editable, and an added song carries the 'added' provenance (#231)."""
+    body = client.get("/review/2026-05-31").text
+    assert "function addSong" in body
+    assert "function deleteSong" in body
+    assert "'added'" in body
+
+
 # ── /runs/{date}/hymn (봉헌 slide grid, #84/#108) ─────────────────────────────
 
 
@@ -1206,6 +1233,30 @@ def test_build_refuses_song_left_without_lyrics(_runs, monkeypatch) -> None:
     resp = client.post(f"/runs/{_runs}/build")
     assert resp.status_code == 400
     assert "말씀앞에서" in resp.json()["detail"]
+
+
+def test_build_refuses_added_song_left_without_lyrics(_runs, monkeypatch) -> None:
+    """A ＋ 곡 the operator never filled in would ship a title-only slide unit (#231)."""
+    data = _fake_run()
+    data.worship_songs.append({"title": "새 찬양", "lines": [], "provenance": {"source": "added"}})
+    store.save(_runs, data)
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: pytest.fail("must not build"))
+
+    resp = client.post(f"/runs/{_runs}/build")
+    assert resp.status_code == 400
+    assert "새 찬양" in resp.json()["detail"]
+
+
+def test_build_allows_added_song_the_operator_typed_lyrics_into(_runs, monkeypatch) -> None:
+    """Provenance stays "added" after typing the lyrics in — the lyrics being there is what matters."""
+    data = _fake_run()
+    data.worship_songs.append(
+        {"title": "새 찬양", "lines": ["직접 입력한 가사"], "provenance": {"source": "added"}}
+    )
+    store.save(_runs, data)
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d: "/tmp/draft.key")
+
+    assert client.post(f"/runs/{_runs}/build").status_code == 200
 
 
 def test_build_allows_a_miss_the_operator_typed_lyrics_into(_runs, monkeypatch) -> None:

@@ -38,6 +38,7 @@
          white-space: nowrap; padding: 0.45rem 0.8rem; font-size: 0.95rem;
          border: 1px solid var(--gray-200); border-radius: 999px; background: #fff; }
   .tab.active { background: var(--blue); border-color: var(--blue); color: #fff; }
+  .tab.addsong { border-style: dashed; color: var(--gray-700); }
   /* 찬양 sections + arrangement (#113): operator-labeled section cards, then a typed play-order. */
   .lcard { border: 1px solid var(--gray-200); border-radius: var(--radius); padding: 0.5rem;
            margin-top: 0.5rem; background: #fff; }
@@ -354,10 +355,15 @@ document.getElementById('order').addEventListener('input', e => {
 let medleyTab = 0;
 function renderMedley(div) {
   const songs = run.worship_songs || [];
-  if (!songs.length) return;
   if (medleyTab >= songs.length) medleyTab = 0;
   const tabs = document.createElement('div'); tabs.className = 'tabs';
   div.appendChild(tabs);
+  // The ＋ tab is appended after the song tabs below, but built here so it also renders when the
+  // medley is empty (the ⚠ case) — that's the one time the operator most needs to add a song.
+  const addSongTab = document.createElement('button'); addSongTab.type = 'button';
+  addSongTab.className = 'tab addsong'; addSongTab.textContent = '＋ 곡';
+  addSongTab.onclick = () => addSong();
+  if (!songs.length) { tabs.appendChild(addSongTab); return; }
   const panels = [];
   songs.forEach((song, s) => {
     const tab = document.createElement('button'); tab.type = 'button';
@@ -379,7 +385,8 @@ function renderMedley(div) {
     ti.addEventListener('input', () => { tab.textContent = ti.value || '(제목 없음)'; });
     const up = document.createElement('button'); up.textContent = '▲'; up.onclick = () => move(s, -1);
     const dn = document.createElement('button'); dn.textContent = '▼'; dn.onclick = () => move(s, 1);
-    hd.append(ti, up, dn); sd.appendChild(hd);
+    const del = document.createElement('button'); del.textContent = '✕'; del.onclick = () => deleteSong(s);
+    hd.append(ti, up, dn, del); sd.appendChild(hd);
     appendProvRow(sd, song, s);  // lyric origin badge (#200) + 재검색 (#203)
     // Start unlabeled lyrics as one V1 card so the operator always has something to split/label.
     if (!song.sections || !song.sections.length) {
@@ -399,6 +406,7 @@ function renderMedley(div) {
     panels.push(sd);
     div.appendChild(sd);
   });
+  tabs.appendChild(addSongTab);
 }
 
 // Section-card editor (#113). The operator labels lyric groups (V1/C/PC/B…) themselves — online/
@@ -429,14 +437,24 @@ function provBadge(song) {
     const a = document.createElement('a');
     a.className = 'prov ok'; a.href = 'https://gasazip.com/' + p.song_id;
     a.target = '_blank'; a.rel = 'noopener';
+    // A pick made without OCR fragments to score against (a typed/added song, #231) has no
+    // coverages — printing "일치 0%" would read as a bad match rather than an unmeasured one.
     const pct = c => Math.round((c || 0) * 100);
-    a.textContent = `가사집 ✓ ${p.artist || ''} · 일치 ${pct(p.cand_cov)}% · 악보 ${pct(p.ocr_cov)}%`;
+    const scores = (p.cand_cov || p.ocr_cov)
+      ? ` · 일치 ${pct(p.cand_cov)}% · 악보 ${pct(p.ocr_cov)}%` : '';
+    a.textContent = `가사집 ✓ ${p.artist || ''}${scores}`;
     return a;
   }
   if (p.source === 'ocr') {
     const s = document.createElement('span');
     s.className = 'prov bad'; s.title = '가사집에서 곡을 찾지 못했습니다 — 후보를 고르거나 제목을 고쳐 재검색하세요';
     s.textContent = '가사 미확인 — 후보 선택 필요';
+    return s;
+  }
+  if (p.source === 'added') {  // ＋ 곡 (#231) — no lookup yet; the badge row carries 재검색
+    const s = document.createElement('span');
+    s.className = 'prov warn'; s.title = '직접 추가한 곡입니다 — 가사를 입력하거나 제목으로 재검색하세요';
+    s.textContent = '직접 추가 — 제목 입력 후 재검색';
     return s;
   }
   return null;
@@ -1003,6 +1021,39 @@ function move(s, d) {
   medleyTab = j;  // moved song stays the active tab
   edited.opening = true;
   render();
+}
+
+// Add/delete a medley song (#231). Both mirror move() — syncFromDom() before the indexes shift,
+// then render() — and additionally save(): POST /research resolves its ref against the *stored*
+// run, so an added song must be persisted before 재검색 can find it (and a deleted one must be
+// gone before the same ref means a different song). render() has to come before save(), which
+// re-runs syncFromDom() over the DOM's data-i hosts: a stale panel for a removed index would
+// throw on run.worship_songs[i] === undefined and swallow the save.
+async function addSong() {
+  syncFromDom();
+  // Only Song's own field names: the builder does Song(**s), so a stray key is a TypeError a
+  // minute into the Keynote run.
+  run.worship_songs.push({title: '', lines: [], composer: '', sections: [], arrangement: '',
+                          arrangement_hint: '', provenance: {source: 'added'},
+                          fragments: [], candidates: []});
+  medleyTab = run.worship_songs.length - 1;
+  edited.opening = true;
+  render();
+  await save();
+}
+
+async function deleteSong(s) {
+  const songs = run.worship_songs;
+  // fill_worship_songs leaves the template's 찬양 slides in place for an empty list
+  // (keynote/build.py), so the deck would ship last week's songs — keep at least one.
+  if (songs.length <= 1) { alert('마지막 곡은 삭제할 수 없습니다. 가사를 고쳐서 쓰세요.'); return; }
+  if (!confirm('"' + (songs[s].title || '(제목 없음)') + '" 곡을 삭제할까요?\n(악보 이미지는 그대로 남습니다)')) return;
+  syncFromDom();
+  songs.splice(s, 1);
+  if (medleyTab >= songs.length) medleyTab = songs.length - 1;
+  edited.opening = true;
+  render();
+  await save();
 }
 
 let _saveTimer;

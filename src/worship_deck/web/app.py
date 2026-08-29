@@ -904,12 +904,12 @@ def draft_pdf(service_date: str) -> FileResponse:
 
 
 def _songs_missing_lyrics(data: ServiceData) -> list[str]:
-    """Names of image-derived songs left with no lyric lines (a lookup miss review skipped)."""
+    """Names of unresolved songs left with no lyric lines (a lookup miss, or a ＋ 곡 left blank)."""
     songs = [*data.worship_songs, data.confession_song, data.worship_after_sermon]
     return [
         s.get("title") or "(제목 없음)"
         for s in songs
-        if s and s.get("provenance", {}).get("source") == "ocr" and not any(
+        if s and s.get("provenance", {}).get("source") in ("ocr", "added") and not any(
             ln.strip() for ln in s.get("lines", [])
         )
     ]
@@ -957,7 +957,8 @@ def build_run(service_date: str, background_tasks: BackgroundTasks) -> dict:
     if not store.exists(service_date):
         raise HTTPException(status_code=404, detail="no run for that date")
     # A gasazip miss leaves a song with a title but no lyrics for the operator to resolve in
-    # review (#213). Building it would silently ship blank lyric slides, so refuse by name.
+    # review (#213); a ＋ 곡 the operator never filled in is the same hole (#231). Building
+    # either would silently ship blank lyric slides, so refuse by name.
     empty = _songs_missing_lyrics(store.load(service_date))
     if empty:
         raise HTTPException(status_code=400, detail=f"가사가 비어 있는 곡: {', '.join(empty)}")
