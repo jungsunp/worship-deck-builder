@@ -191,14 +191,33 @@ def fill_ending(pres: presentation_pb2.Presentation, date: str) -> None:
     _group(pres, content.DIVIDER_LABELS["ending"], cue_uuids)
 
 
+def _keyed_cues(pres: presentation_pb2.Presentation, label: str) -> list[uuid_pb2.UUID]:
+    """Both placements of a keyed label, top-left and bottom-centre (#234).
+
+    Keynote carries one placement per service part. Here they are not about service parts at all:
+    the operator picks whichever clears the live shot, which depends on how the camera is framed,
+    so both ship and they hold on the one they want.
+    """
+    return [
+        add_cue(pres, new_slide("keyed_label", label, placement), f"{label} ({korean})")
+        for placement, korean in (("top", "위"), ("bottom", "아래"))
+    ]
+
+
 def fill_divider(pres: presentation_pb2.Presentation, label: str, subtitle: str = "") -> None:
     """A heading-only section: 회개로의 초대, 죄사함의 선포, 환영 및 인사, 합심 기도, 축도, 봉 헌.
 
     These carry no weekly content at all — under Keynote they were simply slides nobody edited.
     The template repeats several of them two or three times (a heading slide per service part);
-    one cue is enough in ProPresenter, where the operator holds on a cue rather than clicking past
-    duplicates.
+    one navy plate is enough in ProPresenter, where the operator holds on a cue rather than
+    clicking past duplicates.
+
+    ``content.KEYED_SECTIONS`` gets a keyed label over the live camera instead of that plate
+    (#234) — see the note there for which sections and why. None of them carries a subtitle.
     """
+    if label in content.KEYED_SECTIONS:
+        _group(pres, label, _keyed_cues(pres, label))
+        return
     cue_uuid = add_cue(pres, new_slide("section_divider", label, subtitle), label)
     _group(pres, label, [cue_uuid])
 
@@ -520,7 +539,9 @@ def fill_sending(pres: presentation_pb2.Presentation) -> None:
 
     The same song closes every service, so it comes from ``content.SENDING_SONG`` rather than
     ``ServiceData``, and it is sung twice (once before 축도, once before 주기도문) — which is what
-    the two cards announce.
+    the two cards announce. Those two are **keyed labels**, not full-screen cards: Keynote gives
+    them a keyed label and no navy plate, the same test that picks ``content.KEYED_SECTIONS``
+    (#234). The 파송의 노래 divider itself keeps its plate.
     """
     label = content.DIVIDER_LABELS["sending"]
     cue_uuids = [
@@ -531,7 +552,7 @@ def fill_sending(pres: presentation_pb2.Presentation) -> None:
         )
     ]
     for cue in content.SENDING_CUES:
-        cue_uuids.append(add_cue(pres, new_slide("text_card", [cue]), cue))
+        cue_uuids.extend(_keyed_cues(pres, cue))
     _group(pres, label, cue_uuids)
     fill_song(pres, content.SENDING_SONG)
 

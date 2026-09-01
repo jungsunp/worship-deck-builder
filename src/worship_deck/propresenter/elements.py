@@ -112,6 +112,33 @@ def text(
     return wrapper
 
 
+def shadow(
+    wrapper: slide_pb2.Slide.Element,
+    rgba: Rgba = (0, 0, 0, 0.75),
+    *,
+    angle: float = 315.0,
+    offset: float = 4.0,
+    radius: float = 8.0,
+    on_text: bool = True,
+) -> None:
+    """Drop-shadow a text or shape element — the legibility trick every keyed graphic uses (#234).
+
+    White type over a live camera needs *some* separation from the shot, and a shadow is what
+    real broadcasts reach for instead of a container: 더사랑의교회 sets its ``[대표기도] 이창훈
+    장로`` key label as bare shadowed type with no box at all.
+
+    ``Graphics.Text`` has its own ``shadow`` slot distinct from the element's, and for a text
+    element it is the one that renders the glyphs' shadow rather than the (invisible) box's —
+    hence ``on_text``. Shapes take the element-level one.
+    """
+    target = wrapper.element.text.shadow if on_text else wrapper.element.shadow
+    target.style = _Graphics.Shadow.STYLE_DROP
+    target.angle, target.offset, target.radius = angle, offset, radius
+    set_color(target.color, rgba)
+    target.opacity = rgba[3] if len(rgba) == 4 else 1.0
+    target.enable = True
+
+
 def line_strip(
     wrapper: slide_pb2.Slide.Element, rgba: Rgba, *, pad: tuple[float, float]
 ) -> None:
@@ -143,6 +170,11 @@ def shape(
     (``backgroundBlur``) looked like a free way to get the blurred backdrop, but ProPresenter
     21.4 renders it as an unrendered placeholder and **crashes** when the slide is selected,
     so the 네이비 프레임 backdrop needs a real (pre-blurred) background image instead — #224.
+
+    ``Fill`` is a oneof that also offers ``gradient``, and ``Graphics.Element`` has a ``feather``
+    slot; both were wired up for the #234 bake-off and taken out again when the keyed label went
+    with a PNG plate. Neither was ever confirmed to render in PP 21.4 — as ``backgroundEffect``
+    shows, a field existing in the schema is not evidence it draws.
     """
     wrapper = _element(slide, rect, info=1)  # IS_TEMPLATE_ELEMENT
     element = wrapper.element

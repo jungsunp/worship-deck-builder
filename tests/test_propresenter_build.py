@@ -508,6 +508,59 @@ def test_divider_subtitles_carry_no_brackets(tmp_path):
         assert "[" not in _rtf_text(_slide_of_cue(cue))
 
 
+def test_keyed_label_keys_over_the_camera_on_the_measured_plate():
+    """#234: these headings annotate the live shot, so the slide is green-backed (an unbacked one
+    renders black and covers the camera, #192) and carries the plate PNG instead of a navy frame."""
+    for placement in ("top", "bottom"):
+        slide = styles.keyed_label("회개로의 초대", placement)
+        assert _green(slide)
+        assert not _has_frame(slide)
+        assert "m1-angled-bar" in _images_of(slide)
+
+        rect, _ = styles.KEYED_LABEL_PLACEMENTS[placement]
+        art = next(e.element.bounds for e in slide.elements
+                   if e.element.fill.HasField("media"))
+        assert (art.origin.x, art.origin.y) == (rect[0], rect[1])
+        assert (art.size.width, art.size.height) == (rect[2], rect[3])
+
+
+def test_keyed_label_text_stays_inside_the_plate():
+    for placement in ("top", "bottom"):
+        slide = styles.keyed_label("죄사함의 선포", placement)
+        rect, _ = styles.KEYED_LABEL_PLACEMENTS[placement]
+        text = next(e.element.bounds for e in slide.elements if e.element.HasField("text"))
+        assert text.origin.x >= rect[0]
+        assert text.origin.x + text.size.width <= rect[0] + rect[2]
+        assert text.origin.y >= rect[1]
+        assert text.origin.y + text.size.height <= rect[1] + rect[3]
+
+
+def test_keyed_art_ships_every_plate_it_names():
+    """The .pro embeds an absolute file:// URL, so a missing asset is a blank slide at church."""
+    for path, _ in styles.KEYED_ART.values():
+        assert Path(path).exists(), path
+
+
+def test_only_the_camera_annotating_sections_get_a_keyed_label(tmp_path):
+    """The sections Keynote gives a keyed label *and no navy plate* — measured off the approved
+    deck. Ones it gives both (봉 헌, 교회 소식, 예배의 부름, 축도) keep the plate here (#234)."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+
+    for name in ("회개로의 초대", "죄사함의 선포", "합심 기도"):
+        cues = _cues_of(pres, name)
+        assert len(cues) == 2, name  # both placements, operator picks by camera framing
+        slides = [_slide_of_cue(c) for c in cues]
+        assert all(_green(s) and "m1-angled-bar" in _images_of(s) for s in slides)
+        assert {s.elements[0].element.bounds.origin.y for s in slides} == {
+            styles.KEYED_LABEL_PLACEMENTS[p][0][1] for p in ("top", "bottom")
+        }
+
+    for name in ("봉 헌", "교회 소식", "예배의 부름", "축도"):
+        plate = _slide_of_cue(_cues_of(pres, name)[0])
+        assert not _green(plate), name
+        assert _has_frame(plate), name
+
+
 def test_the_opening_section_ends_on_a_green_park(tmp_path):
     """Keynote's slide 5 held a 예배 준비 안내 message here; the operator replaced it with a blank
     green (#178 review). The deck waits on this cue while people come in, and green keys the live
@@ -579,10 +632,13 @@ def test_sermon_extra_refs_each_get_their_own_group(tmp_path):
 
 def test_sending_song_is_fixed_content_sung_before_both_closing_elements(tmp_path):
     pres = build.load(build.build(ServiceData(), str(tmp_path / "empty.pro"))[0])
-    cards = [_rtf_text(_slide_of_cue(c)) for c in _cues_of(pres, "파송의 노래")]
+    cues = _cues_of(pres, "파송의 노래")
+    cards = [_rtf_text(_slide_of_cue(c)) for c in cues]
 
-    assert rtf.escape("축도 전 찬양") in cards[1]
-    assert rtf.escape("주기도문 전 찬양") in cards[2]
+    # The plate, then each cue card as a keyed label in both placements (#234).
+    assert len(cues) == 5
+    assert all(rtf.escape("축도 전 찬양") in c for c in cards[1:3])
+    assert all(rtf.escape("주기도문 전 찬양") in c for c in cards[3:5])
     assert _group_names(pres).count("축복의 통로") == 1
 
 

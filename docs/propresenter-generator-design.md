@@ -241,7 +241,9 @@ replaces. Five findings, all about *legibility and parity* rather than structure
   and the 표어 card, plus two full-bleed pre-service photos (slides 4–5). A generated deck has no
   template to inherit them from, so they live in `propresenter/assets/` (public church branding,
   ~1 MB, unlike anything under `data/`). The 환영합니다 graphic carries the year's 표어, so it is
-  replaced each January alongside `content.WELCOME_CARD`.
+  replaced each January alongside `content.WELCOME_CARD`. The keyed-label plate (#234) lives there
+  too, but is *generated* by `scripts/make_keyed_art.py` rather than lifted — re-run it after a
+  palette change and the next build picks the new art up with no code change.
 - **The opening plate is laid out in canvas coordinates.** It is the one slide the operator
   compares side by side with Keynote, so `service_intro` / `service_outro` use master.key's own
   boxes (date 621,297 · heading 169,386 · title+ref 222,634 · notice 246,908) rather than the
@@ -324,10 +326,39 @@ What changed:
   section to the operator, and two bars for one section is two things to find under pressure. The
   medley stays the exception — there each song genuinely is its own section.
 
-Filed rather than fixed, because both need design work this loop can't shortcut: #233 (교회 소식
+Filed rather than fixed, because it needs design work this loop can't shortcut: #233 (교회 소식
 plates — Keynote's own are the thing being rejected, and they hold the deck's one remaining
-shrink) and #234 (회개로의 초대 / 죄사함의 선포 are keyed labels over the live camera in Keynote,
-purple brush-stroke artwork and all, not full-screen navy plates).
+shrink). #234 (keyed labels over the live camera) is settled below.
+
+### Keyed section labels (#234)
+
+Some headings **annotate** the live camera instead of replacing it. Which ones was settled by
+measurement, not taste: every page of the operator-approved deck rendered at 72 dpi and classified
+by background.
+
+| Keynote gives it | sections | generator |
+|---|---|---|
+| a navy plate only | 고백의 찬양, 사도신경, 성가대 찬양, 파송의 노래, 주기도문 | `section_divider` |
+| a plate **and** a keyed label | 예배의 부름, 봉 헌, 환영 및 인사, 교회 소식, 축도 | `section_divider` |
+| **a keyed label only** | 회개로의 초대, 죄사함의 선포, 합심 기도, 축도 전 찬양, 주기도문 전 찬양 | `keyed_label` |
+
+The last row is the whole change — `content.KEYED_SECTIONS` plus the two `content.SENDING_CUES`,
+which were full-screen `text_card`s before. 축도 keeps its plate: the issue guessed it was keyed,
+but the deck gives it both.
+
+- **Both placements ship**, top-left and bottom-centre, measured at `20,23 · 594×133` and
+  `614,892 · 736×165`. Keynote carries one per service part; here they are not about service parts
+  at all, so the operator picks whichever clears the shot on the day's camera framing.
+- **The plate is a PNG, not drawn shapes.** A bake-off ran flat fills, gradient capsules, a chip +
+  bar, fading scrims, bare shadowed type (the one idiom confirmed in a real Korean broadcast —
+  더사랑의교회 keys `[대표기도] 이창훈 장로` with no container at all) and three repainted brush
+  strokes. The operator preferred artwork to every one of them, so the shipped look is a *drawn*
+  plate in the deck's own palette: `scripts/make_keyed_art.py` renders a skewed navy-gradient bar
+  with a gold rule. Generated rather than sourced means the palette is exact, the licence is not a
+  question, and hard edges key more cleanly than the incumbent's soft alpha (#192). Keynote's
+  watercolour stays in `styles.KEYED_ART` as `A`, for the #223 preset review only.
+- `elements.shadow` was added for this — white type over a live camera needs separation from the
+  shot, and a shadow is what real broadcasts use instead of a container.
 
 ## Decision 4 — song sections stay cue names, not groups (#176 closed, not built)
 

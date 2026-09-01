@@ -44,6 +44,7 @@ STYLE_KEYS = (
     "verse_fullscreen",         # bilingual scripture body (개역한글 + ESV)
     "announcement",             # 교회 소식 notice (title + 날짜/장소/문의 라벨 레일)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
+    "keyed_label",              # section heading keyed over the live camera (#234)
     "liturgy",                  # fixed-wording full-screen (사도신경 / 주기도문)
     "service_intro",            # N부 예배를 시작합니다 + sermon title / ref / date
     "service_outro",            # N부 예배를 마칩니다 + date
@@ -68,6 +69,22 @@ PRE_SERVICE_IMAGES = (
     str(ASSET_DIR / "pre-service-church.jpg"),
     str(ASSET_DIR / "pre-service-welcome.jpg"),
 )
+# The purple watercolour stroke Keynote keys its section labels over (master slides 61–63, #234),
+# cropped from master.key's `pngwing.com 12` to its opaque box so the placement rects below can be
+# the plain numbers measured off the deck. A stock paint texture, in weekly production use in the
+# church's own deck; no member data, same bar as the artwork above.
+BRUSH = str(ASSET_DIR / "brush-stroke-purple.png")
+BRUSH_ASPECT = 1119 / 251
+# The keyed-label plate (#234). Drawn by `scripts/make_keyed_art.py` rather than sourced, so the
+# palette is exactly the deck's and there is no licence question; hard edges also key more cleanly
+# than a soft-alpha stroke (#192). Both are drawn at BRUSH_ASPECT, so they share the measured rects.
+# `M1` is the shipped look — a skewed navy-gradient bar with a gold rule, chosen over every flat,
+# gradient, scrim and repainted-stroke treatment in the bake-off. `A` is Keynote's own watercolour,
+# kept only so the church group can compare the two in the #223 preset review.
+KEYED_ART: dict[str, tuple[str, float]] = {
+    "M1": (str(ASSET_DIR / "m1-angled-bar.png"), BRUSH_ASPECT),
+    "A": (BRUSH, BRUSH_ASPECT),
+}
 
 # ── Palette (Option 3 네이비 프레임) ────────────────────────────────────────────
 # RGB triples; RTF has no alpha, so the sample's translucent inks are pre-blended over the
@@ -146,6 +163,20 @@ VERSE_EN_LABEL_GAP = 8.0
 LOGO_TOP_RIGHT = (1382.0, 44.0, 480.0, 130.0)
 LOGO_BOTTOM_RIGHT = (1400.0, 902.0, 420.0, 114.0)
 
+# ── Keyed section labels (#234) ───────────────────────────────────────────────
+# Where a keyed label sits, measured off the operator-approved deck rendered at 72 dpi (1 px = 1 pt
+# on this canvas): the non-chroma-green bounding box on `draft-2026-08-30.pdf` pages 63/65/68
+# (top-left) and 64/66/69 (bottom-centre). Keynote carries one placement per service part; the
+# generator ships **both**, because in ProPresenter the operator holds on a cue and picks by where
+# the label can sit without covering the live shot. Heights derive from BRUSH_ASPECT so the brush
+# variant never has to stretch; the container-less variants just use the same zone.
+KEYED_LABEL_PLACEMENTS: dict[str, tuple[tuple[float, float, float, float], float]] = {
+    "top": ((20.0, 23.0, 594.0, 594.0 / BRUSH_ASPECT), 70.0),
+    "bottom": ((614.0, 892.0, 736.0, 736.0 / BRUSH_ASPECT), 82.0),
+}
+KEYED_LABEL_INSET = 0.10  # fraction of the container width kept clear at each end
+
+
 
 @dataclass(frozen=True)
 class Style:
@@ -194,6 +225,7 @@ ANNOUNCE_TITLE = Style(FONT_BOLD, 88, bold=True, line_spacing=12.0, align="left"
 ANNOUNCE_LABEL = Style(FONT_BOLD, 52, ACCENT, bold=True, line_spacing=10.0, align="right")
 ANNOUNCE_VALUE = Style(FONT_REGULAR, 64, line_spacing=10.0, align="left")
 ANNOUNCE_DETAIL = Style(FONT_REGULAR, 64, MUTED, line_spacing=20.0, align="left")
+KEYED_LABEL = Style(FONT_BOLD, 70, bold=True, tracking=2.0)
 DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
 DIVIDER_SUB = Style(FONT_BOLD, 76, ACCENT, bold=True, tracking=2.0)
 LITURGY_TITLE = Style(FONT_BOLD, 48, ACCENT, bold=True, tracking=12.0)
@@ -688,6 +720,37 @@ def section_divider(heading: str, subtitle: str = "") -> slide_pb2.Slide:
     return _front_to_back(slide)
 
 
+def keyed_label(heading: str, placement: str = "top", variant: str = "M1") -> slide_pb2.Slide:
+    """Section heading keyed over the live camera (회개로의 초대 / 죄사함의 선포 / 합심 기도, #234).
+
+    These sections *annotate* the shot rather than replace it, so unlike ``section_divider`` the
+    slide is chroma-green backed and carries only a small label — an unbacked slide renders black
+    and covers the camera instead of keying (#192), the same reason the sung-lyric styles are
+    backed. The plate is a PNG rather than drawn shapes because the #234 bake-off settled it: the
+    operator preferred artwork to every flat, gradient and scrim treatment tried against it.
+
+    ``variant`` picks the plate from ``KEYED_ART`` — ``M1`` is the shipped look; ``A`` is kept so
+    the church group can see it beside M1 in the #223 preset review.
+
+    Both placements exist, and both are emitted per section: Keynote carries one per service part,
+    but in ProPresenter the operator holds on a cue and chooses by where the label can sit without
+    covering the live shot.
+    """
+    slide = _slide(background=CHROMA_GREEN)
+    (x, y, w, h), size = KEYED_LABEL_PLACEMENTS[placement]
+    style = replace(KEYED_LABEL, size=size)
+    inset = w * KEYED_LABEL_INSET
+    el.image(slide, (x, y, w, h), KEYED_ART[variant][0], fill_frame=False)
+    element = el.text(
+        slide,
+        (x + inset, y, w - 2 * inset, h),
+        rtf.document(_scaled([(heading, style)], w - 2 * inset, h)),
+        style,
+    )
+    el.shadow(element)
+    return _front_to_back(slide)
+
+
 def liturgy(title: str, lines: list[str]) -> slide_pb2.Slide:
     """Fixed-wording full-screen liturgy (사도신경 / 주기도문) — gold spaced title over the body."""
     slide = _slide(background=NAVY)
@@ -823,6 +886,7 @@ BUILDERS = {
     "verse_fullscreen": verse_fullscreen,
     "announcement": announcement,
     "section_divider": section_divider,
+    "keyed_label": keyed_label,
     "liturgy": liturgy,
     "service_intro": service_intro,
     "service_outro": service_outro,
