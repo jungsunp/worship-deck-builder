@@ -16,6 +16,7 @@ Usage:
     .venv/bin/python scripts/make_pro_demo.py                    # -> the local PP library
     .venv/bin/python scripts/make_pro_demo.py --out /tmp/x.pro
     .venv/bin/python scripts/make_pro_demo.py --run 2026-08-23   # the full weekly deck
+    .venv/bin/python scripts/make_pro_demo.py --candidates       # keyed-label plates, M1 vs A
 
 ProPresenter caches a ``.pro`` it has already read, so iterate by writing a *new* filename each
 round (``--out``) rather than overwriting and restarting the app.
@@ -51,6 +52,33 @@ CREED = [
     "본디오 빌라도에게 고난을 받으사",
     "십자가에 못박혀 죽으시고",
 ]
+
+
+# The keyed-label plates, one group each, both placements per group — arrow through them over a
+# live camera to compare. #234 picked M1; A (Keynote's own watercolour) is kept so the church
+# group can see the two side by side in the #223 preset review.
+KEYED_CANDIDATES = [
+    ("M1 각진 바 + 금색 룰", "M1"),
+    ("A 붓터치 (현행 Keynote)", "A"),
+]
+
+
+def make_candidates(out_pro: Path) -> Path:
+    """A deck of keyed-label plates — nothing but section labels over chroma green (#234/#223)."""
+    pres = build.new_presentation(out_pro.stem)
+    for label, variant in KEYED_CANDIDATES:
+        uuids = [
+            build.add_cue(
+                pres, styles.keyed_label(heading, placement, variant), f"{heading} ({placement})"
+            )
+            for heading in ("회개로의 초대", "죄사함의 선포")
+            for placement in ("top", "bottom")
+        ]
+        build.add_group(pres, label, styles.SONG_COLORS[KEYED_CANDIDATES.index((label, variant))
+                                                        % len(styles.SONG_COLORS)], uuids)
+    out_pro.parent.mkdir(parents=True, exist_ok=True)
+    build.serialize(pres, str(out_pro))
+    return out_pro
 
 
 def make_demo(out_pro: Path, image: Path | None = None) -> Path:
@@ -103,9 +131,15 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help="destination .pro")
     ap.add_argument("--image", type=Path, help="a PNG to place on a full-bleed image slide")
     ap.add_argument("--run", help="build the full weekly deck from this run date (YYYY-MM-DD)")
+    ap.add_argument("--candidates", action="store_true",
+                    help="write the keyed-label plate comparison (M1 vs A) instead of the demo")
     args = ap.parse_args()
 
-    if args.run:
+    if args.candidates:
+        out = (args.out if args.out != DEFAULT_OUT
+               else DEFAULT_OUT.with_name("Keyed Label Candidates.pro"))
+        print(f"Wrote {make_candidates(out)}")
+    elif args.run:
         out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name(f"{args.run}.pro")
         out.parent.mkdir(parents=True, exist_ok=True)
         written, steps = build.build(store.load(args.run), str(out))

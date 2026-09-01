@@ -40,6 +40,17 @@ DIVIDER_LABELS = {
     "ending": "예배 마침",
 }
 
+# The sections Keynote keys as a small label over the live camera instead of replacing it with a
+# full-screen plate (#234). Settled by classifying every page of the operator-approved deck by
+# background: these are the only headings the deck gives a keyed label and *no* navy plate. The
+# ones it gives both (예배의 부름, 봉 헌, 환영 및 인사, 교회 소식, 축도) keep their plate here.
+# 축도 전 찬양 / 주기도문 전 찬양 are in SENDING_CUES, handled in build.fill_sending.
+KEYED_SECTIONS = frozenset({
+    DIVIDER_LABELS["repentance_call"],
+    DIVIDER_LABELS["absolution"],
+    DIVIDER_LABELS["united_prayer"],
+})
+
 # ── Opening / closing cards ───────────────────────────────────────────────────
 
 # The two services share one deck, so every bookend slide exists twice (master slides 1–2, 167–168).
