@@ -7,15 +7,24 @@ Korean renders (the RTF escaping risk), the Option A strips hug each lyric line,
 Option 3 frame/gold rules match ``docs/style-samples/f3-*.png`` (minus the blurred backdrop,
 which needs the #224 background images).
 
+``--run YYYY-MM-DD`` instead builds the **whole weekly deck** from that run's reviewed
+``ServiceData`` (#178) — the end-to-end eyeball, and the only way to see the section order,
+the verse packing and the liturgy as the operator will click through them.
+
 Usage:
 
     .venv/bin/python scripts/make_pro_demo.py                    # -> the local PP library
     .venv/bin/python scripts/make_pro_demo.py --out /tmp/x.pro
+    .venv/bin/python scripts/make_pro_demo.py --run 2026-08-23   # the full weekly deck
+
+ProPresenter caches a ``.pro`` it has already read, so iterate by writing a *new* filename each
+round (``--out``) rather than overwriting and restarting the app.
 """
 
 import argparse
 from pathlib import Path
 
+from worship_deck import store
 from worship_deck.propresenter import build, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
@@ -93,8 +102,15 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help="destination .pro")
     ap.add_argument("--image", type=Path, help="a PNG to place on a full-bleed image slide")
+    ap.add_argument("--run", help="build the full weekly deck from this run date (YYYY-MM-DD)")
     args = ap.parse_args()
 
-    written = make_demo(args.out, args.image)
-    print(f"Wrote {written}")
+    if args.run:
+        out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name(f"{args.run}.pro")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        written, steps = build.build(store.load(args.run), str(out))
+        print(f"Wrote {written} ({sum(steps.values()):.2f}s)")
+    else:
+        written = make_demo(args.out, args.image)
+        print(f"Wrote {written}")
     print("Open it in ProPresenter (restart PP if the library doesn't refresh).")

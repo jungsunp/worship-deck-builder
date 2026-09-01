@@ -21,6 +21,7 @@ Each ``STYLE_KEYS`` entry has a builder below returning a finished ``Slide``; th
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from pathlib import Path
 
 # isort: off
 from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare *_pb2 imports
@@ -28,8 +29,10 @@ from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare
 import slide_pb2
 
 # isort: on
+from worship_deck.bible import layout
+
+from . import content, rtf
 from . import elements as el
-from . import rtf
 
 # The slide types the generator can produce. Each maps to one builder function below.
 STYLE_KEYS = (
@@ -41,11 +44,29 @@ STYLE_KEYS = (
     "announcement",             # 교회소식 item (gold title + muted detail)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
     "liturgy",                  # fixed-wording full-screen (사도신경 / 주기도문)
+    "service_intro",            # N부 예배를 시작합니다 + sermon title / ref / date
+    "service_outro",            # N부 예배를 마칩니다 + date
+    "text_card",                # centered fixed-wording card (표어 / 환영 / 예배 준비 / 폐회)
     "blank_green",              # blank chroma-green separator
     "image",                    # full-bleed image slide (hymn PNG pages, band lead sheets)
 )
 
 CANVAS = (1920.0, 1080.0)
+
+# ── Church artwork ────────────────────────────────────────────────────────────
+# Lifted from the church's own deck (extracted from master.key's media) and normalised to the
+# canvas: the deck is generated from scratch, so anything that rode along inside the template
+# has to ship with the generator. Committed because they are public church branding — no member
+# names, no offering amounts (unlike anything under data/).
+ASSET_DIR = Path(__file__).parent / "assets"
+LOGO = str(ASSET_DIR / "npc-logo.png")  # 노스필드장로교회, white-on-transparent (master slides 1–3)
+# The two full-bleed pre-service plates the deck opens with (master slides 4–5): the building at
+# sunrise, then the 환영합니다 graphic. The welcome graphic carries the year's 표어 ("가족"), so
+# replace it each January alongside ``content.WELCOME_CARD``.
+PRE_SERVICE_IMAGES = (
+    str(ASSET_DIR / "pre-service-church.jpg"),
+    str(ASSET_DIR / "pre-service-welcome.jpg"),
+)
 
 # ── Palette (Option 3 네이비 프레임) ────────────────────────────────────────────
 # RGB triples; RTF has no alpha, so the sample's translucent inks are pre-blended over the
@@ -75,7 +96,13 @@ FONT_BOLD = "AppleSDGothicNeo-Bold"
 FONT_REGULAR = "AppleSDGothicNeo-Regular"
 
 # ── Geometry (1920×1080; transcribed from scripts/render_style_samples.py) ─────
-FRAME_INSET = (140.0, 96.0)  # x, y — the 네이비 프레임 box
+# x, y. The vertical inset is much tighter than the horizontal one because the scripture
+# slide is the tallest content in the deck: at the reference 84/59pt it needs five 개역한글 lines
+# plus four ESV lines plus both labels, and Keynote fits the same passage only by running from
+# y=41 to y=1049 with no frame at all (#178 review). 22 + 12 keeps a visible 네이비 프레임 while
+# leaving 1012pt of content — that layout's worst case plus the air the operator opened up under
+# the 개역한글 label when they restyled a draft by hand (#178 review, round 3).
+FRAME_INSET = (44.0, 22.0)
 LYRIC_ZONE_BOTTOM = 72.0     # Option A: distance from the bottom edge
 # Half-padding of the black strip around each lyric line (``line_strip`` doubles it into
 # ProPresenter's width/height *offset*, which is the total added to the line box). Kept tight
@@ -83,7 +110,40 @@ LYRIC_ZONE_BOTTOM = 72.0     # Option A: distance from the bottom edge
 # the gap between consecutive strips — the line pitch is fixed by size + line_spacing, so
 # less vertical padding means more daylight between lines.
 LYRIC_STRIP_PAD = (22.0, 4.0)
-CONTENT_INSET = (100.0, 64.0)  # padding inside the frame box
+CONTENT_INSET = (44.0, 12.0)  # padding inside the frame box
+FRAME_BOX = (
+    FRAME_INSET[0],
+    FRAME_INSET[1],
+    CANVAS[0] - 2 * FRAME_INSET[0],
+    CANVAS[1] - 2 * FRAME_INSET[1],
+)
+# Where full-screen slide content lives. Exported because `build` sizes its verse chunks from
+# it — the Keynote builder measures the boxes on the open template, but here they are known
+# up front, so the packing model and the slide builder must read the same numbers (#178).
+CONTENT_RECT = (
+    FRAME_BOX[0] + CONTENT_INSET[0],
+    FRAME_BOX[1] + CONTENT_INSET[1],
+    FRAME_BOX[2] - 2 * CONTENT_INSET[0],
+    FRAME_BOX[3] - 2 * CONTENT_INSET[1],
+)
+# How many wrapped lines each half of a scripture slide is built to hold, at VERSE_KO /
+# VERSE_EN. Measured, not guessed: across 삼상 14:1-23 (the 2026-08-30 sermon passage, the
+# longest of the recent weeks) the worst verse needs 4.62 개역한글 lines and 3.67 ESV lines at
+# 1744pt wide. Budgeting 5 and 4 means every verse in that passage ships at the reference size
+# with nothing shrunk, and `build._verse_cues` packs a second verse onto a slide whenever both
+# still fit. Raising either without re-checking `CONTENT_RECT` will start clipping.
+VERSE_KO_LINES = 5
+VERSE_EN_LINES = 4
+# A label belongs to the body under it, so it sits close. The 개역한글 label gets noticeably more
+# air than the ESV one: that is the operator's own hand-restyle of a draft, where they pushed the
+# 84pt Korean body down off its label and left the 59pt English one where it was (#178 review).
+VERSE_KO_LABEL_GAP = 28.0
+VERSE_EN_LABEL_GAP = 8.0
+
+# Where the church logo sits, matching master.key: top-right on the opening plates (slide 1,
+# 1377,45 492×127) and bottom-right on the 표어 / 환영 cards (slide 3, 1372,895 437×97).
+LOGO_TOP_RIGHT = (1382.0, 44.0, 480.0, 130.0)
+LOGO_BOTTOM_RIGHT = (1400.0, 902.0, 420.0, 114.0)
 
 
 @dataclass(frozen=True)
@@ -102,22 +162,43 @@ class Style:
     family: str = FONT_FAMILY
 
 
-# Per-section type scale, matching the sample PNGs.
+# Per-section type scale. The #189 sample PNGs were drawn at roughly half these sizes, which
+# turned out to be a mock-up scale rather than a projection scale: a large share of the
+# congregation is elderly, and the church's own Keynote deck sets scripture at 84pt, 교회 소식 at
+# 80pt and the opening plate's heading at 141pt on the same 1920×1080 canvas. So the sizes below
+# are transcribed from `주일 2부-2026-08-30-v1.key` — the operator-approved deck — and the frame
+# insets above were pulled in to give them the room Keynote's boxes have (#178 review). Anything
+# that still overflows shrinks rather than clips: see `elements.text`'s scale_behavior.
+# Two of them are no longer Keynote's: the opening plate's sermon title and reference (100/88 there)
+# read as shouting on the navy ground, and the operator reset them to 70/60 restyling a draft by
+# hand (#178 review, round 3). Their markup is the reference for those, not master.key.
 LYRIC_KO = Style(FONT_BOLD, 68, bold=True, tracking=3.0, line_spacing=20.0)
 LYRIC_EN = Style(FONT_REGULAR, 34, MUTED, tracking=1.5, line_spacing=10.0)
-TITLE = Style(FONT_BOLD, 72, bold=True, tracking=2.0, line_spacing=14.0)
-VERSE_LABEL = Style(FONT_BOLD, 31, ACCENT, bold=True, line_spacing=42.0, align="left")
-VERSE_NUMBER = Style(FONT_BOLD, 26, ACCENT, bold=True, align="left")
-VERSE_KO = Style(FONT_BOLD, 47, line_spacing=31.0, align="left")
-VERSE_EN_LABEL = Style(FONT_REGULAR, 25, ACCENT, line_spacing=20.0, align="left")
-VERSE_EN = Style(FONT_REGULAR, 31, MUTED, line_spacing=19.0, align="left")
-ANNOUNCE_HEADING = Style(FONT_BOLD, 58, bold=True, tracking=8.0)
-ANNOUNCE_TITLE = Style(FONT_BOLD, 41, ACCENT, bold=True, line_spacing=10.0, align="left")
-ANNOUNCE_DETAIL = Style(FONT_REGULAR, 33, MUTED, line_spacing=15.0, align="left")
-DIVIDER_KO = Style(FONT_BOLD, 136, bold=True, tracking=30.0)
-DIVIDER_SUB = Style(FONT_REGULAR, 37, MUTED, tracking=2.0)
-LITURGY_TITLE = Style(FONT_BOLD, 38, ACCENT, bold=True, tracking=12.0)
-LITURGY_BODY = Style(FONT_REGULAR, 46, line_spacing=38.0)
+TITLE = Style(FONT_BOLD, 110, bold=True, tracking=2.0, line_spacing=20.0)
+# The two `[ref, 개역한글]` labels are reference furniture, not something the congregation
+# reads across the sanctuary, so they stay small — Keynote sets them at 64/56 in their own
+# boxes above each body, and every point spent on them is a point the body cannot have.
+VERSE_LABEL = Style(FONT_BOLD, 44, ACCENT, bold=True, align="left")
+VERSE_NUMBER = Style(FONT_BOLD, 62, ACCENT, bold=True, align="left")
+VERSE_KO = Style(FONT_REGULAR, 84, line_spacing=6.0, align="left")
+VERSE_EN_LABEL = Style(FONT_BOLD, 40, ACCENT, bold=True, align="left")
+VERSE_EN = Style(FONT_REGULAR, 59, MUTED, line_spacing=6.0, align="left")
+ANNOUNCE_HEADING = Style(FONT_BOLD, 44, ACCENT, bold=True, tracking=8.0)
+ANNOUNCE_TITLE = Style(FONT_BOLD, 76, ACCENT, bold=True, line_spacing=16.0, align="left")
+ANNOUNCE_DETAIL = Style(FONT_REGULAR, 64, MUTED, line_spacing=20.0, align="left")
+DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
+DIVIDER_SUB = Style(FONT_BOLD, 76, ACCENT, bold=True, tracking=2.0)
+LITURGY_TITLE = Style(FONT_BOLD, 48, ACCENT, bold=True, tracking=12.0)
+LITURGY_BODY = Style(FONT_BOLD, 72, bold=True, line_spacing=22.0)
+SERVICE_HEADING = Style(FONT_BOLD, 138, bold=True, line_spacing=10.0)
+SERVICE_NOTICE = Style(FONT_REGULAR, 37, MUTED, line_spacing=8.0)
+SERVICE_DATE = Style(FONT_BOLD, 79, bold=True, tracking=2.0)
+SERVICE_TITLE = Style(FONT_BOLD, 70, ACCENT, bold=True, line_spacing=12.0)
+SERVICE_REF = Style(FONT_BOLD, 60, ACCENT, bold=True, line_spacing=12.0)
+CLOSING_BLESSING = Style(FONT_REGULAR, 75)
+NOTE = Style(FONT_REGULAR, 18, BLACK, align="left")  # per-slide notes pane, not on the canvas
+CARD_BODY = Style(FONT_BOLD, 80, bold=True, line_spacing=26.0)
+CARD_ACCENT = Style(FONT_BOLD, 80, ACCENT, bold=True, line_spacing=26.0)
 
 
 # ── Slide builders ────────────────────────────────────────────────────────────
@@ -148,27 +229,98 @@ def _front_to_back(slide: slide_pb2.Slide) -> slide_pb2.Slide:
     return slide
 
 
-def _framed(slide: slide_pb2.Slide) -> tuple[float, float, float, float]:
+def _framed(slide: slide_pb2.Slide, *, frame: bool = True) -> tuple[float, float, float, float]:
     """Draw the Option 3 backdrop — navy tint + frame box — and return the content rect.
+
+    ``frame=False`` keeps the tint but drops the outline. The opening/closing plates and the
+    fixed-wording cards use it: they are the least dense slides in the deck, and the operator
+    took the outline off all three restyling a draft by hand — "removed borderline to make it
+    cleaner" (#178 review, round 3). The frame stays wherever content reaches the edges — the
+    dividers, scripture, liturgy and 교회 소식.
 
     The sample's blurred-photo backdrop is *not* drawn here. ProPresenter's own
     ``backgroundEffect.backgroundBlur`` would have supplied it for free, but 21.4 renders it
     as a placeholder and crashes on selection (verified 2026-08-13), so the blur has to come
     from a pre-blurred background image — the #224 library, dropped in behind this tint.
     """
-    full = (0.0, 0.0, *CANVAS)
-    el.shape(slide, full, fill=TINT_RGBA)
-    x, y = FRAME_INSET
-    frame = (x, y, CANVAS[0] - 2 * x, CANVAS[1] - 2 * y)
-    el.shape(
-        slide,
-        frame,
-        fill=FRAME_FILL_RGBA,
-        stroke=(FRAME_STROKE_RGBA, FRAME_STROKE_WIDTH),
-        roundness=FRAME_RADIUS,
-    )
-    px, py = CONTENT_INSET
-    return (frame[0] + px, frame[1] + py, frame[2] - 2 * px, frame[3] - 2 * py)
+    el.shape(slide, (0.0, 0.0, *CANVAS), fill=TINT_RGBA)
+    if frame:
+        el.shape(
+            slide,
+            FRAME_BOX,
+            fill=FRAME_FILL_RGBA,
+            stroke=(FRAME_STROKE_RGBA, FRAME_STROKE_WIDTH),
+            roundness=FRAME_RADIUS,
+        )
+    return CONTENT_RECT
+
+
+def _logo(slide: slide_pb2.Slide, rect: tuple[float, float, float, float]) -> None:
+    """Place the church logo. ``fill_frame=False`` so it letterboxes inside ``rect`` — the
+    artwork's aspect must never be cropped the way a background photo can be."""
+    el.image(slide, rect, LOGO, fill_frame=False)
+
+
+def _wrapped_height(runs: list[rtf.Run], width: float, scale: float) -> float:
+    """Estimated height of ``runs`` laid into a box ``width`` wide at ``scale``× their sizes.
+
+    Same wrapping model as ``bible.layout`` (average glyph advance / font size), walked run by
+    run because one paragraph mixes sizes — a gold verse number then the verse body. Each line
+    costs ``layout.LINE_PITCH`` × its largest font plus the style's extra leading, the last line
+    included: ProPresenter reserves the line spacing *after* the final line too, so a box short
+    by even part of one leading is a box the app flags (#178 review, confirmed against two decks
+    the operator marked up by hand).
+    """
+    lead = runs[0][1].line_spacing * scale
+    lines: list[float] = []
+    column, line_size = 0.0, 0.0
+    for text, style in runs:
+        size = style.size * scale
+        char_w = layout.CHAR_W_KO if any("가" <= c <= "힣" for c in text) else layout.CHAR_W_EN
+        paragraphs = text.split("\n")
+        for i, paragraph in enumerate(paragraphs):
+            if i:
+                lines.append(line_size)
+                column, line_size = 0.0, 0.0
+            # A run that ends in a newline leaves an empty tail paragraph: that is the *next*
+            # run's line, not another line of this one, so this run's size must not claim it.
+            # An empty paragraph anywhere earlier is a real blank line, and does.
+            if paragraph or i < len(paragraphs) - 1:
+                line_size = max(line_size, size)
+            column += len(paragraph) * size * char_w
+            while column > width:
+                lines.append(line_size)
+                column -= width
+    lines.append(line_size)
+    return sum(s * layout.LINE_PITCH for s in lines) + lead * len(lines)
+
+
+def _fit_scale(runs: list[rtf.Run], width: float, height: float, floor: float = 0.55) -> float:
+    """The largest scale ≤ 1 at which ``runs`` fit a ``width``×``height`` box.
+
+    The church's Keynote deck leans on "shrink text to fit" for the occasional over-long
+    announcement or verse, and the generated deck needs the same safety net — but
+    ProPresenter's own ``SCALE_BEHAVIOR_SCALE_FONT_DOWN`` is not it: PP shrinks until the text
+    fits *without wrapping*, which drops a four-line 개역한글 verse to ~20pt on one line
+    (measured on PP 21.4, #178 review). So the fitting is done here, at authoring time, and the
+    slide ships at a size that genuinely fits.
+    """
+    for step in range(int((1.0 - floor) * 20) + 1):
+        scale = 1.0 - step * 0.05
+        if _wrapped_height(runs, width, scale) <= height:
+            return scale
+    return floor
+
+
+def _scaled(runs: list[rtf.Run], width: float, height: float) -> list[rtf.Run]:
+    """``runs`` with every style shrunk by ``_fit_scale`` (a no-op when they already fit)."""
+    scale = _fit_scale(runs, width, height)
+    if scale == 1.0:
+        return runs
+    return [
+        (text, replace(style, size=style.size * scale, line_spacing=style.line_spacing * scale))
+        for text, style in runs
+    ]
 
 
 def _rule(slide: slide_pb2.Slide, y: float, width: float = 96.0, height: float = 3.0) -> None:
@@ -242,8 +394,36 @@ def song_title(title: str, subtitle: str = "") -> slide_pb2.Slide:
     runs: list[rtf.Run] = [(title, TITLE)]
     if subtitle:
         runs.append(("\n" + subtitle, DIVIDER_SUB))
-    el.text(slide, content, rtf.document(runs), TITLE)
+    el.text(slide, content, rtf.document(_scaled(runs, content[2], content[3])), TITLE)
     return _front_to_back(slide)
+
+
+def verse_rects() -> dict[str, tuple[float, float, float, float]]:
+    """The four boxes of a scripture slide, plus the y of the gold rule between the languages.
+
+    Shared with ``build._verse_cues``, which has to pack verses to exactly the boxes this lays
+    them into. The four heights are fixed by the type scale (``VERSE_*_LINES`` lines at each
+    style's own pitch); the rhythm is the Keynote deck's (master 141-163): each label sits hard
+    against the body it introduces, the 개역한글 block hangs from the top of the content rect and
+    the ESV block from the bottom, and all the slack collects in the middle — where a gap reads
+    as the division between two languages rather than as a slide that failed to fill.
+    """
+    x, y, w, h = CONTENT_RECT
+    ko_label_h = layout.line_height(VERSE_LABEL.size)
+    en_label_h = layout.line_height(VERSE_EN_LABEL.size)
+    ko_body_h = VERSE_KO_LINES * (VERSE_KO.size * layout.LINE_PITCH + VERSE_KO.line_spacing)
+    en_body_h = VERSE_EN_LINES * (VERSE_EN.size * layout.LINE_PITCH + VERSE_EN.line_spacing)
+
+    ko_body_y = y + ko_label_h + VERSE_KO_LABEL_GAP
+    en_body_y = y + h - en_body_h
+    en_label_y = en_body_y - VERSE_EN_LABEL_GAP - en_label_h
+    return {
+        "ko_label": (x, y, w, ko_label_h),
+        "ko_body": (x, ko_body_y, w, ko_body_h),
+        "rule_y": ((ko_body_y + ko_body_h + en_label_y) / 2, 0.0, 0.0, 0.0),
+        "en_label": (x, en_label_y, w, en_label_h),
+        "en_body": (x, en_body_y, w, en_body_h),
+    }
 
 
 def verse_fullscreen(
@@ -252,30 +432,37 @@ def verse_fullscreen(
     en_label: str,
     en_verses: list[tuple[int, str]],
 ) -> slide_pb2.Slide:
-    """Bilingual scripture: 개역한글 above, a gold rule, then ESV — verse numbers in gold."""
-    slide = _slide(background=NAVY)
-    x, y, w, h = _framed(slide)
+    """Bilingual scripture: 개역한글 above, a gold rule, then ESV — verse numbers in gold.
 
-    ko_runs: list[rtf.Run] = [(ko_label + "\n", VERSE_LABEL)]
+    Laid out like the church's Keynote slide (master 141-163): each language gets a small
+    reference label in its own box above a body box, rather than the label sharing the body's
+    box — an inline label costs the body a whole line of its own pitch, which is what pushed
+    the long verses of 삼상 14 past the bottom of the slide (#178 review).
+    """
+    slide = _slide(background=NAVY)
+    _framed(slide)
+    rects = verse_rects()
+
+    ko_runs: list[rtf.Run] = []
     for i, (number, text) in enumerate(ko_verses):
         ko_runs += [(("\n" if i else "") + f"{number} ", VERSE_NUMBER), (text, VERSE_KO)]
-    en_runs: list[rtf.Run] = [(en_label + "\n", VERSE_EN_LABEL)]
+    en_runs: list[rtf.Run] = []
     for i, (number, text) in enumerate(en_verses):
         en_runs += [
-            (("\n" if i else "") + f"{number} ", replace(VERSE_NUMBER, size=20)),
+            (("\n" if i else "") + f"{number} ", replace(VERSE_NUMBER, size=44)),
             (text, VERSE_EN),
         ]
 
-    ko_h = h * 0.56
-    el.text(slide, (x, y, w, ko_h), rtf.document(ko_runs), VERSE_LABEL, valign="top")
-    _rule(slide, y + ko_h + 12.0, width=84.0, height=1.0)
-    el.text(
-        slide,
-        (x, y + ko_h + 58.0, w, h - ko_h - 58.0),
-        rtf.document(en_runs),
-        VERSE_EN_LABEL,
-        valign="top",
-    )
+    el.text(slide, rects["ko_label"], rtf.plain(ko_label, VERSE_LABEL), VERSE_LABEL,
+            valign="top")
+    el.text(slide, rects["en_label"], rtf.plain(en_label, VERSE_EN_LABEL), VERSE_EN_LABEL,
+            valign="top")
+    # `build._verse_cues` packs each slide to these boxes, so `_scaled` is a floor-level safety
+    # net for the passage that overruns anyway — one verse too long for a slide of its own.
+    for key, runs, base in (("ko_body", ko_runs, VERSE_KO), ("en_body", en_runs, VERSE_EN)):
+        rect = rects[key]
+        el.text(slide, rect, rtf.document(_scaled(runs, rect[2], rect[3])), base, valign="top")
+    _rule(slide, rects["rule_y"][0], width=84.0, height=1.0)
     return _front_to_back(slide)
 
 
@@ -284,8 +471,10 @@ def announcement(heading: str, blocks: list[str]) -> slide_pb2.Slide:
     gold title, muted detail. The samples show several per slide; #178 decides the packing."""
     slide = _slide(background=NAVY)
     x, y, w, h = _framed(slide)
-    el.text(slide, (x, y, w, 90.0), rtf.plain(heading, ANNOUNCE_HEADING), ANNOUNCE_HEADING)
-    _rule(slide, y + 118.0)
+    # The heading is a small gold eyebrow, not a plate title: master.key gives each item slide
+    # the whole canvas at 80pt (slides 123–131) and announces the section once, on its divider.
+    el.text(slide, (x, y, w, 56.0), rtf.plain(heading, ANNOUNCE_HEADING), ANNOUNCE_HEADING)
+    _rule(slide, y + 78.0)
 
     runs: list[rtf.Run] = []
     for i, block in enumerate(blocks):
@@ -294,21 +483,29 @@ def announcement(heading: str, blocks: list[str]) -> slide_pb2.Slide:
         if detail:
             runs.append((detail, ANNOUNCE_DETAIL))
     if runs:
-        top = y + 176.0
-        el.text(slide, (x, top, w, h - (top - y)), rtf.document(runs), ANNOUNCE_TITLE, valign="top")
+        top = y + 124.0
+        box = (x, top, w, h - (top - y))
+        el.text(slide, box, rtf.document(_scaled(runs, w, box[3])), ANNOUNCE_TITLE, valign="top")
     return _front_to_back(slide)
 
 
 def section_divider(heading: str, subtitle: str = "") -> slide_pb2.Slide:
-    """Section heading slide (예배의 부름 / 봉 헌 / 교회 소식 …) with the gold rule and subtitle."""
+    """Section heading slide (예배의 부름 / 봉 헌 / 교회 소식 …) with the gold rule and subtitle.
+
+    The subtitle is bare — the week's song title or scripture reference, no brackets. master.key
+    writes ``[ 믿음으로 우리는 ]``; the operator dropped the brackets across the divider slides
+    restyling a draft, since the gold rule above already separates it (#178 review, round 3).
+    """
     slide = _slide(background=NAVY)
     x, y, w, h = _framed(slide)
-    el.text(slide, (x, y, w, h * 0.6), rtf.plain(heading, DIVIDER_KO), DIVIDER_KO, valign="bottom")
-    _rule(slide, y + h * 0.6 + 46.0, width=90.0)
+    el.text(
+        slide, (x, y, w, h * 0.62), rtf.plain(heading, DIVIDER_KO), DIVIDER_KO, valign="bottom"
+    )
+    _rule(slide, y + h * 0.62 + 40.0, width=90.0)
     if subtitle:
         el.text(
             slide,
-            (x, y + h * 0.6 + 110.0, w, 80.0),
+            (x, y + h * 0.62 + 96.0, w, 140.0),
             rtf.plain(subtitle, DIVIDER_SUB),
             DIVIDER_SUB,
             valign="top",
@@ -320,14 +517,110 @@ def liturgy(title: str, lines: list[str]) -> slide_pb2.Slide:
     """Fixed-wording full-screen liturgy (사도신경 / 주기도문) — gold spaced title over the body."""
     slide = _slide(background=NAVY)
     x, y, w, h = _framed(slide)
-    el.text(slide, (x, y, w, 70.0), rtf.plain(title, LITURGY_TITLE), LITURGY_TITLE)
+    el.text(slide, (x, y, w, 60.0), rtf.plain(title, LITURGY_TITLE), LITURGY_TITLE)
+    body: list[rtf.Run] = [("\n".join(lines), LITURGY_BODY)]
     el.text(
         slide,
-        (x, y + 128.0, w, h - 128.0),
-        rtf.plain("\n".join(lines), LITURGY_BODY),
+        (x, y + 110.0, w, h - 110.0),
+        rtf.document(_scaled(body, w, h - 110.0)),
         LITURGY_BODY,
         valign="top",
     )
+    return _front_to_back(slide)
+
+
+def service_intro(part: str, sermon_title: str, ref: str, date: str) -> slide_pb2.Slide:
+    """Opening plate: date, 「N부 예배를 시작합니다」, this week's sermon title + ref, the notice.
+
+    The two services share one deck, so this is built once per ``content.SERVICE_PARTS`` entry
+    (master slides 1–2). ``ref`` is bare, e.g. ``"창 1:1-5"``: master.key brackets it, and the
+    operator took the brackets off restyling a draft — on a slide whose only other line *is* the
+    sermon title, nothing needs setting apart (#178 review, round 3).
+
+    Laid out in **canvas** coordinates rather than off the content rect, because this is the one
+    plate the operator compares side by side with the Keynote deck: the boxes below are
+    master.key slide 1's own (date 621,297 · heading 169,386 · title+ref 222,634 · notice
+    246,908), so the reading order and rhythm match line for line. Only the ground (navy instead
+    of the bluegreen photo) and the type colors are ours.
+    """
+    slide = _slide(background=NAVY)
+    _framed(slide, frame=False)
+    _logo(slide, LOGO_TOP_RIGHT)
+    el.text(slide, (240.0, 290.0, 1440.0, 110.0), rtf.plain(date, SERVICE_DATE), SERVICE_DATE)
+    heading = f"{part} 예배를 시작합니다."
+    el.text(
+        slide, (140.0, 386.0, 1640.0, 250.0), rtf.plain(heading, SERVICE_HEADING), SERVICE_HEADING
+    )
+    runs: list[rtf.Run] = []
+    if sermon_title:
+        runs.append((sermon_title, SERVICE_TITLE))
+    if ref:
+        runs.append((("\n" if runs else "") + ref, SERVICE_REF))
+    if runs:
+        el.text(
+            slide, (220.0, 634.0, 1480.0, 248.0), rtf.document(_scaled(runs, 1480.0, 248.0)),
+            SERVICE_TITLE,
+        )
+    el.text(
+        slide,
+        (246.0, 900.0, 1448.0, 120.0),
+        rtf.plain(content.OPENING_NOTICE, SERVICE_NOTICE),
+        SERVICE_NOTICE,
+    )
+    return _front_to_back(slide)
+
+
+def service_outro(part: str, date: str) -> slide_pb2.Slide:
+    """Closing plate: date, 「N부 예배를 마칩니다」, and the church's closing line (master 167–168).
+
+    Same canvas-coordinate treatment as ``service_intro`` — master.key slide 167 stacks the date
+    and the heading in one box (57,312 1804×423) with the blessing under it (387,767).
+    """
+    slide = _slide(background=NAVY)
+    _framed(slide, frame=False)
+    style = replace(SERVICE_HEADING, size=105)
+    el.text(
+        slide,
+        (60.0, 312.0, 1800.0, 423.0),
+        rtf.document([(date + "\n", style), (f"{part} 예배를 마칩니다.", style)]),
+        style,
+    )
+    _rule(slide, 742.0, width=90.0)
+    el.text(
+        slide,
+        (390.0, 800.0, 1140.0, 170.0),
+        rtf.plain(content.CLOSING_BLESSING, CLOSING_BLESSING),
+        CLOSING_BLESSING,
+    )
+    return _front_to_back(slide)
+
+
+def text_card(
+    lines: list[str | tuple[str, str]], accent_lines: tuple[int, ...] = ()
+) -> slide_pb2.Slide:
+    """Centered fixed-wording card — 교회 표어, 환영, 폐회 안내.
+
+    ``accent_lines`` indexes the lines to set wholly in gold (the 표어 line of the 환영 card);
+    everything else is white. A line given as a ``(gold, white)`` pair splits mid-line instead —
+    the 표어 needs it, where only the quoted motto is gold and the 「입니다.」 that closes the
+    sentence is not (#178 review, round 3). One text element, so the block stays vertically
+    centred as a whole, with the logo bottom-right as master.key slide 3 has it.
+    """
+    slide = _slide(background=NAVY)
+    x, y, w, h = _framed(slide, frame=False)
+    _logo(slide, LOGO_BOTTOM_RIGHT)
+    runs: list[rtf.Run] = []
+    for i, line in enumerate(lines):
+        head = "\n" if i else ""
+        if isinstance(line, tuple):
+            runs += [(head + line[0], CARD_ACCENT), (line[1], CARD_BODY)]
+        else:
+            runs.append((head + line, CARD_ACCENT if i in accent_lines else CARD_BODY))
+    # 160pt of the content rect is given up to the logo's corner, but the card is centred in
+    # what is left of the *canvas*, not pushed up by it — the block reading high is what the
+    # operator's own ProPresenter re-layout corrected (#178 review, round 3).
+    box = (x, y + 80.0, w, h - 160.0)
+    el.text(slide, box, rtf.document(_scaled(runs, w, box[3])), CARD_BODY)
     return _front_to_back(slide)
 
 
@@ -356,21 +649,32 @@ BUILDERS = {
     "announcement": announcement,
     "section_divider": section_divider,
     "liturgy": liturgy,
+    "service_intro": service_intro,
+    "service_outro": service_outro,
+    "text_card": text_card,
     "blank_green": blank_green,
     "image": image,
 }
 
 # Section band colors for the ProPresenter group headers (cosmetic, operator-facing).
 GROUP_COLORS: dict[str, tuple[int, int, int]] = {
+    "예배 시작": (0x6B, 0x7A, 0x8E),
     "예배의 부름": (0x3B, 0x6E, 0xA5),
+    "회개로의 초대": (0x7A, 0x6B, 0xA8),
+    "죄사함의 선포": (0x7A, 0x6B, 0xA8),
     "찬양": (0x2E, 0x8B, 0x6B),
     "고백의 찬양": (0x2E, 0x8B, 0x6B),
     "사도신경": (0x7A, 0x6B, 0xA8),
     "성가대 찬양": (0xA8, 0x6B, 0x8E),
     "봉 헌": (0xA8, 0x8B, 0x4B),
+    "환영 및 인사": (0x6B, 0x7A, 0x8E),
     "교회 소식": (0x6B, 0x7A, 0x8E),
+    "합심 기도": (0x7A, 0x6B, 0xA8),
     "말씀": (0x3B, 0x6E, 0xA5),
+    "파송의 노래": (0x2E, 0x8B, 0x6B),
+    "축도": (0x7A, 0x6B, 0xA8),
     "주기도문": (0x7A, 0x6B, 0xA8),
+    "예배 마침": (0x6B, 0x7A, 0x8E),
 }
 
 
