@@ -54,7 +54,7 @@ from worship_deck.lyrics import linebreak
 from worship_deck.lyrics.transcribe import Song, arranged_chunks
 from worship_deck.parse import ServiceData
 
-from . import content, elements, rtf, styles
+from . import announce, content, elements, rtf, styles
 
 # The dev/church ProPresenter build the vendored protos are pinned to (#191 re-pins to 18.4).
 PP_VERSION = (21, 4)
@@ -429,20 +429,27 @@ def fill_sermon(
 
 
 def fill_announcements(pres: presentation_pb2.Presentation, items: list[str]) -> None:
-    """교회 소식 — the divider, the 표어/환영 card, then one full-screen slide per item.
+    """교회 소식 — the divider, the 표어/환영 card, then the week's notices.
 
-    Each item arrives from the bulletin parser already slide-ready as ``"N. title\\n\\ndetail"``
-    (gold title, muted detail), one per cue as the church's deck shows them.
+    Each item arrives from the bulletin parser (and then the review editor) as
+    ``"N. title\\n\\ndetail"``. ``announce.parse_item`` lifts its 날짜/장소/문의 out of the prose
+    into the plate's rail, and ``styles.split_announcement`` cuts anything too long for one plate
+    across two rather than shrinking the type under it (#233) — so a notice can own more than one
+    cue, and the continuations are labelled as such in the operator's cue list.
     """
     label = content.DIVIDER_LABELS["announcements"]
     cue_uuids = [
         add_cue(pres, new_slide("section_divider", label), label),
         add_cue(pres, new_slide("text_card", content.WELCOME_CARD, (2,)), "환영"),
     ]
-    for item in items:
-        cue_uuids.append(
-            add_cue(pres, new_slide("announcement", label, [item]), item.partition("\n")[0])
-        )
+    for number, block in enumerate(items, start=1):
+        item = announce.parse_item(block)
+        for part_index, part in enumerate(styles.split_announcement(item)):
+            cue_uuids.append(add_cue(
+                pres,
+                new_slide("announcement", label, part, number, len(items)),
+                item.title if not part_index else f"{item.title} (계속)",
+            ))
     _group(pres, label, cue_uuids)
 
 

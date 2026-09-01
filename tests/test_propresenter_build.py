@@ -19,7 +19,7 @@ from worship_deck.bible import layout
 from worship_deck.bible.verses import Verse
 from worship_deck.lyrics import linebreak
 from worship_deck.parse import ServiceData
-from worship_deck.propresenter import build, content, elements, rtf, styles
+from worship_deck.propresenter import announce, build, content, elements, rtf, styles
 
 _KO = "주 하나님"
 
@@ -159,7 +159,7 @@ def test_the_opening_and_closing_plates_drop_the_frame_outline():
 
     assert _has_frame(styles.section_divider("봉 헌"))
     assert _has_frame(styles.liturgy("사도신경", ["나는"]))
-    assert _has_frame(styles.announcement("교회 소식", ["1. 안내"]))
+    assert _has_frame(styles.announcement("교회 소식", announce.parse_item("1. 안내")))
 
 
 def test_the_korean_scripture_body_is_set_regular_not_bold():
@@ -674,16 +674,127 @@ def test_body_type_is_sized_for_the_congregation():
     assert styles.SERVICE_HEADING.size >= 130   # master slide 1, N부 예배를 시작합니다
 
 
-def test_a_long_announcement_shrinks_to_fit_rather_than_overflowing():
-    """ProPresenter's own SCALE_FONT_DOWN shrinks until the text fits *without wrapping* — it
-    put a four-line verse on one ~20pt line on PP 21.4 — so the fitting happens at authoring
-    time instead. A short item keeps the full type scale."""
-    short_item = "3. 제직회\n\n오늘 1:30 PM 친교실에서 제직회가 있습니다."
-    long_item = "6. 한국학교 개강 안내\n\n" + "9/20 주일 1:20 개강합니다. " * 20
+def test_a_long_announcement_splits_across_plates_instead_of_shrinking():
+    """The old plate shrank the one notice a week that overran — 4 of the last 112, worst 0.85 —
+    and shrinking is exactly what a congregation that skews elderly cannot afford. Every plate
+    ships at the reference type scale instead, however many it takes (#233)."""
+    long_item = announce.parse_item("6. 한국학교 개강 안내\n\n" + "9/20 개강합니다.\n" * 30)
     nominal = f"\\fs{round(styles.ANNOUNCE_TITLE.size * 2)} "
 
-    assert nominal in _rtf_text(styles.announcement("교회 소식", [short_item]))
-    assert nominal not in _rtf_text(styles.announcement("교회 소식", [long_item]))
+    parts = styles.split_announcement(long_item)
+    assert len(parts) > 1
+    for index, part in enumerate(parts, start=1):
+        assert nominal in _rtf_text(styles.announcement("교회 소식", part, index, len(parts)))
+        assert part.title == long_item.title  # every plate repeats it — it is one notice
+
+
+def test_every_announcement_plate_fits_the_box_it_is_drawn_into():
+    """``split_announcement`` is only worth anything if what it hands back actually fits: the
+    notice with a five-row rail, the one with a paragraph longer than a whole plate, and the
+    plain one-liner all have to land inside the content rect at full size."""
+    available = styles.CONTENT_RECT[3] - styles.ANNOUNCE_HEADER_H
+    blocks = [
+        "1. 제직회\n\n오늘 1:30 PM 친교실에서 제직회가 있습니다.",
+        ("2. 임직식\n\n6/28 (주일) 11:00 AM 2부 예배중 임직식이 있습니다.\n"
+         "· 피택 시무장로: 아무개\n· 피택 안수집사: 아무개\n· 피택 시무권사: 아무개, 아무개"),
+        "3. 저녁 기도회\n\n" + "\n".join(["이 선교를 함께 섬겨 주실 모든 분들을 초대합니다."] * 12),
+    ]
+    for block in blocks:
+        for part in styles.split_announcement(announce.parse_item(block)):
+            assert styles._announce_height(styles._announce_blocks(part)) <= available
+
+
+def test_announcement_rail_lifts_the_date_time_place_and_contact():
+    """The rail is what makes the plate scannable, and it is filled from the shapes the bulletin
+    actually writes: a leading date, the time after it, its own ``라벨: 값`` lines, and the
+    ``(문의: …)`` it tacks onto the end of a sentence (#233)."""
+    item = announce.parse_item(
+        "7. 피크닉 공지\n\n10/19-10/20 (오전 6시 출발) 1박 2일 피크닉이 있습니다. (문의: 아무개 집사)\n"
+        "•대상: 전교인\n•비용: $399"
+    )
+
+    assert item.title == "피크닉 공지"  # the number is dropped — the counter carries position
+    assert item.rows == (
+        ("날짜", "10/19-10/20"), ("시간", "오전 6시 출발"),
+        ("대상", "전교인"), ("비용", "$399"), ("문의", "아무개 집사"),
+    )
+    assert item.paragraphs == ("1박 2일 피크닉이 있습니다.",)
+
+
+def test_every_bullet_glyph_the_bulletin_uses_opens_a_rail_row():
+    """The bulletin writes its key/value lines behind •, ·, - or * from week to week, and hangs a
+    qualifier off the label. All of it is the same row, and the qualifier rides the value so the
+    label column stays a column (#233 review)."""
+    item = announce.parse_item(
+        "6. 여름성경학교\n\n"
+        "- 일시: 9월중 1박2일\n"
+        "· 초등부(1-5학년): 8/5 (수) - 8/7 (금)\n"
+        "* 장소: 본당\n"
+        "•대상: 전교인"
+    )
+
+    assert item.rows == (
+        ("일시", "9월중 1박2일"), ("초등부", "(1-5학년) 8/5 (수) - 8/7 (금)"),
+        ("장소", "본당"), ("대상", "전교인"),
+    )
+    assert item.paragraphs == ()
+
+
+def test_a_roster_wrapped_onto_a_second_line_stays_with_its_row():
+    """The bulletin breaks a long roster wherever its column ran out. The tail is the rest of the
+    대상자 row, not a new sentence — it read as stray prose under the rail before (#233 review)."""
+    item = announce.parse_item(
+        "1. 새가족 성경공부\n\n8/23(주일)까지 4주 동안 성경공부가 있습니다.\n"
+        "대상자 : 아무개/아무개, 아무개/아무개, 아무개,\n아무개, 아무개"
+    )
+
+    assert item.rows == (("대상자", "아무개/아무개, 아무개/아무개, 아무개, 아무개, 아무개"),)
+    assert item.paragraphs == ("8/23(주일)까지 4주 동안 성경공부가 있습니다.",)
+
+
+def test_an_uncaptioned_roster_takes_a_rail_row_with_a_blank_label():
+    """A bare list of names is an answer with no question in front of it. It belongs on the rail
+    for the same reason 대상자 does, and the empty label is the operator's cue to name it in
+    review — so the label box is not drawn at all (#233 review)."""
+    item = announce.parse_item(
+        "3. 저녁 기도회\n\n기도의 자리로 초대합니다.\n"
+        "(아무개, 아무개, 아무개, 아무개 (총 4명))"
+    )
+
+    assert item.rows == (("", "아무개, 아무개, 아무개, 아무개 (총 4명)"),)
+    assert item.paragraphs == ("기도의 자리로 초대합니다.",)
+    assert _rtf_text(styles.announcement("교회 소식", item)).count("\\fs104") == 0  # no 52pt label
+
+
+def test_a_contact_tacked_onto_another_row_becomes_its_own_row():
+    """"(문의: …)" is written wherever the sentence ended — including at the tail of a 장소 line.
+    Wherever it sits, it is lifted out and lands last on the rail (#233 review)."""
+    item = announce.parse_item(
+        "4. 골프대회\n\n장소: Chevy Chase Country Club (문의: 아무개 집사)"
+    )
+
+    assert item.rows == (("장소", "Chevy Chase Country Club"), ("문의", "아무개 집사"))
+
+
+def test_a_date_the_sentence_is_built_around_stays_in_the_prose():
+    """"6/14 (주일) 부터 6/21 (주일)까지 …" reads as a sentence, not as a 날짜 field: lifting the
+    date out of it would leave the prose starting on a dangling 부터."""
+    item = announce.parse_item("2. 성경통독 안내\n\n6/14 (주일) 부터 6/21 (주일)까지 진행합니다.")
+
+    assert item.rows == ()
+    assert item.paragraphs == ("6/14 (주일) 부터 6/21 (주일)까지 진행합니다.",)
+
+
+def test_an_announcement_with_nothing_liftable_still_renders_as_the_same_plate():
+    """9 of the last 112 notices yield no rail at all. They keep the eyebrow, the rule and the
+    white title, so the section does not read as two different designs."""
+    item = announce.parse_item("4. 기도 부탁\n\n선교를 위해 계속해서 기도 부탁드립니다.")
+    slide = styles.announcement("교회 소식", item, 4, 9)
+
+    assert item.rows == ()
+    assert _has_frame(slide)
+    assert "4 / 9" in _rtf_text(slide)
+    assert rtf.escape(item.paragraphs[0]) in _rtf_text(slide)
 
 
 def test_long_liturgy_and_cards_are_fitted_to_their_boxes():
