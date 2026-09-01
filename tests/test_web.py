@@ -1231,7 +1231,7 @@ def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
     store.save(_runs, _fake_run())
     opened: list = []
     exported: list = []
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: f"/tmp/draft-{d}.key")
     monkeypatch.setattr(app_module.keynote_build, "export_pdf", lambda p: exported.append(p))
     monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: opened.append(a))
 
@@ -1250,7 +1250,7 @@ def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
 def test_build_pdf_export_failure_is_nonfatal(_runs, monkeypatch) -> None:
     """A failed PDF export (#23) must not flip a successful build to error; just no preview link."""
     store.save(_runs, _fake_run())
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: f"/tmp/draft-{d}.key")
     monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: None)
 
     def _boom(_p):
@@ -1272,7 +1272,7 @@ def test_build_refuses_song_left_without_lyrics(_runs, monkeypatch) -> None:
     data = _fake_run()
     data.worship_songs[1] = {"title": "말씀앞에서", "lines": [], "provenance": {"source": "ocr"}}
     store.save(_runs, data)
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: pytest.fail("must not build"))
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: pytest.fail("must not build"))
 
     resp = client.post(f"/runs/{_runs}/build")
     assert resp.status_code == 400
@@ -1284,7 +1284,7 @@ def test_build_refuses_added_song_left_without_lyrics(_runs, monkeypatch) -> Non
     data = _fake_run()
     data.worship_songs.append({"title": "새 찬양", "lines": [], "provenance": {"source": "added"}})
     store.save(_runs, data)
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: pytest.fail("must not build"))
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: pytest.fail("must not build"))
 
     resp = client.post(f"/runs/{_runs}/build")
     assert resp.status_code == 400
@@ -1298,7 +1298,7 @@ def test_build_allows_added_song_the_operator_typed_lyrics_into(_runs, monkeypat
         {"title": "새 찬양", "lines": ["직접 입력한 가사"], "provenance": {"source": "added"}}
     )
     store.save(_runs, data)
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: "/tmp/draft.key")
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: "/tmp/draft.key")
 
     assert client.post(f"/runs/{_runs}/build").status_code == 200
 
@@ -1309,7 +1309,7 @@ def test_build_allows_a_miss_the_operator_typed_lyrics_into(_runs, monkeypatch) 
     data.worship_songs[1] = {"title": "말씀앞에서", "lines": ["직접 입력한 가사"],
                              "provenance": {"source": "ocr"}}
     store.save(_runs, data)
-    monkeypatch.setattr(app_module.pipeline, "run", lambda d: f"/tmp/draft-{d}.key")
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: f"/tmp/draft-{d}.key")
     monkeypatch.setattr(app_module.keynote_build, "export_pdf", lambda p: None)
     monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: None)
     assert client.post(f"/runs/{_runs}/build").status_code == 200
@@ -1318,7 +1318,7 @@ def test_build_allows_a_miss_the_operator_typed_lyrics_into(_runs, monkeypatch) 
 def test_build_records_error(_runs, monkeypatch) -> None:
     store.save(_runs, _fake_run())
 
-    def _boom(_d):
+    def _boom(_d, _t):
         raise RuntimeError("keynote wedged")
 
     monkeypatch.setattr(app_module.pipeline, "run", _boom)
@@ -1328,8 +1328,49 @@ def test_build_records_error(_runs, monkeypatch) -> None:
     assert "keynote wedged" in status["error"]
 
 
-def test_review_page_has_generate_button() -> None:
-    assert 'id="generate"' in client.get("/review/2026-05-31").text
+def test_build_pro_target_skips_the_pdf_and_opens_the_bundle(_runs, monkeypatch) -> None:
+    """The ProPresenter button runs the same reviewed run through the .pro builder (#180).
+
+    No PDF preview: there is no open document to export one from, and the phone can't render a
+    .probundle either — the status just names the file `open` handed to ProPresenter.
+    """
+    store.save(_runs, _fake_run())
+    opened: list = []
+    targets: list = []
+
+    def _run(d, t):
+        targets.append(t)
+        return f"/tmp/draft-{d}.probundle"
+
+    monkeypatch.setattr(app_module.pipeline, "run", _run)
+    monkeypatch.setattr(
+        app_module.keynote_build, "export_pdf", lambda p: pytest.fail("no PDF for a .pro")
+    )
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: opened.append(a))
+
+    assert client.post(f"/runs/{_runs}/build?target=pro").status_code == 200
+    assert targets == ["pro"]
+    status = client.get(f"/runs/{_runs}/build/status").json()
+    assert status["status"] == "done"
+    assert status["target"] == "pro"
+    assert status["path"] == f"/tmp/draft-{_runs}.probundle"
+    assert status["pdf"] is None
+    assert opened and opened[0][0] == ["open", f"/tmp/draft-{_runs}.probundle"]
+
+
+def test_build_rejects_an_unknown_target(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: pytest.fail("must not build"))
+    resp = client.post(f"/runs/{_runs}/build?target=powerpoint")
+    assert resp.status_code == 400
+    assert "keynote" in resp.json()["detail"]
+
+
+def test_review_page_has_both_build_buttons() -> None:
+    """Keynote stays the fallback that runs the service; ProPresenter is the migration target."""
+    page = client.get("/review/2026-05-31").text
+    assert 'id="generate"' in page
+    assert 'id="generatePro"' in page
 
 
 # ---------------------------------------------------------------------------

@@ -928,41 +928,55 @@ def _songs_missing_lyrics(data: ServiceData) -> list[str]:
     ]
 
 
-def _build_async(service_date: str) -> None:
-    """Drive Keynote to build the draft .key from the reviewed run, then open it on the Mac.
+def _build_async(service_date: str, target: str) -> None:
+    """Build the draft from the reviewed run with the chosen builder, then open it on the Mac.
 
-    FastAPI runs this in a threadpool after the response is sent. The build is slow
-    (~60–90s, real Keynote) and local_only, so it must not block the phone's request.
+    FastAPI runs this in a threadpool after the response is sent. The Keynote build is slow
+    (~60–90s, real Keynote) and local_only, so it must not block the phone's request; the .pro
+    build is a fast in-process serialize but shares this path for one status contract.
     Failures are caught and recorded in `_BUILD_STATUS` so the page reports them.
-    After the build, export a PDF of the still-open draft (#23) so the phone can preview
+    After a Keynote build, export a PDF of the still-open draft (#23) so the phone can preview
     the rendered slides inline — the browser can't render a .key and the file is Mac-local.
+    A .probundle has no such preview (nothing is open to export from), so it gets none (#180).
     """
     logger = obs.configure_logging()
     t0 = time.monotonic()
     try:
-        path = pipeline.run(service_date)
+        path = pipeline.run(service_date, target)
         # Export the PDF preview from the still-open draft (#23). Best-effort: the build already
         # succeeded, so a failed export shouldn't flip the status to error — just no preview link.
         pdf_url = None
-        try:
-            keynote_build.export_pdf(str(Path(path).with_suffix(".pdf")))
-            pdf_url = f"/runs/{service_date}/draft.pdf"
-        except Exception:  # preview is optional; the deck itself is the deliverable
-            logger.exception("PDF preview export failed for %s", service_date)
-        # Open the draft in Keynote on the Mac (operator is at the machine). Best-effort:
-        # the build already succeeded, so a failed `open` shouldn't flip the status to error.
+        if target == "keynote":
+            try:
+                keynote_build.export_pdf(str(Path(path).with_suffix(".pdf")))
+                pdf_url = f"/runs/{service_date}/draft.pdf"
+            except Exception:  # preview is optional; the deck itself is the deliverable
+                logger.exception("PDF preview export failed for %s", service_date)
+        # Open the draft on the Mac (operator is at the machine) — Keynote opens the .key,
+        # ProPresenter imports the .probundle. Best-effort: the build already succeeded, so a
+        # failed `open` shouldn't flip the status to error.
         subprocess.run(["open", path], check=False)
         total = round(time.monotonic() - t0, 1)
-        _BUILD_STATUS[service_date] = {"status": "done", "path": path, "pdf": pdf_url, "error": None, "seconds": total}
-        logger.info("Built draft for %s at %s in %.1fs", service_date, path, total)
+        _BUILD_STATUS[service_date] = {
+            "status": "done", "target": target, "path": path, "pdf": pdf_url,
+            "error": None, "seconds": total,
+        }
+        logger.info("Built %s draft for %s at %s in %.1fs", target, service_date, path, total)
     except Exception as e:  # surface to the page, don't crash the worker
         logger.exception("Build failed for %s", service_date)
-        _BUILD_STATUS[service_date] = {"status": "error", "path": None, "error": repr(e), "seconds": round(time.monotonic() - t0, 1)}
+        _BUILD_STATUS[service_date] = {"status": "error", "target": target, "path": None, "error": repr(e), "seconds": round(time.monotonic() - t0, 1)}
 
 
 @app.post("/runs/{service_date}/build")
-def build_run(service_date: str, background_tasks: BackgroundTasks) -> dict:
-    """Kick off the Keynote build for an assembled+reviewed run; poll the status_url for the path."""
+def build_run(service_date: str, background_tasks: BackgroundTasks, target: str = "keynote") -> dict:
+    """Kick off a build for an assembled+reviewed run; poll the status_url for the path.
+
+    `target` picks the builder behind the review page's two buttons (#180): `keynote` writes the
+    draft .key (the fallback that still runs the service), `pro` writes the ProPresenter
+    .probundle. Both read the same reviewed run — only the build phase differs.
+    """
+    if target not in ("keynote", "pro"):
+        raise HTTPException(status_code=400, detail="target must be 'keynote' or 'pro'")
     try:
         store.path_for(service_date)  # validate the date shape
     except ValueError:
@@ -975,8 +989,8 @@ def build_run(service_date: str, background_tasks: BackgroundTasks) -> dict:
     empty = _songs_missing_lyrics(store.load(service_date))
     if empty:
         raise HTTPException(status_code=400, detail=f"가사가 비어 있는 곡: {', '.join(empty)}")
-    _BUILD_STATUS[service_date] = {"status": "running", "path": None, "error": None}
-    background_tasks.add_task(_build_async, service_date)
+    _BUILD_STATUS[service_date] = {"status": "running", "target": target, "path": None, "error": None}
+    background_tasks.add_task(_build_async, service_date, target)
     return {"service_date": service_date, "status_url": f"/runs/{service_date}/build/status"}
 
 

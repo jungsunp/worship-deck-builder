@@ -19,6 +19,7 @@
                  border-radius: 4px; text-transform: uppercase; }
   .phase-badge.assemble { background: #dbeafe; color: #1d4ed8; }
   .phase-badge.build { background: #dcfce7; color: #15803d; }
+  .phase-badge.build_pro { background: #ede9fe; color: #6d28d9; }
   .phase-badge.err { background: #fee2e2; color: #b91c1c; }
   .phase-total { font-size: 0.95rem; font-weight: 600; }
   .phase-ts { font-size: 0.8rem; color: var(--gray-600); margin-left: auto; }
@@ -168,7 +169,7 @@ function renderPhase(rec) {
   const badge = document.createElement('span');
   const ph = rec.phase || 'build';
   badge.className = 'phase-badge ' + (rec.ok ? ph : 'err');
-  badge.textContent = ph === 'assemble' ? 'Assemble' : 'Build';
+  badge.textContent = ph === 'assemble' ? 'Assemble' : ph === 'build_pro' ? 'Build .pro' : 'Build';
   const total = document.createElement('span'); total.className = 'phase-total';
   total.textContent = rec.seconds != null ? fmtDur(rec.seconds) : '—';
   hdr.append(badge, total);
@@ -216,7 +217,9 @@ async function load() {
   }
   charts.innerHTML = '';
   charts.appendChild(renderTrend(trendSeries(data.runs, 'assemble'), 'Assemble 시간', '#1d4ed8'));
-  charts.appendChild(renderTrend(trendSeries(data.runs, 'build'), 'Build 시간', '#15803d'));
+  charts.appendChild(renderTrend(trendSeries(data.runs, 'build'), 'Build 시간 (Keynote)', '#15803d'));
+  // Its own trend: a ~2s .pro serialize averaged into the ~90s Keynote build says nothing (#180).
+  charts.appendChild(renderTrend(trendSeries(data.runs, 'build_pro'), 'Build 시간 (ProPresenter)', '#6d28d9'));
 
   el.innerHTML = '';
   // Group by service_date, newest service date first (a recent rebuild of an old date

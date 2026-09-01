@@ -132,8 +132,14 @@
   #status.err { color: var(--red); border-color: var(--red); }
   .pdf-link { display: inline-block; margin-top: 0.5rem; padding: 0.5rem 0;
               color: var(--blue); font-weight: 600; text-decoration: underline; }
+  /* Both builds are purple so they read as a pair; Keynote (the fallback that still runs the
+     service) is filled, ProPresenter outlined — 저장 stays the green .secondary beside them. */
+  .stickybar #generate, .stickybar #generatePro { font-size: 1rem; }
   .stickybar #generate { background: var(--purple); }
   .stickybar #generate:disabled { background: #c4b5fd; }
+  .stickybar #generatePro { background: #fff; color: var(--purple);
+                            border: 1px solid var(--purple); }
+  .stickybar #generatePro:disabled { background: #fff; color: #c4b5fd; border-color: #c4b5fd; }
   a { color: var(--blue); }
 </style>
 </head>
@@ -157,7 +163,8 @@
 
 <div class="stickybar">
   <button type="button" class="secondary" id="save" onclick="save()">저장</button>
-  <button type="button" id="generate" onclick="generate()">덱 생성</button>
+  <button type="button" id="generate" onclick="generate('keynote')">Keynote 덱</button>
+  <button type="button" id="generatePro" onclick="generate('pro')">ProPresenter 덱</button>
 </div>
 <script>
 const date = location.pathname.split('/').pop();
@@ -1080,20 +1087,24 @@ async function save() {
 }
 
 let _buildTimer;
-async function generate() {
-  const btn = document.getElementById('generate');
+// Both buttons run the same assemble+review output through a different builder (#180): Keynote
+// drives the app on the Mac (slow), ProPresenter serializes a .probundle in-process (seconds).
+const BUILD_APP = {keynote: 'Keynote', pro: 'ProPresenter'};
+async function generate(target) {
+  const btns = [document.getElementById('generate'), document.getElementById('generatePro')];
   // Persist edits first — the build reads the saved run store, not the page.
   if (!(await save())) return;
-  btn.disabled = true;
+  btns.forEach(b => b.disabled = true);  // one build at a time: the status is keyed by date only
   setStep('review', 'done'); setStep('build', 'active');
-  showStatus('◐ 덱 생성 중… (Mac에서 1분쯤 걸립니다)');
+  showStatus('◐ ' + BUILD_APP[target] + ' 덱 생성 중…'
+             + (target === 'keynote' ? ' (Mac에서 1분쯤 걸립니다)' : ''));
   window.scrollTo({top: 0, behavior: 'smooth'});
-  const r = await fetch('/runs/' + date + '/build', {method: 'POST'});
+  const r = await fetch('/runs/' + date + '/build?target=' + target, {method: 'POST'});
   const body = await r.json();
   if (!r.ok) {
     setStep('build', 'error');
     showStatus('✕ 빌드 오류: ' + (body.detail || r.status), true);
-    btn.disabled = false;
+    btns.forEach(b => b.disabled = false);
     return;
   }
   clearInterval(_buildTimer);
@@ -1101,11 +1112,11 @@ async function generate() {
     const s = await (await fetch(body.status_url)).json();
     if (s.status === 'running') return;
     clearInterval(_buildTimer);
-    btn.disabled = false;
+    btns.forEach(b => b.disabled = false);
     if (s.status === 'done') {
       setStep('build', 'done');
       const dur = s.seconds ? ' • ' + fmtDur(s.seconds) : '';
-      showStatus('● 완료' + dur + ' — ' + s.path + '\nKeynote에서 여는 중…');
+      showStatus('● 완료' + dur + ' — ' + s.path + '\n' + BUILD_APP[target] + '에서 여는 중…');
       if (s.pdf) {  // tap to preview the rendered slides inline on the phone (#23)
         const a = document.createElement('a');
         a.href = s.pdf; a.target = '_blank'; a.className = 'pdf-link';
