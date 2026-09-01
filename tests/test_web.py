@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from worship_deck import library, store
+from worship_deck import hymn, library, store
 from worship_deck.bible.verses import Verse
 from worship_deck.lyrics.transcribe import Song
 from worship_deck.parse import ServiceData
@@ -365,6 +365,50 @@ def test_assemble_populates_run(_assemble_env, monkeypatch, tmp_path) -> None:
         str(tmp_path / "runs" / date / "hymn" / "slide-1.png"),
         str(tmp_path / "runs" / date / "hymn" / "slide-2.png"),
     ]
+
+
+def test_assemble_also_fetches_the_propresenter_hymn_design(_assemble_env, monkeypatch) -> None:
+    """The same hymn again in hymn.PRO_DESIGN, into a subdirectory beside the no-bg pages, so
+    propresenter.build can swap the operator's kept pages for it by filename (#179)."""
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda _p, **kw: [Song(title="주 은혜임을", lines=["1절"])],
+    )
+    calls: list = []
+
+    def _record(number, work_dir, **kw):
+        calls.append((number, work_dir, kw.get("design")))
+        return [work_dir / "slide-1.png"]
+
+    monkeypatch.setattr(app_module.hymn, "fetch_hymn_slides", _record)
+    date = client.post("/assemble").json()["service_date"]
+
+    assert [c[2] for c in calls] == [None, hymn.PRO_DESIGN]
+    assert calls[1][1] == calls[0][1] / hymn.PRO_DESIGN
+    # The kept list stays on the no-bg pages — the review grid and Keynote both read it.
+    assert store.load(date).offering_hymn_images == [str(calls[0][1] / "slide-1.png")]
+
+
+def test_assemble_propresenter_design_failure_keeps_the_no_bg_pages(
+    _assemble_env, monkeypatch
+) -> None:
+    """A failed design fetch must not cost us the pages we already have — the .pro just falls
+    back to no-bg."""
+    monkeypatch.setattr(
+        app_module.lyrics_transcribe, "transcribe",
+        lambda _p, **kw: [Song(title="주 은혜임을", lines=["1절"])],
+    )
+
+    def _boom_on_design(number, work_dir, **kw):
+        if kw.get("design"):
+            raise RuntimeError("403 forbidden")
+        return [work_dir / "slide-1.png"]
+
+    monkeypatch.setattr(app_module.hymn, "fetch_hymn_slides", _boom_on_design)
+    date = client.post("/assemble").json()["service_date"]
+
+    assert client.get(f"/assemble/{date}/status").json()["status"] == "done"
+    assert len(store.load(date).offering_hymn_images) == 1
 
 
 def test_assemble_hymn_failure_is_nonfatal(_assemble_env, monkeypatch) -> None:

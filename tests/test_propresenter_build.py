@@ -15,6 +15,7 @@ presentation_pb2 = pytest.importorskip(
 )
 import graphicsData_pb2  # deliberately after the importorskip guard
 
+from worship_deck import hymn
 from worship_deck.bible import layout
 from worship_deck.bible.verses import Verse
 from worship_deck.lyrics import linebreak
@@ -526,15 +527,42 @@ def test_offering_divider_shows_the_hymn_title_and_number(tmp_path):
     assert rtf.escape("(찬 70장)") in text
 
 
-def test_build_survives_hymn_images_it_cannot_place_yet(tmp_path):
-    """The downloaded 봉 헌 pages are #179. Until they land the section is title-only — a build
-    must not die on another issue's stub, or every weekly deck goes down with it."""
-    data = _service_data(offering_hymn_images=["/tmp/page-1.png", "/tmp/page-2.png"])
+def test_offering_hymn_pages_follow_the_divider_in_one_group(tmp_path):
+    """One group for 봉 헌 — divider + a full-bleed image cue per kept page (#179). Two bars for
+    one section is two things to find under pressure (#178 review, round 3)."""
+    pages = [str(tmp_path / "slide-1.png"), str(tmp_path / "slide-2.png")]
+    data = _service_data(offering_hymn_images=pages)
     pres = build.load(build.build(data, str(tmp_path / "week.pro"))[0])
+    cues = _cues_of(pres, "봉 헌")
+
+    assert len(cues) == 3  # divider + 2 pages
+    assert [c.name for c in cues[1:]] == ["찬 70장 1", "찬 70장 2"]
+    assert [_images_of(_slide_of_cue(c)) for c in cues[1:]] == [["slide-1"], ["slide-2"]]
+    urls = [_media_url(_slide_of_cue(c)) for c in cues[1:]]
+    assert all(u.startswith("file:///") and u.endswith(".png") for u in urls)
+
+
+def test_offering_hymn_section_is_title_only_when_the_download_failed(tmp_path):
+    """The hymn download is best-effort, so the divider still has to tell the operator what to
+    sing when no pages arrived — the same split the Keynote builder keeps."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
 
     assert len(_cues_of(pres, "봉 헌")) == 1
-    with pytest.raises(NotImplementedError):
-        build.fill_offering_hymn(pres, "70", "피난처 있으니", data.offering_hymn_images)
+
+
+def test_offering_hymn_pages_prefer_the_propresenter_design(tmp_path):
+    """The operator prunes the no-bg pages in review; the .pro shows the same pages in
+    hymn.PRO_DESIGN, matched by filename, so the pruning carries over with no second list."""
+    hymn_dir = tmp_path / "hymn"
+    (hymn_dir / hymn.PRO_DESIGN).mkdir(parents=True)
+    for name in ("slide-1.png", "slide-2.png"):
+        (hymn_dir / name).touch()
+    (hymn_dir / hymn.PRO_DESIGN / "slide-1.png").touch()  # only page 1 got the design render
+
+    swapped = build._pro_hymn_images([str(hymn_dir / "slide-1.png"), str(hymn_dir / "slide-2.png")])
+
+    assert swapped[0] == str(hymn_dir / hymn.PRO_DESIGN / "slide-1.png")
+    assert swapped[1] == str(hymn_dir / "slide-2.png")  # falls back rather than dropping a page
 
 
 def test_sermon_extra_refs_each_get_their_own_group(tmp_path):
@@ -656,6 +684,14 @@ def test_serialize_and_load_round_trip_keeps_korean_text(tmp_path):
 
 def _images_of(slide) -> list[str]:
     return [e.element.name for e in slide.elements if e.element.fill.HasField("media")]
+
+
+def _media_url(slide) -> str:
+    return next(
+        e.element.fill.media.url.absolute_string
+        for e in slide.elements
+        if e.element.fill.HasField("media")
+    )
 
 
 def test_body_type_is_sized_for_the_congregation():

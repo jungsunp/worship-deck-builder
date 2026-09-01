@@ -25,7 +25,7 @@ import argparse
 from pathlib import Path
 
 from worship_deck import store
-from worship_deck.propresenter import build, styles
+from worship_deck.propresenter import build, bundle, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
 
@@ -103,6 +103,10 @@ if __name__ == "__main__":
     ap.add_argument("--out", type=Path, default=DEFAULT_OUT, help="destination .pro")
     ap.add_argument("--image", type=Path, help="a PNG to place on a full-bleed image slide")
     ap.add_argument("--run", help="build the full weekly deck from this run date (YYYY-MM-DD)")
+    ap.add_argument(
+        "--bundle", action="store_true",
+        help="also pack the .pro and its media into a single-file .probundle (#236)",
+    )
     args = ap.parse_args()
 
     if args.run:
@@ -113,4 +117,7 @@ if __name__ == "__main__":
     else:
         written = make_demo(args.out, args.image)
         print(f"Wrote {written}")
+    if args.bundle:
+        packed = bundle.write_bundle(written)
+        print(f"Wrote {packed} ({packed.stat().st_size / 1e6:.1f} MB) — import this one file.")
     print("Open it in ProPresenter (restart PP if the library doesn't refresh).")

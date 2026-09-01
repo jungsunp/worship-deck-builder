@@ -1,10 +1,9 @@
 """Ground-up ProPresenter ``.pro`` generator (v3 migration, epic #184).
 
-**The protobuf primitives are implemented (#172), and the sung-lyric fillers with
-them (#175: ``fill_worship_songs`` / ``fill_song`` / ``fill_confession``).** The
-remaining ``fill_*`` bodies land with their content details in #178–#179, as does
-``build()`` itself. See ``docs/propresenter-generator-design.md`` for the design
-rationale and the decoded ``.pro`` anatomy these primitives are built from.
+**Complete**: the protobuf primitives (#172), the sung-lyric fillers (#175), ``build()``
+and the verse/announcement/choir/liturgy fills (#178), and the 봉헌 hymn pages (#179).
+See ``docs/propresenter-generator-design.md`` for the design rationale and the decoded
+``.pro`` anatomy these primitives are built from.
 
 How this differs from the Keynote builder it replaces:
 
@@ -50,6 +49,7 @@ import url_pb2
 # isort: on
 from worship_deck.bible import layout
 from worship_deck.bible.verses import Verse, verse_labels
+from worship_deck.hymn import PRO_DESIGN
 from worship_deck.lyrics import linebreak
 from worship_deck.lyrics.transcribe import Song, arranged_chunks
 from worship_deck.parse import ServiceData
@@ -115,13 +115,12 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
     )
     if data.choir_song:
         _t("choir", fill_choir, pres, data.choir_song)
-    # 봉 헌: the divider carrying this week's hymn title + number. The downloaded hymn PNG pages
-    # that follow it are #179 — until that lands the section is title-only, which is why
-    # `fill_offering_hymn` is deliberately NOT called here: a build must not die on work that
-    # belongs to another issue, and a loud stub would take every weekly deck down with it.
+    # 봉 헌: the divider carrying this week's hymn title + number, then the downloaded hymn
+    # pages. Unconditional — the hymn download is best-effort, so the divider has to emit even
+    # when it produced nothing (#179).
     _t(
-        "offering_hymn", fill_divider, pres, labels["offering_hymn"],
-        _hymn_subtitle(data.offering_hymn_number, data.offering_hymn_title),
+        "offering_hymn", fill_offering_hymn, pres, data.offering_hymn_number,
+        data.offering_hymn_title, data.offering_hymn_images,
     )
     _t("welcome", fill_divider, pres, labels["welcome"])
     if data.announcements:
@@ -454,15 +453,45 @@ def _hymn_subtitle(number: str, title: str) -> str:
     return "  ".join(parts)
 
 
+def _pro_hymn_images(image_paths: list[str]) -> list[str]:
+    """Swap the operator-kept ``no-bg`` hymn pages for their ``hymn.PRO_DESIGN`` siblings (#179).
+
+    The review app downloads and prunes the ``no-bg`` set (``data/runs/<date>/hymn/slide-N.png``)
+    and the assemble step fetches the same hymn again into a ``<design>/`` subdirectory beside it.
+    Both renders come from the same source PPTX, so they have the same page count and the same
+    ``pdftoppm`` filenames — matching by filename means the operator's pruning carries over for
+    free, with no second list to keep in sync. Falls back to the given page when the sibling is
+    missing, so a failed design fetch degrades to the white pages rather than to no 봉헌 at all.
+    """
+    out = []
+    for path in image_paths:
+        sibling = Path(path).parent / PRO_DESIGN / Path(path).name
+        out.append(str(sibling) if sibling.exists() else path)
+    return out
+
+
 def fill_offering_hymn(
     pres: presentation_pb2.Presentation, number: str, title: str, image_paths: list[str]
 ) -> None:
-    """봉헌 — the downloaded hymn PNG pages placed as full-bleed image cues.
+    """봉헌 — the divider, then the downloaded hymn pages as full-bleed image cues (#179).
 
-    The divider carrying the hymn's title and number is emitted by ``build()`` via
-    ``fill_divider`` whether or not the download produced pages, so this covers only the pages.
+    **One** group covering divider + pages, like ``fill_confession`` — the heading announcing
+    this week's hymn and the hymn itself are a single section to the operator (#178 review,
+    round 3). The divider emits even when ``image_paths`` is empty: the hymn download is
+    best-effort, and a number/title with no pages still tells the operator what to sing, exactly
+    as ``keynote.build`` fills the title slide independently of the image block.
+
+    No trailing ``blank_green``: 봉헌 is a full-screen section — the ATEM cuts to the Mac mini
+    rather than keying these over the live camera — so the pages stay opaque.
     """
-    raise NotImplementedError("#179")
+    label = content.DIVIDER_LABELS["offering_hymn"]
+    cue_uuids = [
+        add_cue(pres, new_slide("section_divider", label, _hymn_subtitle(number, title)), label)
+    ]
+    for i, path in enumerate(_pro_hymn_images(image_paths), 1):
+        name = f"찬 {number}장 {i}" if number else f"봉헌 {i}"
+        cue_uuids.append(add_cue(pres, new_slide("image", path), name))
+    _group(pres, label, cue_uuids)
 
 
 def fill_liturgy(
