@@ -11,21 +11,30 @@ which needs the #224 background images).
 ``ServiceData`` (#178) — the end-to-end eyeball, and the only way to see the section order,
 the verse packing and the liturgy as the operator will click through them.
 
+``--announcements`` builds a 교회 소식-only deck out of **every distinct shape of notice the
+church has actually published**, gathered from the reviewed runs under ``data/runs/`` (#233):
+the bare one-liner, the date+time+문의, the 5-row rail, the ones with no liftable field at all,
+and the ones long enough to run onto a second plate. One review pass covers what a year of
+Sundays would otherwise take. The runs are git-ignored real bulletins, so the deck it writes
+carries member names — keep it out of the repo.
+
 Usage:
 
     .venv/bin/python scripts/make_pro_demo.py                    # -> the local PP library
     .venv/bin/python scripts/make_pro_demo.py --out /tmp/x.pro
     .venv/bin/python scripts/make_pro_demo.py --run 2026-08-23   # the full weekly deck
+    .venv/bin/python scripts/make_pro_demo.py --announcements --out /tmp/a1.pro
 
 ProPresenter caches a ``.pro`` it has already read, so iterate by writing a *new* filename each
 round (``--out``) rather than overwriting and restarting the app.
 """
 
 import argparse
+import json
 from pathlib import Path
 
 from worship_deck import store
-from worship_deck.propresenter import build, bundle, styles
+from worship_deck.propresenter import announce, build, bundle, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
 
@@ -51,6 +60,49 @@ CREED = [
     "본디오 빌라도에게 고난을 받으사",
     "십자가에 못박혀 죽으시고",
 ]
+
+
+def _announcement_sampler(runs_dir: Path) -> list[str]:
+    """One real notice per distinct *shape* the church has published, simplest shape first.
+
+    "Shape" is what the plate has to cope with — which labels the rail ends up carrying, how many
+    plates the notice splits into, and whether any prose is left under the rail — not what the
+    notice says. Deduplicating on that turns 112 near-identical past notices into the ~30 worth
+    looking at, while guaranteeing every awkward one is in the deck: the five-row rail, the one
+    with nothing liftable at all, the one long enough to need three plates, and each distinct
+    rail vocabulary the bulletin has used (날짜/시간/장소/문의, but also 대상/비용/주제/영유아부…),
+    since an unfamiliar label is exactly where a two-column rail can fall over. The most recent
+    notice of each shape wins, so the deck reads like the weeks ahead rather than last spring.
+    """
+    seen: dict[tuple, str] = {}
+    for path in sorted(runs_dir.glob("*.json")):
+        try:
+            blocks = json.loads(path.read_text()).get("announcements") or []
+        except (json.JSONDecodeError, OSError):
+            continue
+        for block in blocks:
+            item = announce.parse_item(block)
+            shape = (
+                len(item.rows),
+                len(styles.split_announcement(item)),
+                bool(item.paragraphs),
+                tuple(label for label, _ in item.rows),
+            )
+            seen[shape] = block
+    return [seen[shape] for shape in sorted(seen)]
+
+
+def make_announcement_review(out_pro: Path, runs_dir: Path) -> Path:
+    """A 교회 소식-only deck built from the real past notices ``_announcement_sampler`` picks."""
+    blocks = _announcement_sampler(runs_dir)
+    if not blocks:
+        raise SystemExit(f"no reviewed runs with announcements under {runs_dir}")
+    pres = build.new_presentation(out_pro.stem)
+    build.fill_announcements(pres, blocks)
+    out_pro.parent.mkdir(parents=True, exist_ok=True)
+    build.serialize(pres, str(out_pro))
+    print(f"{len(blocks)} notices -> {len(pres.cues) - 2} plates")
+    return out_pro
 
 
 def make_demo(out_pro: Path, image: Path | None = None) -> Path:
@@ -91,7 +143,11 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
         [("봉 헌", styles.section_divider("봉 헌", "[ 나 속죄함을 받은 후 ]  (찬 283장)"))]
         + ([("hymn page", styles.image(str(image)))] if image else []),
     )
-    section("교회 소식", [("교회 소식", styles.announcement("교회 소식", ANNOUNCEMENTS))])
+    section("교회 소식", [
+        (block.partition("\n")[0], styles.announcement("교회 소식", item, number, len(ANNOUNCEMENTS)))
+        for number, block in enumerate(ANNOUNCEMENTS, start=1)
+        for item in [announce.parse_item(block)]
+    ])
 
     out_pro.parent.mkdir(parents=True, exist_ok=True)
     build.serialize(pres, str(out_pro))
@@ -107,9 +163,17 @@ if __name__ == "__main__":
         "--bundle", action="store_true",
         help="also pack the .pro and its media into a single-file .probundle (#236)",
     )
+    ap.add_argument("--announcements", action="store_true",
+                    help="build a 교회 소식-only deck covering every past notice shape (#233)")
+    ap.add_argument("--runs-dir", type=Path, default=store.RUNS_DIR,
+                    help="where the reviewed runs live (default: data/runs)")
     args = ap.parse_args()
 
-    if args.run:
+    if args.announcements:
+        out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name("교회 소식 Review.pro")
+        written = make_announcement_review(out, args.runs_dir)
+        print(f"Wrote {written}")
+    elif args.run:
         out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name(f"{args.run}.pro")
         out.parent.mkdir(parents=True, exist_ok=True)
         written, steps = build.build(store.load(args.run), str(out))
