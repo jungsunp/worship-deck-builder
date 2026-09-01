@@ -3,8 +3,9 @@
 Design for the ProPresenter deck generator that replaces `keynote/build.py` +
 `keynote/anchors.py` in the v3 migration (epic #184). #171 was **design + a stubbed module
 skeleton**; #172 implemented the serialization library (primitives, styles, RTF); #175 filled the
-sung-lyric sections; #176 was built and rejected (Decision 4); #178–#179 fill in the rest and
-#180 wires it up.
+sung-lyric sections; #176 was built and rejected (Decision 4); #178 filled the remaining sections,
+authored the static half the Keynote template used to carry, and wired `build()`; #179 adds the
+봉 헌 hymn pages and #180 the review app's second build button.
 
 ## Goal & shape
 
@@ -63,8 +64,9 @@ New package modules under `src/worship_deck/propresenter/`:
     order calling `fill_*` → `serialize`.
   - Section fillers (append a group each, top-to-bottom): `fill_date`, `fill_worship_songs`,
     `fill_song` (shared by worship + confession), `fill_confession`, `fill_choir`,
-    `fill_verse_slides`, `fill_announcements`, `fill_offering_hymn`, `fill_liturgy`,
-    `fill_sermon_extra`.
+    `fill_verse_slides`, `fill_sermon`, `fill_announcements`, `fill_offering_hymn`,
+    `fill_liturgy`, `fill_sermon_extra`, plus the static-parity ones #178 added —
+    `fill_divider` (heading-only sections), `fill_sending`, `fill_ending`.
   - Primitives (pure protobuf — the analog of Keynote's AppleScript primitives, minus
     macOS), **implemented in #172**: `new_presentation`, `new_slide`, `add_cue`, `add_group`,
     `add_arrangement`, `place_image`, `serialize`, `load`. (No `set_transition` — see the
@@ -73,7 +75,9 @@ New package modules under `src/worship_deck/propresenter/`:
   key (replaces the planned `style_kit.py`; see Decision 2).
 - **`elements.py`** — `text` / `shape` / `image` / `web` / `line_strip` element factories.
 - **`rtf.py`** — `escape` / `document` / `plain`; builds the styled RTF runs, Korean included.
-- **`content.py`** — `DIVIDER_LABELS` + fixed liturgy texts (`APOSTLES_CREED`, `LORDS_PRAYER`).
+- **`content.py`** — `DIVIDER_LABELS` + every piece of fixed wording the Keynote template used
+  to carry: both 사도신경 forms, `LORDS_PRAYER`, the 표어 / 환영 / 예배 준비 / 폐회 cards, the
+  fixed 축복의 통로 closing song, and the 성가대 lighting note (see Decision 3).
 
 ## Decision 2 — theme: **styles baked in code, not referenced or cloned**
 
@@ -168,6 +172,163 @@ in `build()` (the liturgy order — no landmark detection). Two content origins:
 Keynote pipeline doesn't generate it either; the operator handles it. This is why no
 `.proPlaylist` is generated (see below).
 
+### The fixed-wording half is much bigger than it looked (#178, 2026-08-26)
+
+The list above under-counted badly, and #178 had to correct it before any fill could be written.
+Keynote *mutates* `master.key`, so **roughly half of the 171-slide deck rides along for free** —
+it has no code, no `ServiceData` field, and no `anchors.py` entry, because nobody ever edits it.
+Ground-up generation has no template to ride on, so all of it becomes authored content:
+
+| Filled by code today | Rode along free inside `master.key` |
+|---|---|
+| intro/ending date (1–2, 167–168) | 교회 표어 card (3, 170) · 예배 준비 안내 (5) |
+| 찬양 medley (6–46) | 예배의 부름 banner repeats (49–50) |
+| 예배의 부름 ref + verses (47–48) | **회개로의 초대** (51–52) · **죄사함의 선포** (54–55) |
+| 고백의 찬양 (57–67) | **사도신경 full text** (69–75) · 성가대 조명 note (76) |
+| 성가대 찬양 (77–95) | **환영 및 인사** (107–111) + a number grid (109) |
+| 봉 헌 (97–104) | 표어/환영 card (116) · **합심기도** (123–125) |
+| 교회 소식 items (117–121) | **파송의 노래 + 축복의 통로** fixed closing song (154–159) |
+| 말씀 ref/verses/title (127–134) | **축도** (161–162) · **주기도문 full text** (163–165) |
+| 설교후 찬양 (135–152) | 폐회 안내 (169) |
+
+**Decision: full parity.** `build()` generates every recurring slide above, so the operator
+imports one file and clicks it top to bottom. Consequences worth knowing:
+
+- **Both 사도신경 forms ship** — the responsive call-and-response (70–72) *and* the traditional
+  recitation (74–75). The deck carries both and the operator picks per service; guessing which
+  one is current would be a worse failure than an extra three cues.
+- **The wording is dumped, never composed.** Several Korean translations of 사도신경 and 주기도문
+  are in circulation and the congregation recites one from memory, so `content.py` holds text
+  read off `master.key` with `dump_slide_texts`. Note that dump *dedupes repeated lines per
+  slide* — re-source from the deck, not from `tests/fixtures/master_slide_texts.json`.
+- **축복의 통로 is fixed content, not a `ServiceData` song.** The same song closes every service,
+  sung twice (before 축도, before 주기도문), so it lives in `content.SENDING_SONG` and feeds
+  `fill_song` unchanged.
+- **Repeated heading slides collapse to one cue.** The template repeats 예배의 부름 / 회개로의 초대 /
+  죄사함의 선포 / 환영 및 인사 / 합심 기도 two or three times (a slide per service part); in
+  ProPresenter the operator holds on a cue instead of clicking past duplicates.
+- **The 성가대 lighting cue becomes a slide note.** Master slide 76 is booth-facing, so it goes
+  into `PresentationSlide.Notes` on the 성가대 divider rather than onto the canvas. The number
+  grid (109) is dropped — nobody could identify what it is for.
+- **Verse packing is shared with Keynote.** `bible/layout.py` now owns `chunk_verses` and its
+  ratios; the Keynote builder measures its boxes off the open template, the `.pro` builder
+  derives them from `styles.CONTENT_RECT`, and both feed the same model. The `.pro` styles carry
+  their leading as *extra* points, so it passes its own line-pitch ratios.
+
+`build()` landed here rather than in #180 (which shrinks to wiring the review app's second build
+button): without the walk, the fills can only be tested one at a time and nothing is
+eyeball-testable. The 봉 헌 hymn *pages* remain #179 — `build()` emits the title divider and
+deliberately does **not** call `fill_offering_hymn`, so another issue's stub can't take a weekly
+deck down with it.
+
+### Operator review of the first full deck (#178, 2026-08-31)
+
+The first end-to-end deck was clicked through against `주일 2부-2026-08-30-v1.key`, the deck it
+replaces. Five findings, all about *legibility and parity* rather than structure:
+
+- **The #189 type scale was a mock-up scale, not a projection scale.** A large share of the
+  congregation is elderly, and the church's Keynote deck sets 개역한글 at **84pt**, ESV at 59pt,
+  교회 소식 at 80pt and the opening heading at 141pt on the same 1920×1080 canvas — roughly double
+  what the samples were drawn at. `styles.py`'s scale is now transcribed from that deck, and
+  `FRAME_INSET` / `CONTENT_INSET` were pulled in from (140, 96)/(100, 64) to (44, 30)/(44, 30) to
+  give it the room Keynote's boxes have. `tests` pin the floors so this can't quietly regress.
+- **ProPresenter's own "shrink text to fit" is a trap.** `SCALE_BEHAVIOR_SCALE_FONT_DOWN` looked
+  like the free fix for the "text is too large for its text box" warnings, but on PP 21.4 it
+  shrinks until the text fits *without wrapping* — a four-line 개역한글 verse came back as one
+  ~20pt line. So the fitting is done at authoring time instead: `styles._fit_scale` measures with
+  `bible.layout`'s ratios and bakes a smaller size into the RTF. Don't reach for the enum.
+- **The deck ships its own artwork.** `master.key` carries the church logo on the opening plates
+  and the 표어 card, plus two full-bleed pre-service photos (slides 4–5). A generated deck has no
+  template to inherit them from, so they live in `propresenter/assets/` (public church branding,
+  ~1 MB, unlike anything under `data/`). The 환영합니다 graphic carries the year's 표어, so it is
+  replaced each January alongside `content.WELCOME_CARD`.
+- **The opening plate is laid out in canvas coordinates.** It is the one slide the operator
+  compares side by side with Keynote, so `service_intro` / `service_outro` use master.key's own
+  boxes (date 621,297 · heading 169,386 · title+ref 222,634 · notice 246,908) rather than the
+  content rect. Only the ground and the type colors are ours.
+- **The 성가대 title is a lower-third banner, not a plate.** master.key slide 89 shows it as the
+  same keyed strip the lyrics use; a full-screen `song_title` there read as a second divider.
+
+#### Second round: measure the type, don't estimate it
+
+Raising the type scale turned six more slides red ("one or more text boxes are too small") and
+clipped two of them. The root cause was one number: a line was budgeted at `size +
+line_spacing`, when CoreText gives it **`1.21 × size` + line_spacing** — Apple SD Gothic Neo
+asks for a fifth more room than its point size, so every box was over-committed by ~13% and the
+error grew with the font. `bible.layout.LINE_PITCH` now carries the measured ratio (and
+`line_height()` the extra point CoreText rounds onto a *first* line), and both
+`styles._wrapped_height` and `build._pitch` budget with it.
+
+Two consequences worth keeping:
+
+- **The scripture slide is laid out like Keynote's, not as two stacked half-boxes.** Each
+  `[ref, 개역한글]` label gets its own small box above its body (master 141–163) instead of
+  sharing the body's box, where it cost a whole line at the *body's* pitch. `verse_rects()` is
+  the single source of those four boxes — `build._verse_boxes` reads it too, so the packer can
+  never budget against a box the builder doesn't draw. The heights come from a measurement, not
+  a guess: across 삼상 14:1-23 the worst verse needs 4.62 개역한글 lines and 3.67 ESV lines, so the
+  slide is built to hold **5 and 4**. Every verse of that passage now ships at the full 84/59
+  with nothing shrunk, which is the operator's rule for scripture — never clip, and never vary
+  the size; spread a long passage over more slides instead.
+- **ProPresenter reserves the leading after the last line too.** CoreText's
+  `CTFramesetterSuggestFrameSizeWithConstraints` counts `line_spacing` only *between* lines; PP
+  wants it after the final line as well, so an N-line block costs `N × (LINE_PITCH × size +
+  line_spacing)`. The gap is under one line's leading, which is why it never looks like an
+  overflow — the slide just quietly wears the warning. It cost a second review round: the
+  opening plate was given a box 10pt larger than CoreText asked for and still came back flagged.
+- **`scripts/audit_pro_layout.py` is the check.** It measures every text element of a generated
+  `.pro` through the same AppKit/CoreText path ProPresenter uses (`measure_text.swift`), plus
+  that trailing leading, so a clean run means the deck genuinely fits. The rule was **fitted to
+  the operator's own two markups** and reproduces both exactly: the six slides flagged on deck
+  `178e`, and — after the first round of fixes — only slides 1–2 on `178g`, where plain CoreText
+  predicted none. Run it after any change to the type scale or the frame insets, and audit a
+  freshly generated file — ProPresenter rewrites the decks it opens.
+
+Not changed, deliberately: a short verse leaves daylight between the two languages. The
+approved Keynote deck does the same thing, more so — the layout is anchored, not centered, so
+consecutive slides don't jump around.
+
+#### Third round: the operator's own restyle is the reference
+
+Rounds 1–2 fixed what was *wrong*. Round 3 settled what it should *look like*, and it settled it
+the only way that scales: the operator duplicated a generated draft, restyled two sections in
+ProPresenter by hand, and handed the file back. Reading a `.pro` gives exact numbers — box
+origins, point sizes, font faces, colors — so a markup is worth more than any amount of
+describing. That loop is now the way to change the look; the rest of this section is what came
+out of the first pass through it.
+
+**Read a markup, not a drag.** A hand-restyled file mixes decisions with noise: a logo nudged
+3pt, a box shrink-wrapped by ProPresenter's own auto-resize, a bottom edge dragged 6pt past the
+content rect. What counts as intent is a change that is *large*, *repeated across sibling
+slides*, or *stated in the covering message*. Everything else is left alone. Two examples from
+this pass: the 개역한글 body moved down 20pt on all three scripture slides and the message said
+"added more spacing" — intent; the ESV body moved 6.6pt on one — noise, and copying it would
+have pushed the block out of the content rect.
+
+What changed:
+
+- **The plates lose the frame outline** ("removed borderline to make it cleaner"). `_framed()`
+  takes `frame=False`; `service_intro`, `service_outro` and `text_card` use it. The tint stays.
+  The outline stays wherever content reaches the edges — dividers, scripture, liturgy, 교회 소식.
+- **The opening plate's sermon title drops to 70/60** from master.key's 100/88. Those sizes were
+  transcribed from Keynote, where the plate sits over a photo; on the navy ground they shout.
+- **Brackets come off the divider subtitles.** master.key writes `[ 믿음으로 우리는 ]`; the gold
+  rule above already separates it. The scripture slides' `[요 1:33-36, 개역한글]` labels keep
+  theirs — those sit inside a body, where they do need setting apart.
+- **개역한글 scripture is set Regular, not Bold**, and its label gets 28pt of air instead of 8
+  (the ESV label keeps 8 — it was not what the operator moved). `CONTENT_INSET` drops from 20 to
+  12 to pay for that gap without costing the 개역한글 body its fifth line.
+- **예배 시작 ends on a blank green cue**, where Keynote's slide 5 held a 예배 준비 안내 card. The
+  deck waits here while people come in; green keys the camera through, a navy card covers it.
+- **고백의 찬양 and its song are one group, not two.** A divider and the song it announces are one
+  section to the operator, and two bars for one section is two things to find under pressure. The
+  medley stays the exception — there each song genuinely is its own section.
+
+Filed rather than fixed, because both need design work this loop can't shortcut: #233 (교회 소식
+plates — Keynote's own are the thing being rejected, and they hold the deck's one remaining
+shrink) and #234 (회개로의 초대 / 죄사함의 선포 are keyed labels over the live camera in Keynote,
+purple brush-stroke artwork and all, not full-screen navy plates).
+
 ## Decision 4 — song sections stay cue names, not groups (#176 closed, not built)
 
 #176 planned to port the #113 arrangement model natively: each operator-labeled section
@@ -224,7 +385,7 @@ single-`.pro` scope.
 | Lyric slides (≤2-line chunks, keyed green) | #175 ✅ |
 | Arrangement marks → groups + `Arrangement` | #176 — built, measured, rejected (Decision 4) |
 | Glossa translation | #177 — it's a Prop, not a slide; generator writes nothing |
-| Verse / announcement / choir / liturgy fill detail | #178 |
+| Verse / announcement / choir / liturgy fills, static-section parity, `build()` walk | #178 ✅ |
 | Offering hymn (봉헌) image path | #179 |
 | Wire generator + dual build buttons | #180 |
 
@@ -234,7 +395,8 @@ single-`.pro` scope.
 ruff check src/worship_deck/propresenter tests/test_propresenter_build.py scripts/make_pro_demo.py
 pytest -m "not local_only" tests/test_propresenter_build.py   # pure protobuf, CI-safe
 pytest -m local_only tests/test_propresenter_build.py         # Cocoa RTF re-parse (textutil)
-python scripts/make_pro_demo.py                               # -> the local ProPresenter library
+python scripts/make_pro_demo.py                               # one cue per style key
+python scripts/make_pro_demo.py --run 2026-08-30              # the whole weekly deck (#178)
 ```
 
 ### Seeing what ProPresenter actually renders
@@ -261,10 +423,13 @@ Crashes land in `~/Library/Logs/DiagnosticReports/ProPresenter-*.ips` — the fa
 names the subsystem that rejected the document.
 
 `scripts/make_pro_demo.py` writes one cue per style key (grouped by section) using the #189
-sample content — open it in ProPresenter and compare against `docs/style-samples/`. The
-sung-lyric `fill_*` bodies are live (#175); the rest remain `NotImplementedError` until
-#178–#179, and `build()` until #180. No cue anywhere carries a Glossa web element — that is a
-prop, set up once on the church mini.
+sample content — open it in ProPresenter and compare against `docs/style-samples/`. Its
+`--run YYYY-MM-DD` mode builds the real weekly deck from that run's reviewed `ServiceData`,
+which is the check that matters once every section is filled (#178): section order, verse
+packing and the liturgy as the operator will click through them. Only `fill_offering_hymn`
+remains `NotImplementedError` (#179) — `build()` doesn't call it, so a real week still builds,
+title-only in 봉 헌. No cue anywhere carries a Glossa web element — that is a prop, set up once
+on the church mini.
 
 **Glossa is a Prop, so the generator writes nothing for it.** Glossa is the live KO→EN
 translation, and #177 first built it as a chroma-green cue holding a web element, placed before

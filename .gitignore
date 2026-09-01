@@ -20,6 +20,10 @@ data/
 # deck slides (psalm/creed/divider/lyric — no member names or offering amounts).
 !docs/style-references/**/*.png
 !docs/style-references/**/*.jpg
+# Church artwork the ProPresenter generator ships (#178): the logo and the two full-bleed
+# pre-service plates, lifted from master.key. Public branding — no member names or amounts.
+!src/worship_deck/propresenter/assets/**/*.png
+!src/worship_deck/propresenter/assets/**/*.jpg
 
 # ---- Secrets ----
 .env

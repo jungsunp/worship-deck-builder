@@ -8,11 +8,11 @@ PDF preview for phone review. AppleScript sources live in ./applescript/.
 
 from __future__ import annotations
 
-import math
 import subprocess
 import time
 from pathlib import Path
 
+from worship_deck.bible import layout
 from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.keynote.anchors import detect_anchors
 from worship_deck.lyrics.transcribe import Song, arranged_chunks
@@ -57,11 +57,11 @@ _EXPORT_PDF = Path(__file__).parent / "applescript" / "export_pdf.applescript"
 # = 6 wrapped lines filling the 544pt box; EN 59pt = 5 lines in 298pt) and master.key slide
 # 48 (시 133:1-3: same 6/5-line fill at the same fonts). Constants below reproduce both.
 _LINE_H = 1.2        # title-model line height (see _fit_title); verses use the pair below
-_LINE_H_KO = 1.07    # verse line height / font (544pt box ÷ 6 lines @84pt ⇒ ≤1.079)
-_LINE_H_EN = 1.00    # verse line height / font (298pt box ÷ 5 lines @59pt ⇒ ≤1.010)
-_CHAR_W_KO = 0.83    # avg glyph advance / font — Hangul 1.0 minus space/punct share
-                     # (matches _TITLE_CHAR_W_KO; 0.9 wrongly splits 시 133:1-3 onto 2 slides)
-_CHAR_W_EN = 0.44    # avg glyph advance / font — proportional Latin incl. spaces
+# The verse-packing model is shared with the ProPresenter builder — see bible/layout.py (#178).
+_LINE_H_KO = layout.LINE_H_KO
+_LINE_H_EN = layout.LINE_H_EN
+_CHAR_W_KO = layout.CHAR_W_KO   # also matches _TITLE_CHAR_W_KO below
+_CHAR_W_EN = layout.CHAR_W_EN
 _TARGET_FONT_KO = 84  # ideal sizes from slide 46; chunking packs to these, set explicitly
 _TARGET_FONT_EN = 59
 _MIN_FONT_KO = 60    # readability floor (pt): a verse too long for its own slide at the
@@ -238,15 +238,8 @@ def set_date_slides(key_path: str, date: str, title: str, ref: str) -> int:
     return int(out.strip())
 
 
-def _verse_lines(text: str, box_w: int, font: int, char_w: float) -> int:
-    """How many wrapped lines `"N. " + text` takes in a box `box_w` wide at `font` pt."""
-    chars_per_line = max(1, int(box_w / (font * char_w)))
-    return max(1, math.ceil(len(text) / chars_per_line))
-
-
-def _fit_lines(box_h: int, font: int, line_h: float) -> int:
-    """How many lines of `font` pt (at `line_h` × font per line) fit in a box `box_h` tall."""
-    return max(1, int(box_h / (font * line_h)))
+_verse_lines = layout.verse_lines
+_fit_lines = layout.fit_lines
 
 
 def _wrap_balanced(text: str, lines: int) -> list[str]:
@@ -305,32 +298,14 @@ def _chunk_verses(
 ) -> list[list[Verse]]:
     """Group consecutive verses so each slide fills well at the target font (#115).
 
-    For each body box (width, available height), estimate how many wrapped lines fit at the
-    target font; a verse starts a new slide when adding it would exceed EITHER language's
-    line budget (verses don't share a line). Short verses pack >2 per slide, long ones spread
-    out — consistent density everywhere. A verse that overflows on its own still gets its own
-    slide (its font then shrinks via _fit_font, never below the floor).
+    Thin wrapper over the shared model in ``bible/layout.py`` (the ProPresenter builder packs
+    the same way against its own baked box sizes), supplying this deck's target fonts. A verse
+    that overflows on its own still gets its own slide; its font then shrinks via ``_fit_font``,
+    never below the floor.
     """
-    ko_w, ko_h = ko_box
-    en_w, en_h = en_box
-    ko_budget = _fit_lines(ko_h, ko_font, _LINE_H_KO)
-    en_budget = _fit_lines(en_h, en_font, _LINE_H_EN)
-
-    chunks: list[list[Verse]] = []
-    current: list[Verse] = []
-    ko_used = en_used = 0
-    for v in verses:
-        ko_need = _verse_lines(f"{v.number}. {v.korean}", ko_w, ko_font, _CHAR_W_KO)
-        en_need = _verse_lines(f"{v.number}. {v.english}", en_w, en_font, _CHAR_W_EN)
-        if current and (ko_used + ko_need > ko_budget or en_used + en_need > en_budget):
-            chunks.append(current)
-            current, ko_used, en_used = [], 0, 0
-        current.append(v)
-        ko_used += ko_need
-        en_used += en_need
-    if current:
-        chunks.append(current)
-    return chunks
+    return layout.chunk_verses(
+        verses, ko_box=ko_box, en_box=en_box, ko_font=ko_font, en_font=en_font
+    )
 
 
 def _fit_font(
