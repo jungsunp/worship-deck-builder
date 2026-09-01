@@ -11,22 +11,31 @@ which needs the #224 background images).
 ``ServiceData`` (#178) — the end-to-end eyeball, and the only way to see the section order,
 the verse packing and the liturgy as the operator will click through them.
 
+``--announcements`` builds a 교회 소식-only deck out of **every distinct shape of notice the
+church has actually published**, gathered from the reviewed runs under ``data/runs/`` (#233):
+the bare one-liner, the date+time+문의, the 5-row rail, the ones with no liftable field at all,
+and the ones long enough to run onto a second plate. One review pass covers what a year of
+Sundays would otherwise take. The runs are git-ignored real bulletins, so the deck it writes
+carries member names — keep it out of the repo.
+
 Usage:
 
     .venv/bin/python scripts/make_pro_demo.py                    # -> the local PP library
     .venv/bin/python scripts/make_pro_demo.py --out /tmp/x.pro
     .venv/bin/python scripts/make_pro_demo.py --run 2026-08-23   # the full weekly deck
     .venv/bin/python scripts/make_pro_demo.py --candidates       # keyed-label plates, M1 vs A
+    .venv/bin/python scripts/make_pro_demo.py --announcements --out /tmp/a1.pro
 
 ProPresenter caches a ``.pro`` it has already read, so iterate by writing a *new* filename each
 round (``--out``) rather than overwriting and restarting the app.
 """
 
 import argparse
+import json
 from pathlib import Path
 
 from worship_deck import store
-from worship_deck.propresenter import build, styles
+from worship_deck.propresenter import announce, build, bundle, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
 
@@ -81,6 +90,49 @@ def make_candidates(out_pro: Path) -> Path:
     return out_pro
 
 
+def _announcement_sampler(runs_dir: Path) -> list[str]:
+    """One real notice per distinct *shape* the church has published, simplest shape first.
+
+    "Shape" is what the plate has to cope with — which labels the rail ends up carrying, how many
+    plates the notice splits into, and whether any prose is left under the rail — not what the
+    notice says. Deduplicating on that turns 112 near-identical past notices into the ~30 worth
+    looking at, while guaranteeing every awkward one is in the deck: the five-row rail, the one
+    with nothing liftable at all, the one long enough to need three plates, and each distinct
+    rail vocabulary the bulletin has used (날짜/시간/장소/문의, but also 대상/비용/주제/영유아부…),
+    since an unfamiliar label is exactly where a two-column rail can fall over. The most recent
+    notice of each shape wins, so the deck reads like the weeks ahead rather than last spring.
+    """
+    seen: dict[tuple, str] = {}
+    for path in sorted(runs_dir.glob("*.json")):
+        try:
+            blocks = json.loads(path.read_text()).get("announcements") or []
+        except (json.JSONDecodeError, OSError):
+            continue
+        for block in blocks:
+            item = announce.parse_item(block)
+            shape = (
+                len(item.rows),
+                len(styles.split_announcement(item)),
+                bool(item.paragraphs),
+                tuple(label for label, _ in item.rows),
+            )
+            seen[shape] = block
+    return [seen[shape] for shape in sorted(seen)]
+
+
+def make_announcement_review(out_pro: Path, runs_dir: Path) -> Path:
+    """A 교회 소식-only deck built from the real past notices ``_announcement_sampler`` picks."""
+    blocks = _announcement_sampler(runs_dir)
+    if not blocks:
+        raise SystemExit(f"no reviewed runs with announcements under {runs_dir}")
+    pres = build.new_presentation(out_pro.stem)
+    build.fill_announcements(pres, blocks)
+    out_pro.parent.mkdir(parents=True, exist_ok=True)
+    build.serialize(pres, str(out_pro))
+    print(f"{len(blocks)} notices -> {len(pres.cues) - 2} plates")
+    return out_pro
+
+
 def make_demo(out_pro: Path, image: Path | None = None) -> Path:
     pres = build.new_presentation(out_pro.stem)
 
@@ -119,7 +171,11 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
         [("봉 헌", styles.section_divider("봉 헌", "[ 나 속죄함을 받은 후 ]  (찬 283장)"))]
         + ([("hymn page", styles.image(str(image)))] if image else []),
     )
-    section("교회 소식", [("교회 소식", styles.announcement("교회 소식", ANNOUNCEMENTS))])
+    section("교회 소식", [
+        (block.partition("\n")[0], styles.announcement("교회 소식", item, number, len(ANNOUNCEMENTS)))
+        for number, block in enumerate(ANNOUNCEMENTS, start=1)
+        for item in [announce.parse_item(block)]
+    ])
 
     out_pro.parent.mkdir(parents=True, exist_ok=True)
     build.serialize(pres, str(out_pro))
@@ -133,12 +189,25 @@ if __name__ == "__main__":
     ap.add_argument("--run", help="build the full weekly deck from this run date (YYYY-MM-DD)")
     ap.add_argument("--candidates", action="store_true",
                     help="write the keyed-label plate comparison (M1 vs A) instead of the demo")
+    ap.add_argument(
+        "--bundle", action="store_true",
+        help="also pack the .pro and its media into a single-file .probundle (#236)",
+    )
+    ap.add_argument("--announcements", action="store_true",
+                    help="build a 교회 소식-only deck covering every past notice shape (#233)")
+    ap.add_argument("--runs-dir", type=Path, default=store.RUNS_DIR,
+                    help="where the reviewed runs live (default: data/runs)")
     args = ap.parse_args()
 
     if args.candidates:
         out = (args.out if args.out != DEFAULT_OUT
                else DEFAULT_OUT.with_name("Keyed Label Candidates.pro"))
-        print(f"Wrote {make_candidates(out)}")
+        written = make_candidates(out)
+        print(f"Wrote {written}")
+    elif args.announcements:
+        out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name("교회 소식 Review.pro")
+        written = make_announcement_review(out, args.runs_dir)
+        print(f"Wrote {written}")
     elif args.run:
         out = args.out if args.out != DEFAULT_OUT else DEFAULT_OUT.with_name(f"{args.run}.pro")
         out.parent.mkdir(parents=True, exist_ok=True)
@@ -147,4 +216,7 @@ if __name__ == "__main__":
     else:
         written = make_demo(args.out, args.image)
         print(f"Wrote {written}")
+    if args.bundle:
+        packed = bundle.write_bundle(written)
+        print(f"Wrote {packed} ({packed.stat().st_size / 1e6:.1f} MB) — import this one file.")
     print("Open it in ProPresenter (restart PP if the library doesn't refresh).")

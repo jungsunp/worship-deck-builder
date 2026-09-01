@@ -20,6 +20,7 @@ Each ``STYLE_KEYS`` entry has a builder below returning a finished ``Slide``; th
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -31,7 +32,7 @@ import slide_pb2
 # isort: on
 from worship_deck.bible import layout
 
-from . import content, rtf
+from . import announce, content, rtf
 from . import elements as el
 
 # The slide types the generator can produce. Each maps to one builder function below.
@@ -41,7 +42,7 @@ STYLE_KEYS = (
     "song_banner",              # keyed lower-third song title (worship medley)
     "song_title",               # full-screen song / section title banner
     "verse_fullscreen",         # bilingual scripture body (개역한글 + ESV)
-    "announcement",             # 교회소식 item (gold title + muted detail)
+    "announcement",             # 교회 소식 notice (title + 날짜/장소/문의 라벨 레일)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
     "keyed_label",              # section heading keyed over the live camera (#234)
     "liturgy",                  # fixed-wording full-screen (사도신경 / 주기도문)
@@ -214,8 +215,15 @@ VERSE_NUMBER = Style(FONT_BOLD, 62, ACCENT, bold=True, align="left")
 VERSE_KO = Style(FONT_REGULAR, 84, line_spacing=6.0, align="left")
 VERSE_EN_LABEL = Style(FONT_BOLD, 40, ACCENT, bold=True, align="left")
 VERSE_EN = Style(FONT_REGULAR, 59, MUTED, line_spacing=6.0, align="left")
-ANNOUNCE_HEADING = Style(FONT_BOLD, 44, ACCENT, bold=True, tracking=8.0)
-ANNOUNCE_TITLE = Style(FONT_BOLD, 76, ACCENT, bold=True, line_spacing=16.0, align="left")
+# 교회 소식 (라벨 레일, #233). Gold is furniture here — the eyebrow, the rule, the rail labels,
+# the counter — and the notice's own title is white, which is the hierarchy the old gold-title
+# plate never had. The labels sit below the 60pt body floor for the same reason the verse labels
+# do: they name the value beside them rather than being read across the sanctuary.
+ANNOUNCE_HEADING = Style(FONT_BOLD, 44, ACCENT, bold=True, tracking=8.0, align="left")
+ANNOUNCE_COUNTER = Style(FONT_BOLD, 44, ACCENT, bold=True, tracking=4.0, align="right")
+ANNOUNCE_TITLE = Style(FONT_BOLD, 88, bold=True, line_spacing=12.0, align="left")
+ANNOUNCE_LABEL = Style(FONT_BOLD, 52, ACCENT, bold=True, line_spacing=10.0, align="right")
+ANNOUNCE_VALUE = Style(FONT_REGULAR, 64, line_spacing=10.0, align="left")
 ANNOUNCE_DETAIL = Style(FONT_REGULAR, 64, MUTED, line_spacing=20.0, align="left")
 KEYED_LABEL = Style(FONT_BOLD, 70, bold=True, tracking=2.0)
 DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
@@ -355,9 +363,20 @@ def _scaled(runs: list[rtf.Run], width: float, height: float) -> list[rtf.Run]:
     ]
 
 
-def _rule(slide: slide_pb2.Slide, y: float, width: float = 96.0, height: float = 3.0) -> None:
-    """The gold hairline the samples put under headings and between KO and EN."""
-    el.shape(slide, ((CANVAS[0] - width) / 2, y, width, height), fill=(*ACCENT, 0.9))
+def _rule(
+    slide: slide_pb2.Slide,
+    y: float,
+    width: float = 96.0,
+    height: float = 3.0,
+    x: float | None = None,
+) -> None:
+    """The gold hairline the samples put under headings and between KO and EN.
+
+    Centred on the canvas unless ``x`` is given — the 교회 소식 plate is set left, so its rule
+    runs the content width from the same margin its eyebrow and title start at.
+    """
+    el.shape(slide, (CANVAS[0] / 2 - width / 2 if x is None else x, y, width, height),
+             fill=(*ACCENT, 0.9))
 
 
 def worship_lyric_ko(lines: list[str]) -> slide_pb2.Slide:
@@ -498,26 +517,182 @@ def verse_fullscreen(
     return _front_to_back(slide)
 
 
-def announcement(heading: str, blocks: list[str]) -> slide_pb2.Slide:
-    """교회소식. Each block is one ``"N. title\\n\\ndetail lines"`` item as ServiceData stores it —
-    gold title, muted detail. The samples show several per slide; #178 decides the packing."""
+# 교회 소식 layout. The header (eyebrow + rule) is fixed; everything under it is measured and
+# then centred, because the notices are short: across the 112 items of the last 14 weeks the
+# median one fills 54% of the plate and 38% of them under half, so a top-anchored block left the
+# bottom of nearly every slide empty (#233).
+ANNOUNCE_HEADER_H = 104.0    # eyebrow + gold rule, above the notice
+ANNOUNCE_LABEL_W = 360.0     # the rail's gold label column ("피택 시무장로" is the widest seen)
+ANNOUNCE_RAIL_GAP = 26.0     # label -> hairline -> value
+ANNOUNCE_RAIL_RULE_W = 3.0
+ANNOUNCE_VALUE_DX = ANNOUNCE_LABEL_W + 2 * ANNOUNCE_RAIL_GAP + ANNOUNCE_RAIL_RULE_W
+ANNOUNCE_TITLE_GAP = 44.0
+ANNOUNCE_ROW_GAP = 18.0
+ANNOUNCE_BODY_GAP = 48.0
+# Headroom over the estimate on every box. ``_wrapped_height`` models CoreText rather than being
+# it (``scripts/audit_pro_layout.py`` is what measures for real), and here each box is sized to
+# its own content instead of to one generous fixed rect, so a point or two of drift would show
+# up as a flagged slide.
+ANNOUNCE_SLACK = 10.0
+
+_ANNOUNCE_GAPS = {("title", "row"): ANNOUNCE_TITLE_GAP, ("title", "body"): ANNOUNCE_TITLE_GAP,
+                  ("row", "row"): ANNOUNCE_ROW_GAP, ("row", "body"): ANNOUNCE_BODY_GAP}
+
+_AnnounceBlock = tuple[str, float, object]
+
+
+def _by_script(text: str, style: Style) -> list[rtf.Run]:
+    """``text`` cut into same-style runs at each Hangul/Latin boundary, for measuring only.
+
+    ``_wrapped_height`` picks one average glyph advance per *run* — 0.83 em if the run holds any
+    Hangul, 0.44 if it does not — which is right for a verse and badly wrong for a 교회 소식 rail,
+    where a value like "9/20/2026 – 1/31/2027 (14주)" is almost all Latin and one 주 makes the
+    whole thing measure half again too wide. Splitting the string at the boundary lets the same
+    model weigh each side properly. The drawn RTF is unaffected: concatenating same-style runs
+    produces the identical document.
+    """
+    return [(part, style) for part in re.findall(r"[가-힣]+|[^가-힣]+", text) if part]
+
+
+def _announce_blocks(item: announce.Item) -> list[_AnnounceBlock]:
+    """One ``(kind, height, payload)`` per drawn element of a 교회 소식 notice, top to bottom.
+
+    Shared by the splitter and the slide builder so the two cannot disagree about what fits.
+    """
+    _, _, w, _ = CONTENT_RECT
+    value_w = w - ANNOUNCE_VALUE_DX
+    blocks: list[_AnnounceBlock] = [(
+        "title",
+        _wrapped_height(_by_script(item.title, ANNOUNCE_TITLE), w, 1.0) + ANNOUNCE_SLACK,
+        item.title,
+    )]
+    for label, value in item.rows:
+        # An unlabelled row (a bare roster the bulletin never captioned) is measured on its
+        # value alone; the label column stays empty for the operator to fill in review.
+        height = max(
+            _wrapped_height(_by_script(label, ANNOUNCE_LABEL), ANNOUNCE_LABEL_W, 1.0)
+            if label else 0.0,
+            _wrapped_height(_by_script(value, ANNOUNCE_VALUE), value_w, 1.0),
+        )
+        blocks.append(("row", height + ANNOUNCE_SLACK, (label, value)))
+    if item.paragraphs:
+        body = "\n\n".join(item.paragraphs)
+        blocks.append((
+            "body",
+            _wrapped_height(_by_script(body, ANNOUNCE_DETAIL), w, 1.0) + ANNOUNCE_SLACK,
+            body,
+        ))
+    return blocks
+
+
+def _announce_height(blocks: list[_AnnounceBlock]) -> float:
+    """Total height of ``blocks`` including the gaps between them."""
+    total = 0.0
+    for i, (kind, height, _) in enumerate(blocks):
+        if i:
+            total += _ANNOUNCE_GAPS.get((blocks[i - 1][0], kind), ANNOUNCE_ROW_GAP)
+        total += height
+    return total
+
+
+def _announce_part(title: str, rows: list[tuple[str, str]], lines: list[tuple[int, str]]):
+    """One plate's worth of packed units, back as an ``Item``.
+
+    ``lines`` carries each prose line with the index of the paragraph it came from, so the
+    paragraph breaks the bulletin wrote survive being packed line by line.
+    """
+    paragraphs: list[list[str]] = []
+    previous: int | None = None
+    for index, text in lines:
+        if index == previous:
+            paragraphs[-1].append(text)
+        else:
+            paragraphs.append([text])
+        previous = index
+    return announce.Item(title, tuple(rows), tuple("\n".join(p) for p in paragraphs))
+
+
+def split_announcement(item: announce.Item) -> list[announce.Item]:
+    """``item`` cut into as many plates as it takes to ship at **full size**.
+
+    The old plate shrank instead — 4 of the last 112 notices came out under the type scale the
+    operator approved, the worst at 0.85 — and shrinking is the wrong answer for a congregation
+    that skews elderly (#233). Every plate repeats the title, so a notice that runs onto a second
+    one still reads as one notice; 교회 소식 has no "one verse per slide" rule to respect the way
+    scripture does.
+
+    Packing is greedy and line-by-line: the rail rows go on first and the prose fills in behind
+    them, cut at the line breaks the bulletin itself wrote (a schedule, a list of names — the
+    church's own units). Chunking the prose *ahead* of the rail is what an earlier cut of this
+    did, and it spent a whole plate on a lone 날짜 row while the prose waited on the next one.
+
+    A single line too tall for a plate on its own is the one case this cannot fix; none exists in
+    the last 14 weeks, and ``scripts/audit_pro_layout.py`` is what would catch a future one.
+    """
+    available = CONTENT_RECT[3] - ANNOUNCE_HEADER_H
+    units: list[tuple[str, object]] = [("row", row) for row in item.rows]
+    units += [("line", (index, line))
+              for index, paragraph in enumerate(item.paragraphs)
+              for line in paragraph.split("\n")]
+
+    parts: list[announce.Item] = []
+    rows: list[tuple[str, str]] = []
+    lines: list[tuple[int, str]] = []
+    for kind, unit in units:
+        trial_rows = rows + [unit] if kind == "row" else rows
+        trial_lines = lines if kind == "row" else lines + [unit]
+        trial = _announce_part(item.title, trial_rows, trial_lines)
+        if (rows or lines) and _announce_height(_announce_blocks(trial)) > available:
+            parts.append(_announce_part(item.title, rows, lines))
+            rows, lines = ([unit], []) if kind == "row" else ([], [unit])
+        else:
+            rows, lines = trial_rows, trial_lines
+    parts.append(_announce_part(item.title, rows, lines))
+    return parts
+
+
+def announcement(
+    heading: str, item: announce.Item, index: int = 1, total: int = 1
+) -> slide_pb2.Slide:
+    """교회 소식 — one notice as a white title over a gold 날짜/장소/문의 rail and its prose.
+
+    ``item`` is already sized to one plate by ``split_announcement``. The heading stays a small
+    gold eyebrow rather than a plate title (the section is announced once, on its own divider),
+    and the counter beside it tells a congregation eight or nine notices deep how many are left.
+    """
     slide = _slide(background=NAVY)
     x, y, w, h = _framed(slide)
-    # The heading is a small gold eyebrow, not a plate title: master.key gives each item slide
-    # the whole canvas at 80pt (slides 123–131) and announces the section once, on its divider.
-    el.text(slide, (x, y, w, 56.0), rtf.plain(heading, ANNOUNCE_HEADING), ANNOUNCE_HEADING)
-    _rule(slide, y + 78.0)
+    el.text(slide, (x, y, w / 2, 56.0), rtf.plain(heading, ANNOUNCE_HEADING),
+            ANNOUNCE_HEADING, valign="top")
+    if total > 1:
+        counter = f"{index} / {total}"
+        el.text(slide, (x + w / 2, y, w / 2, 56.0), rtf.plain(counter, ANNOUNCE_COUNTER),
+                ANNOUNCE_COUNTER, valign="top")
+    _rule(slide, y + 78.0, width=w, height=2.0, x=x)
 
-    runs: list[rtf.Run] = []
-    for i, block in enumerate(blocks):
-        title, _, detail = block.partition("\n\n")
-        runs.append((("\n\n" if i else "") + title + "\n", ANNOUNCE_TITLE))
-        if detail:
-            runs.append((detail, ANNOUNCE_DETAIL))
-    if runs:
-        top = y + 124.0
-        box = (x, top, w, h - (top - y))
-        el.text(slide, box, rtf.document(_scaled(runs, w, box[3])), ANNOUNCE_TITLE, valign="top")
+    blocks = _announce_blocks(item)
+    cursor = y + ANNOUNCE_HEADER_H + max(
+        0.0, (h - ANNOUNCE_HEADER_H - _announce_height(blocks)) / 2
+    )
+    rail: list[float] = []
+    for i, (kind, height, payload) in enumerate(blocks):
+        if i:
+            cursor += _ANNOUNCE_GAPS.get((blocks[i - 1][0], kind), ANNOUNCE_ROW_GAP)
+        if kind == "row":
+            label, value = payload
+            if label:
+                el.text(slide, (x, cursor, ANNOUNCE_LABEL_W, height),
+                        rtf.plain(label, ANNOUNCE_LABEL), ANNOUNCE_LABEL, valign="top")
+            el.text(slide, (x + ANNOUNCE_VALUE_DX, cursor, w - ANNOUNCE_VALUE_DX, height),
+                    rtf.plain(value, ANNOUNCE_VALUE), ANNOUNCE_VALUE, valign="top")
+            rail += [cursor, cursor + height]
+        else:
+            style = ANNOUNCE_TITLE if kind == "title" else ANNOUNCE_DETAIL
+            el.text(slide, (x, cursor, w, height), rtf.plain(payload, style), style, valign="top")
+        cursor += height
+    if rail:
+        el.shape(slide, (x + ANNOUNCE_LABEL_W + ANNOUNCE_RAIL_GAP, rail[0],
+                         ANNOUNCE_RAIL_RULE_W, rail[-1] - rail[0]), fill=(*ACCENT, 0.55))
     return _front_to_back(slide)
 
 
