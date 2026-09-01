@@ -566,10 +566,23 @@ def _assemble_async(service_date: str) -> None:
         # operator's #108 selection over) — re-fetching would reselect every slide.
         if data.offering_hymn_number and not data.offering_hymn_images:
             try:
-                pngs = hymn.fetch_hymn_slides(
-                    data.offering_hymn_number, HYMN_DIR / service_date / "hymn"
-                )
+                hymn_dir = HYMN_DIR / service_date / "hymn"
+                pngs = hymn.fetch_hymn_slides(data.offering_hymn_number, hymn_dir)
                 data.offering_hymn_images = [str(p) for p in pngs]
+                # Same hymn again in the ProPresenter design, into a subdirectory beside the
+                # no-bg pages (#179). The review UI and the Keynote build never look at it;
+                # propresenter.build swaps each kept page for its sibling here by filename.
+                # Its own best-effort try, so a failure here keeps the no-bg pages we just got.
+                try:
+                    hymn.fetch_hymn_slides(
+                        data.offering_hymn_number, hymn_dir / hymn.PRO_DESIGN,
+                        design=hymn.PRO_DESIGN,
+                    )
+                except Exception:
+                    logger.exception(
+                        "Hymn %s fetch failed for design %s (%s) — .pro falls back to no-bg",
+                        data.offering_hymn_number, hymn.PRO_DESIGN, service_date,
+                    )
             except Exception:  # download is best-effort, surface as a warning
                 logger.exception(
                     "Hymn fetch failed for %s (hymn %s)", service_date, data.offering_hymn_number

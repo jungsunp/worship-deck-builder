@@ -29,6 +29,12 @@ from pathlib import Path
 
 BIBLETOPPT = "https://bibletoppt.com"
 DEFAULT_DESIGN = "no-bg"  # 무배경 — cleanest variant; least likely to clash with the template
+# The ProPresenter deck's design (#179). "no-bg" renders a solid-white page with the artwork
+# pillarboxed into a 4:3 box — right over Keynote's own background, a full-screen white flash in
+# the white-on-dark .pro deck. design6 (야자수/종려나무) is full-bleed 16:9 with much larger type,
+# and bibletoppt offers no dark design at all. Same source PPTX, so the two renders share a page
+# count and pdftoppm filenames — which is what lets propresenter.build swap one for the other.
+PRO_DESIGN = "design6"
 # A real browser UA is required; bibletoppt returns HTTP 403 to header-less requests.
 _UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
