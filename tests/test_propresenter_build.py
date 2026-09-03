@@ -1,11 +1,13 @@
 """Unit tests for the ``.pro`` serialization library (#172) — pure protobuf, CI-safe."""
 
+import importlib.util
 import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from worship_deck.propresenter import pb  # noqa: F401 -- puts pb/ on sys.path
 
@@ -911,9 +913,12 @@ def test_opening_group_carries_the_logo_and_the_two_pre_service_photos(tmp_path)
     pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
     slides = [_slide_of_cue(c) for c in _cues_of(pres, "예배 시작")]
 
-    assert _images_of(slides[0]) == ["npc-logo"]          # 1부 opening plate
-    assert _images_of(slides[2]) == ["npc-logo"]          # 교회 표어 card
-    assert [_images_of(s)[0] for s in slides[3:5]] == ["pre-service-church", "pre-service-welcome"]
+    # The framed plates carry the #224 backdrop underneath their own artwork (`styles._framed`);
+    # the two pre-service photos are full-bleed `image` slides and have nothing under them.
+    backdrop = Path(styles.BACKDROP.image).stem
+    assert _images_of(slides[0]) == ["npc-logo", backdrop]   # 1부 opening plate
+    assert _images_of(slides[2]) == ["npc-logo", backdrop]   # 교회 표어 card
+    assert [_images_of(s) for s in slides[3:5]] == [["pre-service-church"], ["pre-service-welcome"]]
     assert all(Path(p).exists() for p in styles.PRE_SERVICE_IMAGES)
     assert Path(styles.LOGO).exists()
 
@@ -1024,3 +1029,71 @@ def test_the_opening_plate_title_has_room_for_its_trailing_leading():
     runs = [("한 사람의 용기와 믿음의 파급력\n", styles.SERVICE_TITLE),
             ("[삼상 14:1-23]", styles.SERVICE_REF)]
     assert styles._fit_scale(runs, 1480.0, 262.0) == 1.0
+
+
+def test_the_backdrop_sits_under_every_framed_slide_and_never_under_a_keyed_one():
+    """#224: the 네이비 프레임 backdrop is a pre-blurred image, because ProPresenter's own
+    ``backgroundEffect.backgroundBlur`` crashes 21.4 on selection.
+
+    Two things have to hold. It must be the *bottom* layer — ProPresenter stores elements
+    front-to-back, so a backdrop that ended up at index 0 would paint over the whole slide and
+    hide the text. And it must stay off the chroma-keyed slides: those are composited over live
+    camera by the ATEM upstream keyer (#192), so a photo behind the green would key through as
+    part of the lyric.
+    """
+    backdrop = Path(styles.BACKDROP.image).stem
+
+    for slide in (styles.section_divider("봉 헌"), styles.liturgy("사도신경", ["전능하사"]),
+                  styles.text_card(content.MOTTO)):
+        assert _images_of(slide)[-1] == backdrop
+        assert slide.elements[-1].element.fill.media.url.absolute_string.endswith(".png")
+
+    for slide in (styles.blank_green(), styles.worship_lyric_ko(["다시 한 번 외쳐 부르니"])):
+        assert backdrop not in _images_of(slide)
+        assert _green(slide)
+
+
+def test_the_shipped_backdrop_is_baked_at_the_canvas_size():
+    """`scripts/make_backdrop.py` aspect-fills to 1920×1080 so ProPresenter never rescales it.
+    A backdrop baked at the wrong aspect would be cropped again at display time, moving the blur
+    the #189 sample was measured against."""
+    png = Image.open(styles.BACKDROP.image)
+
+    assert (png.width, png.height) == tuple(int(v) for v in styles.CANVAS)
+    assert all(Path(b.image).exists() for b in styles.BACKDROPS.values())
+
+
+def test_serialize_refuses_a_cue_that_is_in_no_group(tmp_path):
+    """ProPresenter renders cue *groups*, not the cue list: an ungrouped cue never appears, and a
+    deck with no groups at all opens as an empty document with no error anywhere. Found the hard
+    way building a one-off comparison deck off the `add_cue` primitive (#224) — silent, and
+    unreadable from the app, exactly like the synthesized transitions in #174."""
+    pres = build.new_presentation("week")
+    build.add_cue(pres, build.new_slide("section_divider", "봉 헌"), "봉 헌")
+
+    with pytest.raises(ValueError, match="봉 헌"):
+        build.serialize(pres, str(tmp_path / "week.pro"))
+
+    assert not (tmp_path / "week.pro").exists()  # nothing written on the way out
+
+
+def test_the_bake_strengths_and_the_shipped_tint_agree():
+    """`scripts/make_backdrop.py` owns the blur/brightness/tint triple, but only two thirds of it
+    reach the PNG — `_framed` draws the tint live. So the shipped alpha lives in `styles` and
+    would drift silently: nothing renders wrong, the look is just no longer the one that was
+    picked. Tint is the strongest of the three, so that drift is not cosmetic.
+    """
+    spec = importlib.util.spec_from_file_location(
+        "make_backdrop", Path(__file__).resolve().parent.parent / "scripts/make_backdrop.py"
+    )
+    make_backdrop = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(make_backdrop)
+
+    assert styles.BACKDROP_STRENGTH == make_backdrop.SHIPPED
+    _blur, _brightness, tint = make_backdrop.STRENGTHS[make_backdrop.SHIPPED]
+    assert [b.tint for b in styles.BACKDROPS.values()] == [tint] * len(styles.BACKDROPS)
+    assert styles.TINT_RGBA == (*styles.NAVY, tint)
+    # Every backdrop names a strength the script can actually bake.
+    assert all(
+        Path(b.image).stem.endswith(f"-{make_backdrop.SHIPPED}") for b in styles.BACKDROPS.values()
+    )

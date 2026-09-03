@@ -169,7 +169,8 @@ def shape(
     Note there is deliberately no background-blur option. ``Fill.backgroundEffect``
     (``backgroundBlur``) looked like a free way to get the blurred backdrop, but ProPresenter
     21.4 renders it as an unrendered placeholder and **crashes** when the slide is selected,
-    so the 네이비 프레임 backdrop needs a real (pre-blurred) background image instead — #224.
+    so the 네이비 프레임 backdrop is a real, pre-blurred background image instead — `styles.BACKDROP`,
+    baked by `scripts/make_backdrop.py` and placed through `image` below (#224).
 
     ``Fill`` is a oneof that also offers ``gradient``, and ``Graphics.Element`` has a ``feather``
     slot; both were wired up for the #234 bake-off and taken out again when the keyed label went

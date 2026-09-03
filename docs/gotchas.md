@@ -60,3 +60,11 @@ Why the model went: on 2026-07-26 the assemble took 156.6s, 3 of 4 sheets fell b
 
 - `source .env` fails (unquoted space in `INBOX_DIR`); load a single var with `export $(grep '^ESV_API_KEY=' .env | xargs)`.
 - Mock `httpx.get` in tests with `monkeypatch.setattr(httpx, "get", lambda *a, **kw: _FakeResponse())` and a minimal `_FakeResponse` class (see `tests/test_esv.py`). No `respx` or `pytest-httpx` needed.
+- **`pytest` in a git worktree silently tests the *main* checkout.** The shared `.venv` is an
+  editable install of the main working tree, so `import worship_deck` resolves there and your
+  worktree's changes are invisible — the suite goes green without ever running your code. Prefix
+  with `PYTHONPATH=src` to put the worktree first (`PYTHONPATH=src .venv/bin/python -m pytest …`),
+  and confirm with `python -c "import worship_deck; print(worship_deck.__file__)"`. Same reason
+  `./serve.sh` exists. A worktree also has no generated protobuf bindings (`pb/*_pb2.py` is
+  git-ignored) — run `bash scripts/gen_proto.sh` in it or every `propresenter` test
+  `importorskip`s away, which likewise reads as a pass.
