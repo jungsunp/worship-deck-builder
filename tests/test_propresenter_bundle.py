@@ -17,11 +17,20 @@ from worship_deck.propresenter import build, bundle, styles
 
 
 def _deck(tmp_path: Path, *images: Path) -> Path:
-    """A minimal presentation: one image cue per given file, plus one text cue."""
+    """A minimal presentation: one image cue per given file, plus one media-free cue.
+
+    The trailing cue is ``blank_green`` rather than a full-screen style on purpose: every framed
+    slide now carries the #224 backdrop, so a divider would put shipped artwork into decks these
+    tests want to hold nothing but ``images``. The backdrop's own trip through the bundle is
+    covered by ``test_a_framed_slide_pulls_the_backdrop_into_the_bundle``.
+    """
     pres = build.new_presentation("week")
-    for image in images:
-        build.add_cue(pres, build.new_slide("image", str(image)), image.stem)
-    build.add_cue(pres, build.new_slide("section_divider", "봉 헌"), "봉 헌")
+    uuids = [
+        build.add_cue(pres, build.new_slide("image", str(image)), image.stem) for image in images
+    ]
+    uuids.append(build.add_cue(pres, build.new_slide("blank_green"), "빈 화면"))
+    # `serialize` rejects a cue that is in no CueGroup — ProPresenter would not draw it.
+    build.add_group(pres, "week", None, uuids)
     out = tmp_path / "week.pro"
     build.serialize(pres, str(out))
     return out
@@ -104,6 +113,25 @@ def test_the_weekly_deck_bundles_its_shipped_artwork(tmp_path):
     # M1 keyed-art plate (#234) is the first non-opening-plate media the deck references, since
     # 회개로의 초대 falls early in the service and the offering hymn PNGs (later) aren't fetched here.
     assert names == [
-        styles.LOGO, *styles.PRE_SERVICE_IMAGES, styles.KEYED_ART["M1"][0], "week.pro",
+        styles.LOGO, styles.BACKDROP.image, *styles.PRE_SERVICE_IMAGES,
+        styles.KEYED_ART["M1"][0], "week.pro",
     ]
     assert all(n.startswith("/") for n in names[:-1])  # absolute, leading slash preserved
+
+
+def test_a_framed_slide_pulls_the_backdrop_into_the_bundle(tmp_path):
+    """The #224 backdrop is referenced by ``styles._framed``, not by anything build() places
+    deliberately, so nothing in bundle.py names it — ``media_paths`` has to discover it. If that
+    ever stops working the deck still opens on this Mac and shows a bare navy slide on the
+    church's, which is precisely the failure a bundle exists to prevent."""
+    pres = build.new_presentation("week")
+    build.add_group(
+        pres, "봉 헌", None,
+        [build.add_cue(pres, build.new_slide("section_divider", "봉 헌"), "봉 헌")],
+    )
+    pro = tmp_path / "week.pro"
+    build.serialize(pres, str(pro))
+
+    assert bundle.media_paths(build.load(str(pro))) == [Path(styles.BACKDROP.image)]
+    with zipfile.ZipFile(bundle.write_bundle(pro)) as zf:
+        assert zf.namelist() == [styles.BACKDROP.image, "week.pro"]

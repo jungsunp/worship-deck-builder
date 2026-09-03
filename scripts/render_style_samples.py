@@ -21,6 +21,15 @@ from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parent.parent
 ASSETS = ROOT / "data" / "style-samples"
+# The Option 3 backdrop. Points at the committed #224 *source* photo, not the baked PNG: the CSS
+# below applies the same blur/brightness/saturate the bake does, so a baked file would blur twice.
+# It used to read `data/style-samples/bg/bg-band.jpg`, a church-livestream still that is
+# git-ignored — meaning docs/style-samples/f3-*.png could not be re-rendered from a clean
+# checkout. The keyed lyric slides still use that camera frame, and must: they key over live
+# camera, so a flat colour would misrepresent them (#241).
+BACKDROP_SRC = (
+    ROOT / "src/worship_deck/propresenter/assets/backdrops/church-exterior.jpg"
+).as_uri()
 OUT = ROOT / "docs" / "style-samples"
 HTML_DIR = ASSETS / "html"
 
@@ -171,17 +180,17 @@ PHOTO_BG = """
 """
 
 
-def fs_wrap(style_id: str, inner: str, bg_img: str = "bg-band.jpg") -> str:
+def fs_wrap(style_id: str, inner: str, bg_img: str = BACKDROP_SRC) -> str:
     s = FS_STYLES[style_id]
     if s["photo"]:
         return (
-            f"<img class='photo' src='../bg/{bg_img}'><div class='tint'></div>"
+            f"<img class='photo' src='{bg_img}'><div class='tint'></div>"
             f"<div class='fs'><div class='frame'>{inner}</div></div>"
         )
     return f"<div class='fs' style=\"{s['bg']}\">{inner}</div>"
 
 
-def fs_page(style_id: str, extra_css: str, inner: str, bg_img: str = "bg-band.jpg") -> str:
+def fs_page(style_id: str, extra_css: str, inner: str, bg_img: str = BACKDROP_SRC) -> str:
     s = FS_STYLES[style_id]
     css = (PHOTO_BG if s["photo"] else "") + f"body {{ color: {s['ink']}; }}" + extra_css
     return page(s["font"], css, fs_wrap(style_id, inner, bg_img), badge=style_id[1])
@@ -291,7 +300,7 @@ def verse(style_id: str) -> str:
         f"<div class='gap'></div>"
         f"<div class='elabel'>{VERSE_LABEL_EN}</div><div>{en}</div></div>"
     )
-    return fs_page(style_id, css, inner, "bg-pastor.jpg")
+    return fs_page(style_id, css, inner)
 
 
 def announce(style_id: str) -> str:

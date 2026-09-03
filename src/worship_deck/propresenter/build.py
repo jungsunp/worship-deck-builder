@@ -728,7 +728,24 @@ def place_image(slide: slide_pb2.Slide, image_path: str) -> None:
 
 
 def serialize(pres: presentation_pb2.Presentation, out_pro: str) -> str:
-    """Write ``pres`` to ``out_pro`` (a ``.pro`` is one raw-serialized message). Returns the path."""
+    """Write ``pres`` to ``out_pro`` (a ``.pro`` is one raw-serialized message). Returns the path.
+
+    Refuses to write a deck whose cues are not all in a ``CueGroup``. ProPresenter renders the
+    *groups*, not the cue list, so an ungrouped cue does not merely sort oddly — it never appears,
+    and a deck with no groups at all opens as an empty document with no error anywhere. That is
+    the same silent-loss failure as the synthesized transitions in #174, and just as hard to read
+    back from the app, so it fails here instead of on Sunday. ``build()`` and ``fill_*`` always
+    group; this catches one-off decks assembled from the ``add_cue`` primitive directly.
+    """
+    grouped = {i.string for g in pres.cue_groups for i in g.cue_identifiers}
+    orphans = [c.name or c.uuid.string for c in pres.cues if c.uuid.string not in grouped]
+    if orphans:
+        raise ValueError(
+            f"{len(orphans)} of {len(pres.cues)} cues are in no CueGroup and would be invisible "
+            f"in ProPresenter: {', '.join(orphans[:5])}"
+            + (" …" if len(orphans) > 5 else "")
+            + " — wrap them with build.add_group(pres, label, color, cue_uuids)."
+        )
     Path(out_pro).write_bytes(pres.SerializeToString())
     return out_pro
 

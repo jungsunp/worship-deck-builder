@@ -85,6 +85,38 @@ KEYED_ART: dict[str, tuple[str, float]] = {
     "M1": (str(ASSET_DIR / "m1-angled-bar.png"), BRUSH_ASPECT),
     "A": (BRUSH, BRUSH_ASPECT),
 }
+# The blurred backdrop behind every full-screen slide (#224). Pre-blurred by
+# `scripts/make_backdrop.py` because ProPresenter cannot blur one itself — see `_framed` below.
+
+
+@dataclass(frozen=True)
+class Backdrop:
+    """A backdrop image and the navy tint that belongs over it — one look, not two settings.
+
+    The blur and brightness are baked into ``image``; the tint cannot be, because ``_framed``
+    draws it as a live shape and baking it would tint twice. Pairing them here keeps that split
+    from becoming a trap: tint is the strongest of the three, so a backdrop swapped without its
+    tint is a different look than the one that was picked. ``scripts/make_backdrop.py``'s
+    ``STRENGTHS`` table owns the numbers, and a test pins the two files together.
+    """
+
+    image: str
+    tint: float
+
+
+# Three curated sources, baked at the shipped strength. The script re-renders the other strengths
+# for #241's sample sheet; #225 picks the final look and #243 applies it — by then a one-line swap.
+BACKDROP_DIR = ASSET_DIR / "backdrops"
+BACKDROP_STRENGTH = "open"  # must match make_backdrop.SHIPPED
+BACKDROPS: dict[str, Backdrop] = {
+    # the church building at golden hour
+    "church": Backdrop(str(BACKDROP_DIR / f"church-exterior-{BACKDROP_STRENGTH}.png"), 0.62),
+    # the 2025-11 all-church-members photo
+    "congregation": Backdrop(str(BACKDROP_DIR / f"congregation-{BACKDROP_STRENGTH}.png"), 0.62),
+    # CC0 dark church interior
+    "sanctuary": Backdrop(str(BACKDROP_DIR / f"sanctuary-cc0-{BACKDROP_STRENGTH}.png"), 0.62),
+}
+BACKDROP = BACKDROPS["church"]
 
 # ── Palette (Option 3 네이비 프레임) ────────────────────────────────────────────
 # RGB triples; RTF has no alpha, so the sample's translucent inks are pre-blended over the
@@ -99,7 +131,7 @@ BLACK = (0x00, 0x00, 0x00)  # Option A lyric strips
 # It backs every sung-lyric slide, not just blank_green() — an unbacked slide renders black.
 CHROMA_GREEN = (0x81, 0xD6, 0x54)
 
-TINT_RGBA = (*NAVY, 0.62)  # sits over the (future #224) background image
+TINT_RGBA = (*NAVY, BACKDROP.tint)  # the live half of the BACKDROP look (#224)
 FRAME_FILL_RGBA = (0x0A, 0x14, 0x28, 0.35)
 FRAME_STROKE_RGBA = (*INK, 0.32)
 FRAME_STROKE_WIDTH = 1.5
@@ -278,11 +310,16 @@ def _framed(slide: slide_pb2.Slide, *, frame: bool = True) -> tuple[float, float
     cleaner" (#178 review, round 3). The frame stays wherever content reaches the edges — the
     dividers, scripture, liturgy and 교회 소식.
 
-    The sample's blurred-photo backdrop is *not* drawn here. ProPresenter's own
-    ``backgroundEffect.backgroundBlur`` would have supplied it for free, but 21.4 renders it
-    as a placeholder and crashes on selection (verified 2026-08-13), so the blur has to come
-    from a pre-blurred background image — the #224 library, dropped in behind this tint.
+    The sample's blurred-photo backdrop goes in first, under the tint. ProPresenter's own
+    ``backgroundEffect.backgroundBlur`` would have supplied the blur for free, but 21.4 renders
+    it as a placeholder and crashes on selection (verified 2026-08-13), so ``BACKDROP`` is
+    pre-blurred offline by ``scripts/make_backdrop.py`` and placed as an ordinary image (#224).
+    It fills the frame — a background photo is the one thing in the deck that may be cropped,
+    unlike ``_logo``'s artwork. The callers keep their ``NAVY`` slide background underneath as
+    the fallback: a media element whose file has gone missing draws *nothing*, silently, and an
+    unbacked slide renders black.
     """
+    el.image(slide, (0.0, 0.0, *CANVAS), BACKDROP.image)
     el.shape(slide, (0.0, 0.0, *CANVAS), fill=TINT_RGBA)
     if frame:
         el.shape(
