@@ -35,7 +35,7 @@ import json
 from pathlib import Path
 
 from worship_deck import store
-from worship_deck.propresenter import announce, build, bundle, styles
+from worship_deck.propresenter import announce, build, bundle, content, styles
 
 DEFAULT_OUT = Path.home() / "Documents/ProPresenter/Libraries/Default/Style Demo.pro"
 
@@ -61,6 +61,8 @@ CREED = [
     "본디오 빌라도에게 고난을 받으사",
     "십자가에 못박혀 죽으시고",
 ]
+# The 문답 form's shape: the leader's question, then the congregation's answer (#244).
+CREED_RESPONSIVE = content.APOSTLES_CREED_RESPONSIVE[0]
 
 
 # The keyed-label plates, one group each, both placements per group — arrow through them over a
@@ -165,7 +167,11 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
         "성가대 찬양",
         [("주 은혜라", styles.song_title("주 은혜라", "(노희석 편곡)"))],
     )
-    section("사도신경", [("사도신경", styles.liturgy("사도신경", CREED))])
+    section("사도신경", [
+        ("사도신경 문답 1", styles.liturgy_responsive("사도신경", *CREED_RESPONSIVE)),
+        ("blank", styles.blank_green()),  # the break between the two forms (#244)
+        ("사도신경 1", styles.liturgy("사도신경", CREED)),
+    ])
     section(
         "봉 헌",
         [("봉 헌", styles.section_divider("봉 헌", "[ 나 속죄함을 받은 후 ]  (찬 283장)"))]

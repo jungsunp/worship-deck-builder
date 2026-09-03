@@ -107,12 +107,7 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
     _t("absolution", fill_divider, pres, labels["absolution"])
     if data.confession_song:
         _t("confession", fill_confession, pres, data.confession_song)
-    # Both 사도신경 forms the deck carries — responsive first, then the traditional recitation;
-    # the operator skips whichever the service doesn't use (#178).
-    _t(
-        "apostles_creed", fill_liturgy, pres, labels["apostles_creed"],
-        content.APOSTLES_CREED_RESPONSIVE + content.APOSTLES_CREED,
-    )
+    _t("apostles_creed", fill_creed, pres)
     if data.choir_song:
         _t("choir", fill_choir, pres, data.choir_song)
     # 봉 헌: the divider carrying this week's hymn title + number, then the downloaded hymn
@@ -520,10 +515,41 @@ def fill_offering_hymn(
     _group(pres, label, cue_uuids)
 
 
+def fill_creed(pres: presentation_pb2.Presentation) -> None:
+    """사도신경 — the 문답 form, a green break, then the traditional recitation.
+
+    Both forms the deck carries ship and the operator uses whichever the service calls for (#178).
+    The green cue between them is the boundary, and it is load-bearing the same way
+    ``fill_sermon``'s is: ProPresenter's Clear blanks to **black**, which keys nothing and covers
+    the camera, so the operator needs a real green cue to park on while the unused form is
+    skipped past. It is the one place a full-screen section carries green — a break *between*
+    forms, not content — so the design doc's "full-screen sections stay opaque navy" rule holds
+    everywhere else (#244).
+
+    The two forms are also named apart in the grid (`사도신경 문답 1`–`3` / `사도신경 1`–`2`);
+    they used to run together as `사도신경 1`–`5`, which told the operator nothing about where
+    one form ended.
+    """
+    label = content.DIVIDER_LABELS["apostles_creed"]
+    cue_uuids = [add_cue(pres, new_slide("section_divider", label), label)]
+    for i, (question, answer) in enumerate(content.APOSTLES_CREED_RESPONSIVE, 1):
+        cue_uuids.append(
+            add_cue(
+                pres,
+                new_slide("liturgy_responsive", label, question, answer),
+                f"{label} 문답 {i}",
+            )
+        )
+    cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
+    for i, lines in enumerate(content.APOSTLES_CREED, 1):
+        cue_uuids.append(add_cue(pres, new_slide("liturgy", label, lines), f"{label} {i}"))
+    _group(pres, label, cue_uuids)
+
+
 def fill_liturgy(
     pres: presentation_pb2.Presentation, group_label: str, slides: list[list[str]]
 ) -> None:
-    """Fixed-wording liturgy (사도신경 creed, 주기도문 Lord's Prayer) from ``content.py``.
+    """Fixed-wording liturgy from ``content.py`` — 주기도문 (사도신경 has its own ``fill_creed``).
 
     ``slides`` is one list of lines per cue — the wording is split exactly where the church's
     own deck breaks it, because the congregation reads along.

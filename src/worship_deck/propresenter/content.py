@@ -86,31 +86,43 @@ CHOIR_LIGHT_NOTE = "성가대 시작 전 11번 불켜기 (Stage 1)"
 # ── Fixed liturgy ─────────────────────────────────────────────────────────────
 
 # 사도신경, responsive form (master slides 70–72) — leader asks, congregation answers.
+#
+# Shaped ``(question, answer_lines)`` rather than one flat list, because on screen the two are
+# not the same thing: the pastor reads the question and the congregation reads the answer, and
+# with everything set in one 72pt white block nobody can tell which lines are theirs (#244).
+# This adds no wording — the split is the one master.key already makes, where each slide opens
+# on the leader's line. ``styles.liturgy_responsive`` is what renders the distinction.
 APOSTLES_CREED_RESPONSIVE = [
-    [
+    (
         "여러분은 하나님을 믿으십니까?",
-        "예, 나는 전능하신 아버지 하나님,",
-        "천지의 창조주를 믿습니다.",
-        "나는 그의 유일하신 아들",
-        "우리 주 예수 그리스도를 믿습니다.",
-    ],
-    [
+        [
+            "예, 나는 전능하신 아버지 하나님,",
+            "천지의 창조주를 믿습니다.",
+            "나는 그의 유일하신 아들",
+            "우리 주 예수 그리스도를 믿습니다.",
+        ],
+    ),
+    (
         "예수님은 누구십니까?",
-        "그는 성령으로 잉태하사, 동정녀 마리아에게 나시고,",
-        "본디오 빌라도에게 고난을 받으사, 십자가에 못 박혀",
-        "죽으시고 장사한 지 사흘만에",
-        "죽은 자 가운데서 다시 살아나셨으며",
-        "하늘에 오르사 전능하신 하나님 우편에 앉아 계시다가",
-        "저리로서 산 자와 죽은 자를 심판하러 오십니다.",
-    ],
-    [
+        [
+            "그는 성령으로 잉태하사, 동정녀 마리아에게 나시고,",
+            "본디오 빌라도에게 고난을 받으사, 십자가에 못 박혀",
+            "죽으시고 장사한 지 사흘만에",
+            "죽은 자 가운데서 다시 살아나셨으며",
+            "하늘에 오르사 전능하신 하나님 우편에 앉아 계시다가",
+            "저리로서 산 자와 죽은 자를 심판하러 오십니다.",
+        ],
+    ),
+    (
         "여러분은 성령님을 믿으십니까?",
-        "예, 나는 성령을 믿사오며",
-        "거룩한 공회와 성도가 서로 교통하는 것과",
-        "죄를 사하여 주시는 것과",
-        "몸이 다시 사는 것과",
-        "영원히 사는 것을 믿사옵나이다. 아멘",
-    ],
+        [
+            "예, 나는 성령을 믿사오며",
+            "거룩한 공회와 성도가 서로 교통하는 것과",
+            "죄를 사하여 주시는 것과",
+            "몸이 다시 사는 것과",
+            "영원히 사는 것을 믿사옵나이다. 아멘",
+        ],
+    ),
 ]
 
 # 사도신경, traditional recitation (master slides 74–75). The deck carries BOTH forms and the
