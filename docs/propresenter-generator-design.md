@@ -67,7 +67,8 @@ New package modules under `src/worship_deck/propresenter/`:
   - Section fillers (append a group each, top-to-bottom): `fill_date`, `fill_worship_songs`,
     `fill_song` (shared by worship + confession), `fill_confession`, `fill_choir`,
     `fill_verse_slides`, `fill_sermon`, `fill_announcements`, `fill_offering_hymn`,
-    `fill_liturgy`, `fill_sermon_extra`, plus the static-parity ones #178 added —
+    `fill_creed`, `fill_liturgy` (주기도문), `fill_sermon_extra`, plus the static-parity ones
+    #178 added —
     `fill_divider` (heading-only sections), `fill_sending`, `fill_ending`.
   - Primitives (pure protobuf — the analog of Keynote's AppleScript primitives, minus
     macOS), **implemented in #172**: `new_presentation`, `new_slide`, `add_cue`, `add_group`,
@@ -154,7 +155,10 @@ and our own generated decks:
   worship/고백 lyric slides, the `song_banner` title, and the blank separator that trails every
   song — ProPresenter's Clear button blanks to black and loses the key, so the operator arrows
   onto a real green cue instead. Full-screen sections (verses, liturgy, announcements, dividers)
-  stay opaque navy: they replace the camera rather than overlay it.
+  stay opaque navy: they replace the camera rather than overlay it. The one exception is the
+  green cue **between** the two 사도신경 forms (#244) — a break the operator parks on while
+  skipping the form this service does not use, not content, and it needs the key for the same
+  reason every other blank does.
 - RTF: `\fsN` is the point size **doubled**, `\slleadingN` is leading in twips (points × 20),
   an in-slide line break is backslash + LF (not `\par`), the color table's index 0 is a
   reserved blank so the first usable color is `\cf1`, and `text.attributes` duplicates the
@@ -198,7 +202,21 @@ imports one file and clicks it top to bottom. Consequences worth knowing:
 
 - **Both 사도신경 forms ship** — the responsive call-and-response (70–72) *and* the traditional
   recitation (74–75). The deck carries both and the operator picks per service; guessing which
-  one is current would be a worse failure than an extra three cues.
+  one is current would be a worse failure than an extra three cues. `build.fill_creed` puts a
+  **green cue between them** and names them apart (`사도신경 문답 1`–`3` / `사도신경 1`–`2`), so
+  the boundary is visible in the grid and there is somewhere to park while skipping one (#244).
+- **The 문답 form separates the two voices.** The pastor reads the question and the congregation
+  reads the answer, but master.key sets both in one 72pt white block. `styles.liturgy_responsive`
+  puts the question in gold above a hairline and the answer in white below it — the colour split
+  plus `_rule`, the same idiom the dividers and 교회 소식 already use. No 인도자 / 다 같이 labels:
+  the wording rule below is absolute.
+- **The 문답 layout is pinned, not centred**, and its numbers were read back out of a `.pro` the
+  operator hand-restyled — the #178 round-3 method again. The question sits at a fixed offset
+  under the title, the bar takes `LITURGY_RULE_GAP` of air, and the answer hangs from the bar,
+  so a short answer leaves the foot of the slide open on purpose. The operator dragged all three
+  문답 slides and no two agreed (91/80, 46/46, 59/68 around the bar), so `styles.py` bakes the
+  mean of the three; it reproduces each anchor's average within ~1pt. The air compresses evenly
+  when the answer is long enough to need it, which is what keeps every 문답 slide at 72pt.
 - **The wording is dumped, never composed.** Several Korean translations of 사도신경 and 주기도문
   are in circulation and the congregation recites one from memory, so `content.py` holds text
   read off `master.key` with `dump_slide_texts`. Note that dump *dedupes repeated lines per
@@ -338,13 +356,16 @@ by background.
 
 | Keynote gives it | sections | generator |
 |---|---|---|
-| a navy plate only | 고백의 찬양, 사도신경, 성가대 찬양, 파송의 노래, 주기도문 | `section_divider` |
+| a navy plate only | 고백의 찬양, 사도신경¹, 성가대 찬양, 파송의 노래, 주기도문 | `section_divider` |
 | a plate **and** a keyed label | 예배의 부름, 봉 헌, 환영 및 인사, 교회 소식, 축도 | `section_divider` |
 | **a keyed label only** | 회개로의 초대, 죄사함의 선포, 합심 기도, 축도 전 찬양, 주기도문 전 찬양 | `keyed_label` |
 
 The last row is the whole change — `content.KEYED_SECTIONS` plus the two `content.SENDING_CUES`,
 which were full-screen `text_card`s before. 축도 keeps its plate: the issue guessed it was keyed,
 but the deck gives it both.
+
+¹ 사도신경's *slides* are navy plates like the rest of the row; it additionally carries one green
+cue as the break between its two forms (#244).
 
 - **Both placements ship**, top-left and bottom-centre, measured at `20,23 · 594×133` and
   `614,892 · 736×165`. Keynote carries one per service part; here they are not about service parts

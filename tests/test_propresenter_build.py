@@ -104,7 +104,9 @@ def test_text_element_is_flagged_and_mirrors_its_style():
     body = text_elements[0].element.text  # elements[0] is the topmost layer — the body copy
     assert body.attributes.font.name == styles.LITURGY_BODY.font
     assert body.attributes.font.size == styles.LITURGY_BODY.size
-    assert body.vertical_alignment == graphicsData_pb2.Graphics.Text.VERTICAL_ALIGNMENT_TOP
+    # Centred, not top-aligned: these blocks are as long as the church wrote them and range
+    # 436-873pt in the same box, so top-aligning made the text jump slide to slide (#244).
+    assert body.vertical_alignment == graphicsData_pb2.Graphics.Text.VERTICAL_ALIGNMENT_MIDDLE
 
 
 def test_every_element_carries_the_unit_square_path():
@@ -453,21 +455,66 @@ def test_verse_plate_carries_both_translations_and_the_citation_labels():
     assert "Behold, how good" in text
 
 
-def test_apostles_creed_emits_both_forms_the_deck_carries(tmp_path):
+def test_apostles_creed_emits_both_forms_split_by_a_green_break(tmp_path):
     """The template holds a responsive call-and-response (master 70-72) AND the traditional
-    recitation (74-75); the operator uses whichever the service calls for, so both ship."""
+    recitation (74-75); the operator uses whichever the service calls for, so both ship.
+
+    The green cue between them is the boundary the operator parks on while skipping the unused
+    form — Clear blanks to black, which keys nothing and covers the camera (#244). The cue names
+    are what say which form is which; before #244 all five ran together as 사도신경 1-5.
+    """
     pres = build.load(build.build(ServiceData(), str(tmp_path / "empty.pro"))[0])
     cues = _cues_of(pres, "사도신경")
 
-    assert len(cues) == 1 + 3 + 2  # divider + responsive + traditional
+    assert len(cues) == 1 + 3 + 1 + 2  # divider + 문답 + green break + recitation
+    assert [c.name for c in cues] == [
+        "사도신경", "사도신경 문답 1", "사도신경 문답 2", "사도신경 문답 3",
+        "", "사도신경 1", "사도신경 2",
+    ]
     assert rtf.escape("여러분은 하나님을 믿으십니까?") in _rtf_text(_slide_of_cue(cues[1]))
-    assert rtf.escape("전능하사 천지를 만드신") in _rtf_text(_slide_of_cue(cues[4]))
+    assert _green(_slide_of_cue(cues[4]))
+    assert rtf.escape("전능하사 천지를 만드신") in _rtf_text(_slide_of_cue(cues[5]))
+
+
+def test_the_responsive_creed_sets_the_question_apart_from_the_answer(tmp_path):
+    """The pastor reads the question and the congregation reads the answer, but master.key sets
+    both in one 72pt white block. Gold + a hairline is how the deck marks that break (#244)."""
+    question, answer = content.APOSTLES_CREED_RESPONSIVE[0]
+    slide = styles.liturgy_responsive("사도신경", question, answer)
+    def _rgb(element):
+        fill = element.text.attributes.text_solid_fill
+        return tuple(round(c * 255) for c in (fill.red, fill.green, fill.blue))
+
+    texts = [e.element for e in slide.elements if e.element.HasField("text")]
+    body = [t for t in texts if t.text.attributes.font.size >= styles.LITURGY_BODY.size]
+    gold = [t for t in body if _rgb(t) == styles.ACCENT]
+    white = [t for t in body if _rgb(t) == styles.INK]
+    assert rtf.escape(question) in gold[0].text.rtf_data.decode()
+    assert rtf.escape(answer[0]) in white[0].text.rtf_data.decode()
+    # Each half is drawn in a box sized to it and stacked, so both anchor to their own top —
+    # it is the composite that gets centred, not the halves.
+    top = graphicsData_pb2.Graphics.Text.VERTICAL_ALIGNMENT_TOP
+    assert gold[0].text.vertical_alignment == white[0].text.vertical_alignment == top
+    # The hairline between them, at the deck's own rule width.
+    assert any(
+        round(e.element.bounds.size.width) == round(styles.LITURGY_RULE_W)
+        for e in slide.elements
+        if e.element.HasField("path")
+    )
 
 
 def test_liturgy_wording_is_sourced_not_invented():
     """These were dumped from the church's own master.key — several Korean translations of each
-    are in circulation and the congregation recites one of them from memory."""
+    are in circulation and the congregation recites one of them from memory. #244 split the
+    responsive form into (question, answer) but composed no new wording: each question is still
+    the line master.key opens that slide on."""
     assert len(content.APOSTLES_CREED_RESPONSIVE) == 3
+    assert [q for q, _ in content.APOSTLES_CREED_RESPONSIVE] == [
+        "여러분은 하나님을 믿으십니까?",
+        "예수님은 누구십니까?",
+        "여러분은 성령님을 믿으십니까?",
+    ]
+    assert content.APOSTLES_CREED_RESPONSIVE[-1][1][-1] == "영원히 사는 것을 믿사옵나이다. 아멘"
     assert len(content.APOSTLES_CREED) == 2
     assert content.LORDS_PRAYER[0][0] == "하늘에 계신 우리 아버지여"
     assert content.LORDS_PRAYER[-1][-1] == "아멘"
@@ -763,6 +810,9 @@ def test_body_type_is_sized_for_the_congregation():
     assert styles.ANNOUNCE_TITLE.size >= 72     # master slides 123–131 are one 80pt box
     assert styles.ANNOUNCE_DETAIL.size >= 60
     assert styles.LITURGY_BODY.size >= 72   # master slide 81, 사도신경
+    # The pastor reads the 문답 question aloud, but the congregation still follows it on screen,
+    # so it is held to the body's floor rather than set as a smaller label (#244).
+    assert styles.LITURGY_QUESTION.size >= 72
     assert styles.SERVICE_HEADING.size >= 130   # master slide 1, N부 예배를 시작합니다
 
 
@@ -893,10 +943,24 @@ def test_long_liturgy_and_cards_are_fitted_to_their_boxes():
     """The fixed-wording slides have no chunker behind them — 사도신경 and the 환영 card are as
     long as the church wrote them — so every one must be measured against the box it lands in."""
     _, _, w, h = styles.CONTENT_RECT
+    body_h = h - styles.LITURGY_HEADER_H
 
-    for lines in content.APOSTLES_CREED_RESPONSIVE + content.APOSTLES_CREED + content.LORDS_PRAYER:
-        runs = styles._scaled([("\n".join(lines), styles.LITURGY_BODY)], w, h - 110.0)
-        assert styles._wrapped_height(runs, w, 1.0) <= h - 110.0
+    for lines in content.APOSTLES_CREED + content.LORDS_PRAYER:
+        runs = styles._scaled([("\n".join(lines), styles.LITURGY_BODY)], w, body_h)
+        assert styles._wrapped_height(runs, w, 1.0) <= body_h
+
+    # A 문답 slide spends its box on the pinned question, the hairline's air and the answer, and
+    # the air is what gives way when the answer is long — so every one must still land at the
+    # nominal 72pt, never shrunk (#244 review; the operator's own slides compress to 46pt of air).
+    for question, answer in content.APOSTLES_CREED_RESPONSIVE:
+        slide = styles.liturgy_responsive("사도신경", question, answer)
+        boxes = [
+            e.element for e in slide.elements
+            if e.element.HasField("text") and e.element.text.attributes.font.size >= 72
+        ]
+        assert len(boxes) == 2  # question + answer, both at full size
+        for box in boxes:
+            assert box.bounds.origin.y + box.bounds.size.height <= 34.0 + h
 
     for card in (content.MOTTO, content.WELCOME_CARD, content.CLOSING_NOTE):
         # A card line may be a (gold, white) pair that splits mid-line; either way it is one line.

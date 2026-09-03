@@ -45,7 +45,8 @@ STYLE_KEYS = (
     "announcement",             # 교회 소식 notice (title + 날짜/장소/문의 라벨 레일)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
     "keyed_label",              # section heading keyed over the live camera (#234)
-    "liturgy",                  # fixed-wording full-screen (사도신경 / 주기도문)
+    "liturgy",                  # fixed-wording full-screen (사도신경 recitation / 주기도문)
+    "liturgy_responsive",       # 사도신경 문답 — gold question, rule, white answer (#244)
     "service_intro",            # N부 예배를 시작합니다 + sermon title / ref / date
     "service_outro",            # N부 예배를 마칩니다 + date
     "text_card",                # centered fixed-wording card (표어 / 환영 / 예배 준비 / 폐회)
@@ -230,6 +231,10 @@ DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
 DIVIDER_SUB = Style(FONT_BOLD, 76, ACCENT, bold=True, tracking=2.0)
 LITURGY_TITLE = Style(FONT_BOLD, 48, ACCENT, bold=True, tracking=12.0)
 LITURGY_BODY = Style(FONT_BOLD, 72, bold=True, line_spacing=22.0)
+# The leader's line in the responsive 사도신경 (#244). Gold, but the *same size* as the answer:
+# the pastor reads it aloud and the congregation still follows it on screen, so it is held to
+# the same legibility floor as the body — it is a different voice, not smaller print.
+LITURGY_QUESTION = replace(LITURGY_BODY, rgb=ACCENT)
 SERVICE_HEADING = Style(FONT_BOLD, 138, bold=True, line_spacing=10.0)
 SERVICE_NOTICE = Style(FONT_REGULAR, 37, MUTED, line_spacing=8.0)
 SERVICE_DATE = Style(FONT_BOLD, 79, bold=True, tracking=2.0)
@@ -239,6 +244,28 @@ CLOSING_BLESSING = Style(FONT_REGULAR, 75)
 NOTE = Style(FONT_REGULAR, 18, BLACK, align="left")  # per-slide notes pane, not on the canvas
 CARD_BODY = Style(FONT_BOLD, 80, bold=True, line_spacing=26.0)
 CARD_ACCENT = Style(FONT_BOLD, 80, ACCENT, bold=True, line_spacing=26.0)
+
+# ── Liturgy geometry (#244) ───────────────────────────────────────────────────
+# The 사도신경 / 주기도문 header band: the title's own line plus the air under it. Derived rather
+# than guessed — it used to be a bare 110.0, which cost 22pt the body could not spare on the
+# longest recitation slide. The gap is `VERSE_KO_LABEL_GAP`, the air the operator opened under
+# the 개역한글 label restyling a draft by hand (#178 review, round 3): the same relationship, a
+# label and the body it belongs to.
+LITURGY_TITLE_GAP = VERSE_KO_LABEL_GAP
+LITURGY_HEADER_H = layout.line_height(LITURGY_TITLE.size) + LITURGY_TITLE_GAP
+# The 문답 slide's three anchors, all read back off the operator's own hand-restyle of
+# `Creed 244 v1.pro` (#244 review). They dragged all three 문답 slides, and no two agreed —
+# the air around the bar came out 91/80, 46/46 and 59/68 — so what is baked here is the mean
+# of the three, which lands within ~1pt of each anchor's average: question top 153.0 (theirs
+# 153.1), bar 326.5 (327.5), answer top 393.8 (395.1). The shape the drags agree on is what
+# matters: the question is **pinned** under the title rather than floating in a centred
+# composite, the bar gets far more air than the 24pt it shipped with, and the answer hangs
+# from the bar — a short answer leaves the foot of the slide open, which is how their 문답 1
+# reads and is deliberate, not a hole to fill.
+LITURGY_QUESTION_GAP = 31.0
+LITURGY_RULE_W = 360.0
+LITURGY_RULE_H = 3.0
+LITURGY_RULE_GAP = 65.0
 
 
 # ── Slide builders ────────────────────────────────────────────────────────────
@@ -352,15 +379,17 @@ def _fit_scale(runs: list[rtf.Run], width: float, height: float, floor: float = 
     return floor
 
 
+def _at(text: str, style: Style, scale: float) -> rtf.Run:
+    """One run at ``scale`` — size and leading shrink together, so the block keeps its rhythm."""
+    if scale == 1.0:
+        return text, style
+    return text, replace(style, size=style.size * scale, line_spacing=style.line_spacing * scale)
+
+
 def _scaled(runs: list[rtf.Run], width: float, height: float) -> list[rtf.Run]:
     """``runs`` with every style shrunk by ``_fit_scale`` (a no-op when they already fit)."""
     scale = _fit_scale(runs, width, height)
-    if scale == 1.0:
-        return runs
-    return [
-        (text, replace(style, size=style.size * scale, line_spacing=style.line_spacing * scale))
-        for text, style in runs
-    ]
+    return [_at(text, style, scale) for text, style in runs]
 
 
 def _rule(
@@ -751,16 +780,73 @@ def keyed_label(heading: str, placement: str = "top", variant: str = "M1") -> sl
     return _front_to_back(slide)
 
 
-def liturgy(title: str, lines: list[str]) -> slide_pb2.Slide:
-    """Fixed-wording full-screen liturgy (사도신경 / 주기도문) — gold spaced title over the body."""
-    slide = _slide(background=NAVY)
+def _liturgy_body_rect(slide: slide_pb2.Slide, title: str) -> tuple[float, float, float, float]:
+    """Draw the liturgy ground and its gold spaced title; return the rect left for the body."""
     x, y, w, h = _framed(slide)
-    el.text(slide, (x, y, w, 60.0), rtf.plain(title, LITURGY_TITLE), LITURGY_TITLE)
-    body: list[rtf.Run] = [("\n".join(lines), LITURGY_BODY)]
     el.text(
         slide,
-        (x, y + 110.0, w, h - 110.0),
-        rtf.document(_scaled(body, w, h - 110.0)),
+        (x, y, w, layout.line_height(LITURGY_TITLE.size)),
+        rtf.plain(title, LITURGY_TITLE),
+        LITURGY_TITLE,
+    )
+    return x, y + LITURGY_HEADER_H, w, h - LITURGY_HEADER_H
+
+
+def liturgy(title: str, lines: list[str]) -> slide_pb2.Slide:
+    """Fixed-wording full-screen liturgy (사도신경 recitation / 주기도문) — title over the body.
+
+    The body is **centred** in what the header leaves, not top-aligned. These blocks are as long
+    as the church wrote them and nothing re-chunks them, so their heights run from 436pt (주기도문
+    slide 1) to 873pt (사도신경 slide 1) in the same box: top-aligned, the text hugged the top of
+    one slide and ran edge to edge on the next, and the block visibly jumped as the operator
+    advanced (#244).
+    """
+    slide = _slide(background=NAVY)
+    x, y, w, h = _liturgy_body_rect(slide, title)
+    body: list[rtf.Run] = [("\n".join(lines), LITURGY_BODY)]
+    el.text(slide, (x, y, w, h), rtf.document(_scaled(body, w, h)), LITURGY_BODY)
+    return _front_to_back(slide)
+
+
+def liturgy_responsive(title: str, question: str, answer: list[str]) -> slide_pb2.Slide:
+    """The 문답 form of 사도신경 — the leader's question in gold over a hairline, the
+    congregation's answer in white below it (#244).
+
+    The pastor reads the question and the congregation reads the answer, but master.key sets both
+    in one 72pt white block, which leaves nobody able to see which lines are theirs. Colour plus a
+    rule is the deck's own way of marking that kind of break (``_rule`` already separates the
+    divider heading from its subtitle and the 교회 소식 eyebrow from its title); no 인도자 / 다 같이
+    labels are added, because ``content.py``'s wording is dumped from the church's deck, never
+    composed.
+
+    The question is **pinned** below the title and the answer hangs from the bar, rather than the
+    three being centred as one composite — see ``LITURGY_QUESTION_GAP``. The air around the bar is
+    ``LITURGY_RULE_GAP`` wherever the answer leaves room for it and compresses evenly where it
+    does not, which is what the operator's own three slides do (91/80 on the shortest answer,
+    46/46 on the longest). Only if compressing to nothing still will not fit does ``_scaled``
+    shrink the type — with the church's wording it never has to, so every 문답 slide ships at the
+    same 72pt as the recitation ones.
+    """
+    slide = _slide(background=NAVY)
+    x, y, w, h = _liturgy_body_rect(slide, title)
+    body = "\n".join(answer)
+    q_run: rtf.Run = (question, LITURGY_QUESTION)
+    q_y = y + LITURGY_QUESTION_GAP
+    q_h = _wrapped_height([q_run], w, 1.0)
+    # The gap that lands the answer exactly on the foot of the content rect, capped at the
+    # nominal one — so a roomy slide keeps the operator's air and a full one gives it back.
+    below = (y + h) - (q_y + q_h + LITURGY_RULE_H)
+    fitted = (below - _wrapped_height([(body, LITURGY_BODY)], w, 1.0)) / 2
+    gap = min(LITURGY_RULE_GAP, max(0.0, fitted))
+    rule_y = q_y + q_h + gap
+    a_y = rule_y + LITURGY_RULE_H + gap
+    a_h = (y + h) - a_y
+    el.text(slide, (x, q_y, w, q_h), rtf.document([q_run]), LITURGY_QUESTION, valign="top")
+    _rule(slide, rule_y, width=LITURGY_RULE_W, height=LITURGY_RULE_H)
+    el.text(
+        slide,
+        (x, a_y, w, a_h),
+        rtf.document(_scaled([(body, LITURGY_BODY)], w, a_h)),
         LITURGY_BODY,
         valign="top",
     )
@@ -888,6 +974,7 @@ BUILDERS = {
     "section_divider": section_divider,
     "keyed_label": keyed_label,
     "liturgy": liturgy,
+    "liturgy_responsive": liturgy_responsive,
     "service_intro": service_intro,
     "service_outro": service_outro,
     "text_card": text_card,
