@@ -161,6 +161,8 @@ def test_the_opening_and_closing_plates_drop_the_frame_outline():
     assert not _has_frame(styles.service_intro("1부", "제목", "삼상 14:1-23", "2026년 8월 30일"))
     assert not _has_frame(styles.service_outro("1부", "2026년 8월 30일"))
     assert not _has_frame(styles.text_card(["노스필드 장로교회는"]))
+    assert not _has_frame(styles.closing_note(["잠시 기도하시고"], "주 안에서 사랑합니다"))
+    assert not _has_frame(styles.logo_plate())
 
     assert _has_frame(styles.section_divider("봉 헌"))
     assert _has_frame(styles.liturgy("사도신경", ["나는"]))
@@ -319,8 +321,20 @@ def test_fill_worship_songs_gives_each_medley_song_its_own_group():
         {"title": "둘째", "lines": ["나"]},
     ])
 
-    assert [g.group.name for g in pres.cue_groups] == ["첫째", "둘째"]
+    assert [g.group.name for g in pres.cue_groups] == ["찬양 - 첫째", "찬양 - 둘째"]
     assert len(pres.cues) == 6  # (banner + lyric + blank) x 2
+
+
+def test_medley_group_names_mark_the_section_while_cue_names_stay_bare():
+    """Every other bar in the deck is a section name, so three bare song titles in a row read as
+    three unrelated sections (#249). The prefix is for the group list only — the banner cue keeps
+    the title on its own, which is what the congregation sees."""
+    pres = build.new_presentation("demo")
+    build.fill_worship_songs(pres, [{"title": "왕이신 나의 하나님", "lines": ["가"]}])
+
+    assert pres.cue_groups[0].group.name == "찬양 - 왕이신 나의 하나님"
+    assert pres.cues[0].name == "왕이신 나의 하나님"
+    assert rtf.escape("왕이신 나의 하나님") in _rtf_text(_slide_of(pres, 0))
 
 
 def test_fill_confession_is_one_group_headed_by_its_divider():
@@ -386,9 +400,9 @@ def test_build_walks_the_whole_service_in_liturgy_order(tmp_path):
     pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
 
     assert _group_names(pres) == [
-        "예배 시작", "다시 한 번", "예배의 부름", "회개로의 초대", "죄사함의 선포",
+        "예배 시작", "찬양 - 다시 한 번", "예배의 부름",
         "고백의 찬양", "사도신경", "성가대 찬양", "봉 헌",
-        "환영 및 인사", "교회 소식", "합심 기도", "말씀", "파송의 노래", "축복의 통로",
+        "환영 및 인사", "교회 소식", "합심 기도", "말씀", "파송의 노래",
         "축도", "주기도문", "예배 마침",
     ]
 
@@ -406,8 +420,8 @@ def test_empty_service_data_still_builds_every_fixed_wording_section(tmp_path):
     pres = build.load(build.build(ServiceData(), str(tmp_path / "empty.pro"))[0])
 
     assert _group_names(pres) == [
-        "예배 시작", "회개로의 초대", "죄사함의 선포", "사도신경", "봉 헌",
-        "환영 및 인사", "합심 기도", "파송의 노래", "축복의 통로", "축도", "주기도문", "예배 마침",
+        "예배 시작", "예배의 부름", "사도신경", "봉 헌",
+        "환영 및 인사", "합심 기도", "파송의 노래", "축도", "주기도문", "예배 마침",
     ]
 
 
@@ -435,19 +449,19 @@ def test_verse_slides_pack_a_long_passage_across_cues():
     ]
 
     one = build.new_presentation("x")
-    build.fill_verse_slides(one, "예배의 부름", "시 133:1-3", [Verse(**v) for v in short])
+    build.fill_call_to_worship(one, "시 133:1-3", [Verse(**v) for v in short])
     many = build.new_presentation("x")
-    build.fill_verse_slides(many, "말씀", "눅 22:14-24", [Verse(**v) for v in long])
+    build.fill_call_to_worship(many, "눅 22:14-24", [Verse(**v) for v in long])
 
-    assert len(one.cues) == 2  # divider + one plate
-    assert len(many.cues) > 2 + 1
+    keyed = 4  # 회개로의 초대 + 죄사함의 선포, both placements each
+    assert len(one.cues) == 2 + keyed  # divider + one plate
+    assert len(many.cues) > 3 + keyed
 
 
 def test_verse_plate_carries_both_translations_and_the_citation_labels():
     pres = build.new_presentation("x")
-    build.fill_verse_slides(
-        pres, "예배의 부름", "시 133:1-3",
-        [Verse(**_verse(1, "형제가 연합하여 동거함이", "Behold, how good"))],
+    build.fill_call_to_worship(
+        pres, "시 133:1-3", [Verse(**_verse(1, "형제가 연합하여 동거함이", "Behold, how good"))]
     )
     text = _rtf_text(_slide_of(pres, 1))
 
@@ -592,22 +606,68 @@ def test_keyed_art_ships_every_plate_it_names():
 
 def test_only_the_camera_annotating_sections_get_a_keyed_label(tmp_path):
     """The sections Keynote gives a keyed label *and no navy plate* — measured off the approved
-    deck. Ones it gives both (봉 헌, 교회 소식, 예배의 부름, 축도) keep the plate here (#234)."""
+    deck. Ones it gives both (봉 헌, 교회 소식, 예배의 부름, 축도) keep the plate here (#234).
+
+    Keyed by **cue**, not by group: 회개로의 초대 and 죄사함의 선포 are no longer sections of their
+    own, they are cues inside 예배의 부름 (#249).
+    """
     pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+    by_name = {c.name: c for c in pres.cues}
 
     for name in ("회개로의 초대", "죄사함의 선포", "합심 기도"):
-        cues = _cues_of(pres, name)
-        assert len(cues) == 2, name  # both placements, operator picks by camera framing
+        cues = [by_name[f"{name} ({p})"] for p in ("위", "아래")]
         slides = [_slide_of_cue(c) for c in cues]
         assert all(_green(s) and "m1-angled-bar" in _images_of(s) for s in slides)
-        assert {s.elements[0].element.bounds.origin.y for s in slides} == {
+        assert [s.elements[0].element.bounds.origin.y for s in slides] == [
             styles.KEYED_LABEL_PLACEMENTS[p][0][1] for p in ("top", "bottom")
-        }
+        ]
 
     for name in ("봉 헌", "교회 소식", "예배의 부름", "축도"):
         plate = _slide_of_cue(_cues_of(pres, name)[0])
         assert not _green(plate), name
         assert _has_frame(plate), name
+
+
+def test_call_to_worship_carries_its_two_keyed_headings_in_one_group(tmp_path):
+    """회개로의 초대 and 죄사함의 선포 have no content of their own and are moments inside the call
+    to worship, so all three share one bar — the #178 round-3 call, applied to the sections it
+    missed (#249). The cue names are unchanged, which is what the operator searches on."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+    names = [c.name for c in _cues_of(pres, "예배의 부름")]
+
+    assert "회개로의 초대" not in _group_names(pres)
+    assert "죄사함의 선포" not in _group_names(pres)
+    assert names[0] == "예배의 부름"
+    assert names[-4:] == [
+        "회개로의 초대 (위)", "회개로의 초대 (아래)", "죄사함의 선포 (위)", "죄사함의 선포 (아래)",
+    ]
+
+
+def test_dividers_spell_the_book_out_while_the_verse_plates_abbreviate(tmp_path):
+    """The bulletin writes 삼상; the verse plates keep that in their small 개역한글/ESV headings,
+    where it is read at a glance. A divider is a whole screen of type announcing the reading, so
+    it takes the full name — the operator's call reviewing the first deck (#250)."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+    sermon = _cues_of(pres, "말씀")
+
+    # The 말씀 reference plate and the sermon-title plate under it.
+    assert rtf.escape("누가복음 22:14-24") in _rtf_text(_slide_of_cue(sermon[0]))
+    title = next(c for c in sermon if c.name == "이를 행하여 나를 기념하라")
+    assert rtf.escape("누가복음 22:14-24") in _rtf_text(_slide_of_cue(title))
+    # ...and the 예배의 부름 divider, whose subtitle is the week's call-to-worship reference.
+    assert rtf.escape("시편 133:1-3") in _rtf_text(_slide_of_cue(_cues_of(pres, "예배의 부름")[0]))
+
+    # The verse plates in between keep the bulletin's abbreviation.
+    verses = _rtf_text(_slide_of_cue(sermon[1]))
+    assert rtf.escape("[눅 22:14-24, 개역한글]") in verses
+    assert rtf.escape("누가복음") not in verses
+
+    # And the reference plate's English subtitle is bare, like every other divider subtitle —
+    # the brackets belong to the labels that sit inside a body (#178 round 3, extended in #250).
+    reference_plate = _rtf_text(_slide_of_cue(sermon[0]))
+    assert "Luke 22:14-24, ESV" in reference_plate
+    assert "[Luke 22:14-24, ESV]" not in reference_plate
+    assert "[Luke 22:14-24, ESV]" in verses
 
 
 def test_the_opening_section_ends_on_a_green_park(tmp_path):
@@ -680,15 +740,18 @@ def test_sermon_extra_refs_each_get_their_own_group(tmp_path):
 
 
 def test_sending_song_is_fixed_content_sung_before_both_closing_elements(tmp_path):
+    """One bar for the whole section, like 고백의 찬양: the plate, the two cue cards as keyed
+    labels in both placements (#234), then 축복의 통로 itself — banner, its four lines, and the
+    trailing green. The song opened a second group of its own until #249."""
     pres = build.load(build.build(ServiceData(), str(tmp_path / "empty.pro"))[0])
     cues = _cues_of(pres, "파송의 노래")
     cards = [_rtf_text(_slide_of_cue(c)) for c in cues]
 
-    # The plate, then each cue card as a keyed label in both placements (#234).
-    assert len(cues) == 5
+    assert "축복의 통로" not in _group_names(pres)
     assert all(rtf.escape("축도 전 찬양") in c for c in cards[1:3])
     assert all(rtf.escape("주기도문 전 찬양") in c for c in cards[3:5])
-    assert _group_names(pres).count("축복의 통로") == 1
+    assert rtf.escape("축복의 통로") in cards[5]  # the banner, keyed over the live shot
+    assert _green(_slide_of_cue(cues[-1])) and not _slide_of_cue(cues[-1]).elements
 
 
 def test_generated_deck_writes_no_arrangement_and_no_web_element(tmp_path):
@@ -987,6 +1050,99 @@ def test_opening_group_carries_the_logo_and_the_two_pre_service_photos(tmp_path)
     assert Path(styles.LOGO).exists()
 
 
+def test_the_deck_ends_on_the_logo_plate_and_the_church_photo(tmp_path):
+    """Keynote closes on a centred logo plate and the church photo (master 170-171) and the
+    operator holds on whichever suits the room; the generator stopped at 폐회 안내 until #249.
+    The photo is the same asset the deck opens on — master slide 4 and slide 171 are one image."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+    cues = _cues_of(pres, "예배 마침")
+
+    assert [c.name for c in cues[-3:]] == ["폐회 안내", "로고", "교회 사진"]
+    logo, photo = (_slide_of_cue(c) for c in cues[-2:])
+    assert _images_of(logo) == ["npc-logo", Path(styles.BACKDROP.image).stem]
+    assert logo.elements[0].element.bounds.origin.x == styles.LOGO_CENTER[0]
+    assert _images_of(photo) == ["pre-service-church"]
+
+
+def test_the_closing_card_sets_its_farewell_apart_from_its_instruction(tmp_path):
+    """폐회 안내 is two different things: what the congregation is asked to do, and a courtesy.
+    A flat text_card set all three lines at one 80pt, so nothing on screen said which was which
+    — Keynote's own slide already sets the farewell smaller (#249)."""
+    pres = build.load(build.build(_service_data(), str(tmp_path / "week.pro"))[0])
+    card = _slide_of_cue(next(c for c in _cues_of(pres, "예배 마침") if c.name == "폐회 안내"))
+    text = _rtf_text(card)
+
+    assert f"\\fs{round(styles.CARD_BODY.size * 2)} " in text
+    assert f"\\fs{round(styles.CARD_FAREWELL.size * 2)} " in text
+    assert styles.CARD_FAREWELL.size < styles.CARD_BODY.size
+    assert rtf.escape(content.CLOSING_FAREWELL) in text
+    # ...separated by the gold rule, between the two text blocks.
+    rules = [e.element for e in card.elements if not e.element.HasField("text")]
+    bodies = sorted(
+        (e.element.bounds.origin.y, e.element.bounds.size.height)
+        for e in card.elements if e.element.HasField("text")
+    )
+    rule_y = next(r.bounds.origin.y for r in rules if r.bounds.size.height == styles.LITURGY_RULE_H)
+    assert bodies[0][0] + bodies[0][1] < rule_y < bodies[1][0]
+
+
+def _heading_of(slide):
+    """The heading text box of a divider / sermon-title plate — the topmost one."""
+    return min(
+        (e.element for e in slide.elements if e.element.HasField("text")),
+        key=lambda e: e.bounds.origin.y,
+    )
+
+
+def test_every_fixed_section_heading_is_set_at_full_size_and_a_long_one_is_scaled_not_clipped():
+    """The sermon title wore `song_title` — the full-screen *song* plate 성가대 moved off in #178
+    — until #249 gave it the deck's own heading idiom. Section headings are four glyphs and
+    sermon titles are sentences, so the heading is fitted rather than set at a fixed size."""
+    full = f"\\fs{round(styles.DIVIDER_KO.size * 2)} "
+    # Every fixed heading fits on one line at full size, so the fitting never touches them.
+    for label in content.DIVIDER_LABELS.values():
+        assert full in _heading_of(styles.section_divider(label)).text.rtf_data.decode(), label
+
+    long_title = "사울은 무슨 생각으로 그 자리에 서 있었을까요? 오늘 우리는 또 무슨 생각으로 여기 앉아 있을까요?"
+    heading = _heading_of(styles.sermon_title(long_title, "사무엘상 14:23-52"))
+    assert styles._wrapped_height(  # the precondition: it genuinely does not fit at full size
+        [(long_title, styles.SERMON_TITLE_KO)], heading.bounds.size.width, 1.0
+    ) > heading.bounds.size.height
+    at_size = f"\\fs{round(styles.SERMON_TITLE_KO.size * 2)} "
+    assert at_size not in heading.text.rtf_data.decode()  # shrunk to fit, not clipped
+
+
+def test_the_three_heading_plates_step_down_in_size_and_up_in_air():
+    """One plate, three scales (#249/#250). 190pt is sized for a four-glyph section name; a
+    scripture reference at that size runs the box edge to edge and the longest book names wrap,
+    and a sermon title is a whole sentence. The operator reset both by hand, and each smaller
+    heading came back with *more* air under it, not the same 40pt — that is the pattern."""
+    plates = [
+        (styles.section_divider("말씀", "사무엘상 14:23-52"), styles.DIVIDER_KO),
+        (styles.verse_divider("사무엘상 14:23-52", "1 Samuel 14:23-52, ESV"),
+         styles.VERSE_DIVIDER_KO),
+        (styles.sermon_title("사울은 무슨 생각일까요?", "사무엘상 14:23-52"), styles.SERMON_TITLE_KO),
+    ]
+
+    for slide, style in plates:  # each is set at its own size, none of them scaled down
+        assert f"\\fs{round(style.size * 2)} " in _heading_of(slide).text.rtf_data.decode()
+
+    # The same objects in the same order — only the scale and the spacing differ.
+    shapes = {tuple(e.element.HasField("text") for e in slide.elements) for slide, _ in plates}
+    assert len(shapes) == 1
+
+    def _size_and_gap(slide, style):
+        heading = _heading_of(slide)
+        rule_y = min(e.element.bounds.origin.y for e in slide.elements
+                     if not e.element.HasField("text")
+                     and e.element.bounds.size.height == 3.0)
+        return style.size, rule_y - (heading.bounds.origin.y + heading.bounds.size.height)
+
+    ladder = [_size_and_gap(slide, style) for slide, style in plates]
+    assert [size for size, _ in ladder] == sorted((s for s, _ in ladder), reverse=True)
+    assert [gap for _, gap in ladder] == sorted(gap for _, gap in ladder)
+
+
 def test_opening_plate_stacks_date_heading_title_notice_like_the_keynote_deck():
     """Same reading order and rhythm as master.key slide 1 — the plate the operator compares
     side by side with the deck they are replacing."""
@@ -1060,9 +1216,9 @@ def test_a_packed_passage_ships_wholly_at_the_reference_size():
     ]
 
     pres = build.new_presentation("x")
-    build.fill_verse_slides(pres, "말씀", "눅 22:14-24", verses)
+    build._verse_cues(pres, "눅 22:14-24", verses)  # the packer alone, no divider or keyed cues
 
-    for cue in pres.cues[1:]:  # cue 0 is the section divider
+    for cue in pres.cues:
         text = _rtf_text(cue.actions[0].slide.presentation.base_slide)
         assert f"\\fs{round(styles.VERSE_KO.size * 2)} " in text
         assert f"\\fs{round(styles.VERSE_EN.size * 2)} " in text

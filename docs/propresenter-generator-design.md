@@ -66,7 +66,7 @@ New package modules under `src/worship_deck/propresenter/`:
     order calling `fill_*` → `serialize`.
   - Section fillers (append a group each, top-to-bottom): `fill_date`, `fill_worship_songs`,
     `fill_song` (shared by worship + confession), `fill_confession`, `fill_choir`,
-    `fill_verse_slides`, `fill_sermon`, `fill_announcements`, `fill_offering_hymn`,
+    `fill_call_to_worship`, `fill_sermon`, `fill_announcements`, `fill_offering_hymn`,
     `fill_creed`, `fill_liturgy` (주기도문), `fill_sermon_extra`, plus the static-parity ones
     #178 added —
     `fill_divider` (heading-only sections), `fill_sending`, `fill_ending`.
@@ -186,7 +186,7 @@ Ground-up generation has no template to ride on, so all of it becomes authored c
 
 | Filled by code today | Rode along free inside `master.key` |
 |---|---|
-| intro/ending date (1–2, 167–168) | 교회 표어 card (3, 170) · 예배 준비 안내 (5) |
+| intro/ending date (1–2, 167–168) | 교회 표어 card (3) · 예배 준비 안내 (5) · 로고 판 + 교회 사진 (170–171) |
 | 찬양 medley (6–46) | 예배의 부름 banner repeats (49–50) |
 | 예배의 부름 ref + verses (47–48) | **회개로의 초대** (51–52) · **죄사함의 선포** (54–55) |
 | 고백의 찬양 (57–67) | **사도신경 full text** (69–75) · 성가대 조명 note (76) |
@@ -222,7 +222,15 @@ imports one file and clicks it top to bottom. Consequences worth knowing:
   slide* — re-source from the deck, not from `tests/fixtures/master_slide_texts.json`.
 - **축복의 통로 is fixed content, not a `ServiceData` song.** The same song closes every service,
   sung twice (before 축도, before 주기도문), so it lives in `content.SENDING_SONG` and feeds
-  `fill_song` unchanged.
+  `_song_cues` unchanged — inside the 파송의 노래 group, not one of its own (#249).
+- **The deck ends where Keynote's does.** Master 170 is a centred **logo plate** and 171 the
+  **church photo**, and `fill_ending` emits both after 폐회 안내 so the operator can hold on either
+  once the service is over (#249). An earlier reading of this deck called 170 "a 교회 표어 card"
+  and then "the stale leftover intro slide": `dump_slide_texts` reports `2023년 9월 24일 / 2부
+  예배를 시작합니다` for it, but that text sits **off-canvas** — which is also why Keynote's
+  `set_date_slides` never rewrites it and the live test still counts exactly four date slides.
+  What renders is the logo. The photo is byte-identical to master slide 4, so the generator
+  reuses `PRE_SERVICE_IMAGES[0]` rather than shipping a second copy.
 - **Repeated heading slides collapse to one cue.** The template repeats 예배의 부름 / 회개로의 초대 /
   죄사함의 선포 / 환영 및 인사 / 합심 기도 two or three times (a slide per service part); in
   ProPresenter the operator holds on a cue instead of clicking past duplicates.
@@ -343,6 +351,46 @@ What changed:
   section to the operator, and two bars for one section is two things to find under pressure. The
   medley stays the exception — there each song genuinely is its own section.
 
+  A second pass over the first two weekly decks found this rule broken in two more places, and
+  #249 applied it there too: **회개로의 초대 and 죄사함의 선포 belong to 예배의 부름**, and
+  **축복의 통로 belongs to 파송의 노래**. Neither has content of its own; both are moments inside
+  the section above them, and the cue names still carry the headings, so nothing is lost from the
+  grid. Twenty bars became seventeen.
+
+- **One heading plate, three scales** (`_heading_plate`, #249/#250). #249 gave the sermon title
+  the divider look — the operator reads the deck by its gold-ruled headings, and the sermon title
+  is one of them — and #250 the 말씀 reference plate. The operator then reset both cues by hand,
+  and the numbers below are read straight off those saved slides.
+
+  | plate | heading | bottoms out at | air above the rule |
+  |---|---|---|---|
+  | `section_divider` — 예배의 부름, 봉 헌 … | 190pt | 0.62 of the content rect | 40pt |
+  | `verse_divider` — the 말씀 reference | **150pt** | 0.586 | **52pt** |
+  | `sermon_title` — the week's title | **135pt** | 0.55 | **82pt** |
+
+  190pt is sized for a four-glyph section name, and measured through CoreText at the 1744pt
+  content width 예배의 부름 sets **945pt** wide — 54% of the box, type with margins around it.
+  The same size runs 사무엘상 14:23-52 out to **1571pt** (90%, edge to edge) and 데살로니가전서
+  5:12-24 to **1968pt**, which wraps onto a second line outright. At 150 those come back to 73%
+  and 91%: one line always, at the optical weight a section name has. A sermon title is a whole
+  sentence and drops further. The second pattern is the right-hand column — **the gaps grow as
+  the type shrinks**: 40pt of air reads right beneath 190pt and cramped beneath 135.
+- **The reference plate's English subtitle loses its brackets.** `[1 Samuel 14:23-52, ESV]` came
+  from `verse_labels`, which is built for the *verse plates*, where the label sits inside a body
+  and does need setting apart. On a divider the gold rule already separates it — the round-3 rule
+  above, applied to the one divider subtitle that had missed it (#250). `bible.verses.english_ref`
+  supplies the bare reference.
+- **폐회 안내 gains two full stops** — the one place `content.py` departs from `master.key`. Once
+  `closing_note` sets the farewell apart from the instruction it reads as its own sentence and
+  wants its own period; the operator added both by hand (#250). The instruction's first line keeps
+  none: it ends on the connective -고 and runs into the second.
+- **A divider spells the book out; a verse plate abbreviates it** (`bible.ref.korean_ref`, #250).
+  The bulletin writes 삼상, and the verse plates keep that in their small `[삼상 14:23-52, 개역한글]`
+  headings, read at a glance beside the body. A divider is a whole screen of type announcing the
+  reading, and there the shorthand buys nothing — so 예배의 부름's subtitle, the 말씀 reference
+  plate and the sermon title's subtitle all read **사무엘상 14:23-52**. `korean_ref` returns an
+  unparseable reference unchanged: a divider subtitle is decoration and must not fail a build.
+
 Filed rather than fixed, because it needs design work this loop can't shortcut: #233 (교회 소식
 plates — Keynote's own are the thing being rejected, and they hold the deck's one remaining
 shrink). #234 (keyed labels over the live camera) is settled below.
@@ -362,6 +410,11 @@ by background.
 The last row is the whole change — `content.KEYED_SECTIONS` plus the two `content.SENDING_CUES`,
 which were full-screen `text_card`s before. 축도 keeps its plate: the issue guessed it was keyed,
 but the deck gives it both.
+
+This table is about **slide style**, not about grouping. Only 합심 기도 is still a section of its
+own: 회개로의 초대 / 죄사함의 선포 are cues inside 예배의 부름 and the two 찬양 cards cues inside
+파송의 노래, so `content.KEYED_SECTIONS` — which is what routes a *section* through `fill_divider`
+— holds 합심 기도 alone (#249). The other four are emitted by their own section's filler.
 
 ¹ 사도신경's *slides* are navy plates like the rest of the row; it additionally carries one green
 cue as the break between its two forms (#244).

@@ -45,11 +45,12 @@ DIVIDER_LABELS = {
 # background: these are the only headings the deck gives a keyed label and *no* navy plate. The
 # ones it gives both (예배의 부름, 봉 헌, 환영 및 인사, 교회 소식, 축도) keep their plate here.
 # 축도 전 찬양 / 주기도문 전 찬양 are in SENDING_CUES, handled in build.fill_sending.
-KEYED_SECTIONS = frozenset({
-    DIVIDER_LABELS["repentance_call"],
-    DIVIDER_LABELS["absolution"],
-    DIVIDER_LABELS["united_prayer"],
-})
+#
+# 회개로의 초대 / 죄사함의 선포 are keyed the same way but are *not* listed here: they are no
+# longer sections of their own. They belong to 예배의 부름 and build.fill_call_to_worship emits
+# them inside its group (#249), so nothing routes them through fill_divider. 합심 기도 is the
+# only heading left that is both keyed and a section on its own.
+KEYED_SECTIONS = frozenset({DIVIDER_LABELS["united_prayer"]})
 
 # ── Opening / closing cards ───────────────────────────────────────────────────
 
@@ -72,12 +73,19 @@ WELCOME_CARD = [
     "주님의 이름으로 환영합니다",
 ]
 
-# Master slide 169.
+# Master slide 169, split in two because the slide is two different things (#249). The first two
+# lines are what the congregation is being asked to do; the third is a closing courtesy, and
+# Keynote's own slide already sets it smaller. ``styles.closing_note`` renders the distinction.
+#
+# The two sentence-ending periods are the one place this file departs from master.key: the
+# operator added them by hand reviewing the restyled card (#250). Once the farewell is set apart
+# from the instruction it reads as its own sentence and wants its own full stop. The first line
+# keeps none — it ends on the connective -고 and runs into the second.
 CLOSING_NOTE = [
     "은혜 받은 말씀으로 잠시 기도하시고",
-    "천천히 친교실로 이동해 주세요",
-    "주 안에서 사랑합니다",
+    "천천히 친교실로 이동해 주세요.",
 ]
+CLOSING_FAREWELL = "주 안에서 사랑합니다."
 
 # Master slide 76 — a lighting cue for the booth, not congregation-facing. Carried as a slide
 # *note* on the 성가대 divider cue rather than as a slide of its own.

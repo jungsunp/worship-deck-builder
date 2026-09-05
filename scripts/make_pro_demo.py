@@ -165,7 +165,7 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
     )
     section(
         "성가대 찬양",
-        [("주 은혜라", styles.song_title("주 은혜라", "(노희석 편곡)"))],
+        [("주 은혜라", styles.song_banner("주 은혜라"))],
     )
     section("사도신경", [
         ("사도신경 문답 1", styles.liturgy_responsive("사도신경", *CREED_RESPONSIVE)),
@@ -181,6 +181,16 @@ def make_demo(out_pro: Path, image: Path | None = None) -> Path:
         (block.partition("\n")[0], styles.announcement("교회 소식", item, number, len(ANNOUNCEMENTS)))
         for number, block in enumerate(ANNOUNCEMENTS, start=1)
         for item in [announce.parse_item(block)]
+    ])
+    section("말씀", [
+        ("삼상 14:23-52",
+         styles.verse_divider("사무엘상 14:23-52", "1 Samuel 14:23-52, ESV")),
+        ("사울은 무슨 생각일까요?",
+         styles.sermon_title("사울은 무슨 생각일까요?", "사무엘상 14:23-52")),
+    ])
+    section("예배 마침", [
+        ("폐회 안내", styles.closing_note(content.CLOSING_NOTE, content.CLOSING_FAREWELL)),
+        ("로고", styles.logo_plate()),
     ])
 
     out_pro.parent.mkdir(parents=True, exist_ok=True)
