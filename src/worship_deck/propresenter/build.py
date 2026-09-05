@@ -48,7 +48,8 @@ import url_pb2
 
 # isort: on
 from worship_deck.bible import layout
-from worship_deck.bible.verses import Verse, verse_labels
+from worship_deck.bible.ref import korean_ref
+from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.hymn import PRO_DESIGN
 from worship_deck.lyrics import linebreak
 from worship_deck.lyrics.transcribe import Song, arranged_chunks
@@ -59,10 +60,9 @@ from . import announce, content, elements, rtf, styles
 # The dev/church ProPresenter build the vendored protos are pinned to (#191 re-pins to 18.4).
 PP_VERSION = (21, 4)
 
-# Service order, top to bottom — the fixed liturgy sequence build() walks. Weekly groups draw
-# from ServiceData; the fixed-wording groups (사도신경 creed, 주기도문 prayer, dividers) come from
-# content.py. This replaces anchors.py's landmark detection with a plain declared order.
-# (Documented here for the reader; build() wires these to the fill_* calls in #180.)
+# The service order — top to bottom, weekly groups from ServiceData and fixed-wording ones from
+# content.py — is the body of build() below, and only there. It replaces anchors.py's landmark
+# detection with a plain declared sequence, so the list of fill_* calls *is* the liturgy.
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -81,9 +81,12 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
     fixed-wording sections from ``content.py`` always emit, because in a ground-up deck
     nothing rides along for free the way ``master.key``'s untouched slides do.
 
-    Two deliberate departures from the template: the duplicated 예배의 부름 / 회개로의 초대 /
+    One deliberate departure from the template: the duplicated 예배의 부름 / 회개로의 초대 /
     죄사함의 선포 / 환영 및 인사 / 합심 기도 heading slides are emitted once rather than two or
-    three times, and the stale leftover intro slide at the deck's end is dropped.
+    three times — Keynote carries one per service part, and here the operator holds on a cue.
+    Everything else the deck ends on is reproduced, down to the logo plate and the church photo
+    (#249) — an earlier reading of ``dump_slide_texts`` took master slide 170 for a stale
+    leftover intro because its 2023 date sits *off-canvas*; what renders there is the logo.
     """
     steps: dict[str, float] = {}
 
@@ -98,13 +101,12 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
     _t("opening", fill_date, pres, data.date, data.sermon_title, data.sermon_ref)
     if data.worship_songs:
         _t("worship_songs", fill_worship_songs, pres, data.worship_songs)
-    if data.call_to_worship_passage:
-        _t(
-            "call_to_worship", fill_verse_slides, pres, labels["call_to_worship"],
-            data.call_to_worship_ref, [Verse(**v) for v in data.call_to_worship_passage],
-        )
-    _t("repentance_call", fill_divider, pres, labels["repentance_call"])
-    _t("absolution", fill_divider, pres, labels["absolution"])
+    # 예배의 부름 is unconditional: even with no passage it carries 회개로의 초대 and 죄사함의
+    # 선포, which are fixed wording and always ship (#249).
+    _t(
+        "call_to_worship", fill_call_to_worship, pres, data.call_to_worship_ref,
+        [Verse(**v) for v in data.call_to_worship_passage],
+    )
     if data.confession_song:
         _t("confession", fill_confession, pres, data.confession_song)
     _t("apostles_creed", fill_creed, pres)
@@ -177,12 +179,27 @@ def fill_date(
 
 
 def fill_ending(pres: presentation_pb2.Presentation, date: str) -> None:
-    """예배 마침 — closing plate per service part, then the 폐회 안내 card."""
+    """예배 마침 — a closing plate per service part, the 폐회 안내 card, then the deck's last two.
+
+    Keynote closes on a centred **logo plate** and the **church photo** (master slides 170–171),
+    and the operator holds on whichever suits the room once the service is over. The generator
+    used to stop at 폐회 안내, so both are appended here (#249). The photo is the same asset the
+    deck opens on — master slide 4 and slide 171 are one image — so ``PRE_SERVICE_IMAGES[0]``
+    is reused rather than shipping a second copy; ``bundle.write_bundle`` dedupes the media.
+    """
     cue_uuids = [
         add_cue(pres, new_slide("service_outro", part, date), f"{part} 마침")
         for part in content.SERVICE_PARTS
     ]
-    cue_uuids.append(add_cue(pres, new_slide("text_card", content.CLOSING_NOTE), "폐회 안내"))
+    cue_uuids += [
+        add_cue(
+            pres,
+            new_slide("closing_note", content.CLOSING_NOTE, content.CLOSING_FAREWELL),
+            "폐회 안내",
+        ),
+        add_cue(pres, new_slide("logo_plate"), "로고"),
+        add_cue(pres, new_slide("image", styles.PRE_SERVICE_IMAGES[0]), "교회 사진"),
+    ]
     _group(pres, content.DIVIDER_LABELS["ending"], cue_uuids)
 
 
@@ -200,7 +217,7 @@ def _keyed_cues(pres: presentation_pb2.Presentation, label: str) -> list[uuid_pb
 
 
 def fill_divider(pres: presentation_pb2.Presentation, label: str, subtitle: str = "") -> None:
-    """A heading-only section: 회개로의 초대, 죄사함의 선포, 환영 및 인사, 합심 기도, 축도, 봉 헌.
+    """A heading-only section: 환영 및 인사, 합심 기도, 축도.
 
     These carry no weekly content at all — under Keynote they were simply slides nobody edited.
     The template repeats several of them two or three times (a heading slide per service part);
@@ -209,6 +226,8 @@ def fill_divider(pres: presentation_pb2.Presentation, label: str, subtitle: str 
 
     ``content.KEYED_SECTIONS`` gets a keyed label over the live camera instead of that plate
     (#234) — see the note there for which sections and why. None of them carries a subtitle.
+    회개로의 초대 and 죄사함의 선포 are keyed too but no longer arrive here: they are part of
+    예배의 부름, and ``fill_call_to_worship`` emits them inside its group (#249).
     """
     if label in content.KEYED_SECTIONS:
         _group(pres, label, _keyed_cues(pres, label))
@@ -245,15 +264,26 @@ def fill_worship_songs(pres: presentation_pb2.Presentation, songs: list[dict]) -
 
     Each song gets the next color in ``styles.SONG_COLORS``: the weekly deck is one flat list of
     group bars, so a distinct hue per song is what marks where one ends and the next begins.
+
+    The group is named ``찬양 - <제목>``, not the bare title (#249). Every other section bar in the
+    deck is a section name, so three bare song titles in a row read as three unrelated sections
+    with nothing tying them to 찬양. The cue names and the ``song_banner`` text stay bare — the
+    prefix is for the group list, and the congregation never sees a group name.
     """
     for i, song in enumerate(songs):
-        fill_song(pres, song, styles.SONG_COLORS[i % len(styles.SONG_COLORS)])
+        fill_song(
+            pres,
+            song,
+            styles.SONG_COLORS[i % len(styles.SONG_COLORS)],
+            name=f"{content.DIVIDER_LABELS['worship_songs']} - {song['title']}",
+        )
 
 
 def fill_song(
     pres: presentation_pb2.Presentation,
     song: dict,
     color: tuple[int, int, int] | None = None,
+    name: str = "",
 ) -> None:
     """One song: a keyed title banner, its ≤2-line lyric slides, and a trailing blank (#175).
 
@@ -272,10 +302,16 @@ def fill_song(
     end up siblings of the song bar — collapsing a song leaves them open, and the weekly medley
     went from 5 bars to 18 for a volunteer to navigate. See design doc Decision 4; don't redo it.
 
-    An empty ``lines`` yields banner + blank only.
+    ``name`` overrides the group label, which is otherwise the song title; the medley uses it to
+    mark its songs as 찬양 (#249). An empty ``lines`` yields banner + blank only.
     """
     parsed = Song(**song)
-    add_group(pres, parsed.title, color or styles.GROUP_COLORS["찬양"], _song_cues(pres, parsed))
+    add_group(
+        pres,
+        name or parsed.title,
+        color or styles.GROUP_COLORS[content.DIVIDER_LABELS["worship_songs"]],
+        _song_cues(pres, parsed),
+    )
 
 
 def _song_cues(pres: presentation_pb2.Presentation, parsed: Song) -> list[str]:
@@ -400,26 +436,56 @@ def _verse_cues(
     ]
 
 
-def fill_verse_slides(
-    pres: presentation_pb2.Presentation, group_label: str, ref: str, verses: list[Verse]
+def fill_call_to_worship(
+    pres: presentation_pb2.Presentation, ref: str, verses: list[Verse]
 ) -> None:
-    """Bilingual scripture (예배의 부름) — a divider carrying the reference, then 개역한글 + ESV
-    bodies packed to a consistent density. Full-screen: these replace the camera.
+    """예배의 부름 — the scripture, then 회개로의 초대 and 죄사함의 선포 keyed over the camera.
 
-    The passage is split across cues by ``bible.layout.chunk_verses``, the same packing model
-    the Keynote builder uses (#115) — fed this deck's baked box sizes instead of measured ones.
+    The passage is a divider carrying the reference, then 개역한글 + ESV bodies packed to a
+    consistent density by ``bible.layout.chunk_verses`` — the same packing model the Keynote
+    builder uses (#115), fed this deck's baked box sizes instead of measured ones. Full-screen:
+    scripture replaces the camera rather than keying over it.
+
+    **One** group covering all three, not three. The two keyed headings have no content of their
+    own — under Keynote they were slides nobody edited — and to the operator they are moments
+    inside the call to worship, not sections to navigate to. This is the same call #178 round 3
+    made for 고백의 찬양 and the song it announces: two bars for one section is two things to find
+    under pressure (#249). The cue names are unchanged, so `회개로의 초대 (위)` and its sibling are
+    still what the operator searches for.
+
+    Emits even with no passage: the divider and the two keyed headings are fixed wording, and a
+    week where the lookup failed still needs somewhere to be during the call to worship.
+
+    The divider spells the book out — 요한복음, not 요 — while the verse plates it introduces keep
+    the bulletin's abbreviation in their small headings (#250; see ``korean_ref``).
     """
-    cue_uuids = [
-        add_cue(pres, new_slide("section_divider", group_label, ref), group_label)
-    ]
-    cue_uuids += _verse_cues(pres, ref, verses)
-    _group(pres, group_label, cue_uuids)
+    label = content.DIVIDER_LABELS["call_to_worship"]
+    cue_uuids = [add_cue(pres, new_slide("section_divider", label, korean_ref(ref)), label)]
+    if verses:
+        cue_uuids += _verse_cues(pres, ref, verses)
+    for key in ("repentance_call", "absolution"):
+        cue_uuids += _keyed_cues(pres, content.DIVIDER_LABELS[key])
+    _group(pres, label, cue_uuids)
 
 
 def fill_sermon(
     pres: presentation_pb2.Presentation, title: str, ref: str, verses: list[Verse]
 ) -> None:
     """말씀 — the reference plate, the reading, the sermon-title plate, then a green blank.
+
+    The title plate is a ``styles.sermon_title`` — the deck's own heading idiom, gold rule and
+    all, with the reference as its subtitle. It was a ``song_title`` until #249: that builder was
+    the full-screen *song* plate, 성가대 moved off it in #178, and the sermon title inherited a
+    look nobody had designed for it. Nothing else called ``song_title``, so it is gone. #250 then
+    split ``sermon_title`` off ``section_divider`` again, at the operator's own smaller scale.
+
+    Both plates spell the book out — 사무엘상, not 삼상 (``korean_ref``). The verse plates in
+    between keep the bulletin's abbreviation in their small 개역한글/ESV headings; a divider is a
+    full screen of type announcing the reading, and there the shorthand buys nothing (#250).
+
+    The reference plate is a ``verse_divider`` rather than a plain ``section_divider``: its
+    heading is a *reference*, which at the section-name size runs the full width of the box.
+    Its English subtitle is bare — ``english_ref`` — where the verse plates' label is bracketed.
 
     That trailing ``blank_green`` is load-bearing, not padding. The ATEM keys ProPresenter's
     output, and a cleared output is *black*, which keys nothing and covers the camera — so the
@@ -430,13 +496,16 @@ def fill_sermon(
     label = content.DIVIDER_LABELS["sermon"]
     cue_uuids: list[uuid_pb2.UUID] = []
     if ref:
-        _, en_label = verse_labels(ref)
-        cue_uuids.append(add_cue(pres, new_slide("section_divider", ref, en_label), label))
+        cue_uuids.append(
+            add_cue(
+                pres,
+                new_slide("verse_divider", korean_ref(ref), f"{english_ref(ref)}, ESV"),
+                label,
+            )
+        )
     cue_uuids += _verse_cues(pres, ref, verses) if verses else []
     if title:
-        cue_uuids.append(
-            add_cue(pres, new_slide("song_title", title, ref), title)
-        )
+        cue_uuids.append(add_cue(pres, new_slide("sermon_title", title, korean_ref(ref)), title))
     cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
     _group(pres, label, cue_uuids)
 
@@ -568,6 +637,10 @@ def fill_sending(pres: presentation_pb2.Presentation) -> None:
     the two cards announce. Those two are **keyed labels**, not full-screen cards: Keynote gives
     them a keyed label and no navy plate, the same test that picks ``content.KEYED_SECTIONS``
     (#234). The 파송의 노래 divider itself keeps its plate.
+
+    **One** group covering the cards and the song, like ``fill_confession`` — 축복의 통로 opened a
+    second bar of its own until #249, and a section the operator thinks of as one thing should be
+    one thing to find. The cue order is unchanged and still matches master 154-159.
     """
     label = content.DIVIDER_LABELS["sending"]
     cue_uuids = [
@@ -579,8 +652,7 @@ def fill_sending(pres: presentation_pb2.Presentation) -> None:
     ]
     for cue in content.SENDING_CUES:
         cue_uuids.extend(_keyed_cues(pres, cue))
-    _group(pres, label, cue_uuids)
-    fill_song(pres, content.SENDING_SONG)
+    _group(pres, label, cue_uuids + _song_cues(pres, Song(**content.SENDING_SONG)))
 
 
 def fill_sermon_extra(

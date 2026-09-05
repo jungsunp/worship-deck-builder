@@ -41,16 +41,19 @@ STYLE_KEYS = (
     "worship_lyric_ko",         # sung lyrics, lower-third, up to 2 Korean lines
     "worship_lyric_bilingual",  # 1 dominant KO line + 1 smaller EN line (needs a KO+EN source, #228)
     "song_banner",              # keyed lower-third song title (worship medley)
-    "song_title",               # full-screen song / section title banner
     "verse_fullscreen",         # bilingual scripture body (개역한글 + ESV)
     "announcement",             # 교회 소식 notice (title + 날짜/장소/문의 라벨 레일)
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
+    "verse_divider",            # the 말씀 reference plate — the divider at reference scale (#250)
+    "sermon_title",             # the week's sermon title — the divider at sentence scale (#250)
     "keyed_label",              # section heading keyed over the live camera (#234)
     "liturgy",                  # fixed-wording full-screen (사도신경 recitation / 주기도문)
     "liturgy_responsive",       # 사도신경 문답 — gold question, rule, white answer (#244)
     "service_intro",            # N부 예배를 시작합니다 + sermon title / ref / date
     "service_outro",            # N부 예배를 마칩니다 + date
-    "text_card",                # centered fixed-wording card (표어 / 환영 / 예배 준비 / 폐회)
+    "text_card",                # centered fixed-wording card (표어 / 환영)
+    "closing_note",             # 폐회 안내 — instruction over a rule, farewell under it (#249)
+    "logo_plate",               # the church logo alone, centered — the deck's last plate (#249)
     "blank_green",              # blank chroma-green separator
     "image",                    # full-bleed image slide (hymn PNG pages, band lead sheets)
 )
@@ -196,6 +199,10 @@ VERSE_EN_LABEL_GAP = 8.0
 # 1377,45 492×127) and bottom-right on the 표어 / 환영 cards (slide 3, 1372,895 437×97).
 LOGO_TOP_RIGHT = (1382.0, 44.0, 480.0, 130.0)
 LOGO_BOTTOM_RIGHT = (1400.0, 902.0, 420.0, 114.0)
+# ...and centred on the deck's last plate (master slide 170), where it is the only thing on the
+# slide. Measured off that page rendered at 72 dpi; the box holds the logo's own 1200×325 aspect,
+# and sits a hair above the optical centre the way the deck has it.
+LOGO_CENTER = (576.0, 420.0, 768.0, 208.0)
 
 # ── Keyed section labels (#234) ───────────────────────────────────────────────
 # Where a keyed label sits, measured off the operator-approved deck rendered at 72 dpi (1 px = 1 pt
@@ -262,6 +269,20 @@ ANNOUNCE_DETAIL = Style(FONT_REGULAR, 64, MUTED, line_spacing=20.0, align="left"
 KEYED_LABEL = Style(FONT_BOLD, 70, bold=True, tracking=2.0)
 DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
 DIVIDER_SUB = Style(FONT_BOLD, 76, ACCENT, bold=True, tracking=2.0)
+# Two more headings wear the divider plate, and neither is a section name. #249 gave the sermon
+# title the divider look and #250 the 말씀 reference plate; the operator reset both by hand in
+# ProPresenter, and the sizes and gaps below are read straight off those cues.
+#
+# 190pt is sized for a four-glyph section name. Measured through CoreText at the 1744pt content
+# width, 예배의 부름 sets 945pt wide — 54% of the box, type with margins around it. The same size
+# runs 사무엘상 14:23-52 out to 1571pt (90%, edge to edge) and 데살로니가전서 5:12-24 to 1968pt,
+# which wraps onto a second line outright. At 150 they come back to 73% and 91%: one line always,
+# with the optical weight a section name has. A sermon title is a whole sentence and drops further.
+#
+# The gaps under them grow as the type shrinks — 40pt of air reads right beneath 190pt and cramped
+# beneath 135. A smaller heading needs *more* room under it, not the same.
+VERSE_DIVIDER_KO = replace(DIVIDER_KO, size=150)
+SERMON_TITLE_KO = replace(DIVIDER_KO, size=135)
 LITURGY_TITLE = Style(FONT_BOLD, 48, ACCENT, bold=True, tracking=12.0)
 LITURGY_BODY = Style(FONT_BOLD, 72, bold=True, line_spacing=22.0)
 # The leader's line in the responsive 사도신경 (#244). Gold, but the *same size* as the answer:
@@ -277,6 +298,9 @@ CLOSING_BLESSING = Style(FONT_REGULAR, 75)
 NOTE = Style(FONT_REGULAR, 18, BLACK, align="left")  # per-slide notes pane, not on the canvas
 CARD_BODY = Style(FONT_BOLD, 80, bold=True, line_spacing=26.0)
 CARD_ACCENT = Style(FONT_BOLD, 80, ACCENT, bold=True, line_spacing=26.0)
+# The 폐회 안내 farewell, under the rule (#249). Regular and muted at ~0.7 of the card body, so it
+# reads as the courtesy it is rather than as a third instruction — Keynote sets it smaller too.
+CARD_FAREWELL = Style(FONT_REGULAR, 56, MUTED, line_spacing=20.0)
 
 # ── Liturgy geometry (#244) ───────────────────────────────────────────────────
 # The 사도신경 / 주기도문 header band: the title's own line plus the air under it. Derived rather
@@ -299,6 +323,10 @@ LITURGY_QUESTION_GAP = 31.0
 LITURGY_RULE_W = 360.0
 LITURGY_RULE_H = 3.0
 LITURGY_RULE_GAP = 65.0
+
+# The air above and below the 폐회 안내 card's rule (#249). Same idiom as the 문답 bar, but the
+# whole assembly is centred here rather than pinned: this card has no title band to hang from.
+CLOSING_RULE_GAP = 70.0
 
 
 # ── Slide builders ────────────────────────────────────────────────────────────
@@ -490,29 +518,14 @@ def song_banner(title: str) -> slide_pb2.Slide:
     (config/slide_map.yaml: "per song: blank-green separator + title slide + N lyric slides"),
     so this is the Option A strip idiom in the lyric zone, one line, set exactly like the
     lyrics — same type as the lyrics it introduces, so the two read as one banner that simply
-    changes text. ``song_title`` stays the full-screen plate for the sections that genuinely
-    read as a title card (#178).
+    changes text. The sections that genuinely read as a title card — 고백의 찬양, 성가대, the
+    sermon title — use ``section_divider`` instead (#178, #249).
     """
     slide = _slide(background=CHROMA_GREEN)
     height = LYRIC_KO.size * 1.6 + 2 * LYRIC_STRIP_PAD[1]
     rect = (0.0, CANVAS[1] - LYRIC_ZONE_BOTTOM - height, CANVAS[0], height)
     element = el.text(slide, rect, rtf.plain(title, LYRIC_KO), LYRIC_KO)
     el.line_strip(element, (*BLACK, 1.0), pad=LYRIC_STRIP_PAD)
-    return _front_to_back(slide)
-
-
-def song_title(title: str, subtitle: str = "") -> slide_pb2.Slide:
-    """Full-screen song / section title plate (고백의 찬양, 성가대 with its composer credit).
-
-    The worship medley uses ``song_banner`` instead — a title over the band shot, not a plate
-    that replaces it.
-    """
-    slide = _slide(background=NAVY)
-    content = _framed(slide)
-    runs: list[rtf.Run] = [(title, TITLE)]
-    if subtitle:
-        runs.append(("\n" + subtitle, DIVIDER_SUB))
-    el.text(slide, content, rtf.document(_scaled(runs, content[2], content[3])), TITLE)
     return _front_to_back(slide)
 
 
@@ -763,6 +776,46 @@ def announcement(
     return _front_to_back(slide)
 
 
+def _heading_plate(
+    heading: str,
+    subtitle: str,
+    style: Style,
+    *,
+    frac: float,
+    rule_gap: float,
+    sub_gap: float,
+) -> slide_pb2.Slide:
+    """A heading bottomed out at ``frac`` of the content rect, a gold rule under it, a subtitle.
+
+    ``section_divider`` and ``sermon_title`` are this plate at two scales — see their tuning
+    constants for why the sermon title is not simply a divider with smaller type.
+
+    The heading is fitted rather than set flat: a section name is four glyphs and always fits,
+    but a sermon title is a sentence, and at full size a long one wrapped past the bottom of its
+    box. ``_scaled`` is a no-op for every fixed heading in the deck.
+    """
+    slide = _slide(background=NAVY)
+    x, y, w, h = _framed(slide)
+    heading_box = (x, y, w, h * frac)
+    el.text(
+        slide,
+        heading_box,
+        rtf.document(_scaled([(heading, style)], w, heading_box[3])),
+        style,
+        valign="bottom",
+    )
+    _rule(slide, y + h * frac + rule_gap, width=90.0)
+    if subtitle:
+        el.text(
+            slide,
+            (x, y + h * frac + sub_gap, w, 140.0),
+            rtf.plain(subtitle, DIVIDER_SUB),
+            DIVIDER_SUB,
+            valign="top",
+        )
+    return _front_to_back(slide)
+
+
 def section_divider(heading: str, subtitle: str = "") -> slide_pb2.Slide:
     """Section heading slide (예배의 부름 / 봉 헌 / 교회 소식 …) with the gold rule and subtitle.
 
@@ -770,21 +823,32 @@ def section_divider(heading: str, subtitle: str = "") -> slide_pb2.Slide:
     writes ``[ 믿음으로 우리는 ]``; the operator dropped the brackets across the divider slides
     restyling a draft, since the gold rule above already separates it (#178 review, round 3).
     """
-    slide = _slide(background=NAVY)
-    x, y, w, h = _framed(slide)
-    el.text(
-        slide, (x, y, w, h * 0.62), rtf.plain(heading, DIVIDER_KO), DIVIDER_KO, valign="bottom"
+    return _heading_plate(heading, subtitle, DIVIDER_KO, frac=0.62, rule_gap=40.0, sub_gap=96.0)
+
+
+def verse_divider(ref: str, en_ref: str = "") -> slide_pb2.Slide:
+    """The 말씀 reference plate, where the *reference* is the heading (#250).
+
+    A section divider with a reference in the heading slot, and the section-name size is wrong
+    for it — see ``VERSE_DIVIDER_KO``. The English reference beneath is bare, like every other
+    divider subtitle: the scripture slides keep their ``[삼상 14:23-52, 개역한글]`` brackets
+    because those labels sit inside a body, and here the gold rule already does the separating
+    (the #178 round-3 rule, applied to the one divider subtitle that had missed it).
+    """
+    return _heading_plate(
+        ref, en_ref, VERSE_DIVIDER_KO, frac=0.586, rule_gap=52.0, sub_gap=131.0
     )
-    _rule(slide, y + h * 0.62 + 40.0, width=90.0)
-    if subtitle:
-        el.text(
-            slide,
-            (x, y + h * 0.62 + 96.0, w, 140.0),
-            rtf.plain(subtitle, DIVIDER_SUB),
-            DIVIDER_SUB,
-            valign="top",
-        )
-    return _front_to_back(slide)
+
+
+def sermon_title(title: str, ref: str = "") -> slide_pb2.Slide:
+    """The week's sermon title over its reference — the divider idiom at sentence scale (#250).
+
+    Same plate as ``section_divider`` and deliberately so (#249): the operator reads the deck by
+    its gold-ruled headings, and the sermon title is one of them. Only the scale differs, and the
+    numbers are the operator's own — see ``SERMON_TITLE_KO``. ``ref`` is the Korean reference with
+    its book spelled out (``bible.ref.korean_ref``), matching the plate above it.
+    """
+    return _heading_plate(title, ref, SERMON_TITLE_KO, frac=0.55, rule_gap=82.0, sub_gap=143.0)
 
 
 def keyed_label(heading: str, placement: str = "top", variant: str = "M1") -> slide_pb2.Slide:
@@ -986,6 +1050,55 @@ def text_card(
     return _front_to_back(slide)
 
 
+def closing_note(lines: list[str], farewell: str) -> slide_pb2.Slide:
+    """폐회 안내 — the instruction the congregation acts on, then the farewell (master 169, #249).
+
+    These are not two halves of one message. ``lines`` tells people what to do when the service
+    ends; ``farewell`` is a courtesy. Set as one flat block on a ``text_card`` they read as three
+    equal instructions, which is what the first `.pro` deck did — Keynote's own slide already
+    sets the farewell smaller. So the instruction keeps the full ``CARD_BODY``, a gold ``_rule``
+    closes it, and the farewell sits under the rule in ``CARD_FAREWELL``.
+
+    The assembly is centred as a whole in the card box, so the rule lands wherever the message
+    ends rather than at a fixed height — the message is fixed wording, but a re-worded card
+    should not have to re-tune a constant. Every box is sized from ``_wrapped_height``, which is
+    what ``scripts/audit_pro_layout.py`` measures against.
+    """
+    slide = _slide(background=NAVY)
+    x, y, w, h = _framed(slide, frame=False)
+    _logo(slide, LOGO_BOTTOM_RIGHT)
+    box = (x, y + 80.0, w, h - 160.0)  # the logo's corner, as text_card gives it up
+    runs: list[rtf.Run] = [(("\n" if i else "") + line, CARD_BODY) for i, line in enumerate(lines)]
+    message_h = _wrapped_height(runs, w, 1.0)
+    farewell_h = _wrapped_height([(farewell, CARD_FAREWELL)], w, 1.0)
+    tail_h = 2 * CLOSING_RULE_GAP + LITURGY_RULE_H + farewell_h
+    top = box[1] + max((box[3] - message_h - tail_h) / 2, 0.0)
+    el.text(slide, (x, top, w, message_h), rtf.document(runs), CARD_BODY, valign="top")
+    rule_y = top + message_h + CLOSING_RULE_GAP
+    _rule(slide, rule_y, width=90.0, height=LITURGY_RULE_H)
+    el.text(
+        slide,
+        (x, rule_y + LITURGY_RULE_H + CLOSING_RULE_GAP, w, farewell_h),
+        rtf.plain(farewell, CARD_FAREWELL),
+        CARD_FAREWELL,
+        valign="top",
+    )
+    return _front_to_back(slide)
+
+
+def logo_plate() -> slide_pb2.Slide:
+    """The church logo alone, centred — the deck's last plate but one (master slide 170, #249).
+
+    Keynote closes on this and then the church photo, and the operator holds on whichever suits
+    the room after the service. Nothing but the logo is on it: the ``_framed`` tint (no outline,
+    like the other plates) over the backdrop, and the artwork at its own aspect in ``LOGO_CENTER``.
+    """
+    slide = _slide(background=NAVY)
+    _framed(slide, frame=False)
+    _logo(slide, LOGO_CENTER)
+    return _front_to_back(slide)
+
+
 def blank_green() -> slide_pb2.Slide:
     """Blank chroma-green separator — the cue that leaves the live camera alone.
 
@@ -1006,16 +1119,19 @@ BUILDERS = {
     "worship_lyric_ko": worship_lyric_ko,
     "worship_lyric_bilingual": worship_lyric_bilingual,
     "song_banner": song_banner,
-    "song_title": song_title,
     "verse_fullscreen": verse_fullscreen,
     "announcement": announcement,
     "section_divider": section_divider,
+    "verse_divider": verse_divider,
+    "sermon_title": sermon_title,
     "keyed_label": keyed_label,
     "liturgy": liturgy,
     "liturgy_responsive": liturgy_responsive,
     "service_intro": service_intro,
     "service_outro": service_outro,
     "text_card": text_card,
+    "closing_note": closing_note,
+    "logo_plate": logo_plate,
     "blank_green": blank_green,
     "image": image,
 }
