@@ -10,9 +10,10 @@ full-screen **Option 3 (네이비 프레임)**. ``scripts/render_style_samples.p
 numbers as HTML/CSS and ``docs/style-samples/*.png`` is the rendering to match — except the
 Option A strip metrics (``LYRIC_STRIP_PAD``, ``LYRIC_KO`` tracking/line spacing), which were
 re-tuned in #175 against ``docs/style-references/ref-hillsong.png`` on real ProPresenter
-renders: the sample CSS left the strips loose around the text and touching each other. Selectable
-presets and live restyling are Phase 5 (#222/#223) — which is exactly why these are plain
-module constants rather than a binary.
+renders: the sample CSS left the strips loose around the text and touching each other. Restyling is a
+code edit here, not a runtime setting (#222/#223 were closed on that point) — which is exactly
+why these are plain module constants rather than a binary. The finalization meeting decides
+from the #241 sample sheet and #243 re-bakes these values.
 
 Each ``STYLE_KEYS`` entry has a builder below returning a finished ``Slide``; the per-section
 ``build.fill_*`` functions (#175–#179) call them with weekly content.
@@ -81,7 +82,7 @@ BRUSH_ASPECT = 1119 / 251
 # than a soft-alpha stroke (#192). Both are drawn at BRUSH_ASPECT, so they share the measured rects.
 # `M1` is the shipped look — a skewed navy-gradient bar with a gold rule, chosen over every flat,
 # gradient, scrim and repainted-stroke treatment in the bake-off. `A` is Keynote's own watercolour,
-# kept only so the church group can compare the two in the #223 preset review.
+# kept only so the church group can compare the two in the #241 style review.
 KEYED_ART: dict[str, tuple[str, float]] = {
     "M1": (str(ASSET_DIR / "m1-angled-bar.png"), BRUSH_ASPECT),
     "A": (BRUSH, BRUSH_ASPECT),
@@ -796,7 +797,7 @@ def keyed_label(heading: str, placement: str = "top", variant: str = "M1") -> sl
     operator preferred artwork to every flat, gradient and scrim treatment tried against it.
 
     ``variant`` picks the plate from ``KEYED_ART`` — ``M1`` is the shipped look; ``A`` is kept so
-    the church group can see it beside M1 in the #223 preset review.
+    the church group can see it beside M1 in the #241 style review.
 
     Both placements exist, and both are emitted per section: Keynote carries one per service part,
     but in ProPresenter the operator holds on a cue and chooses by where the label can sit without

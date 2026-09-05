@@ -67,7 +67,7 @@ CREED_RESPONSIVE = content.APOSTLES_CREED_RESPONSIVE[0]
 
 # The keyed-label plates, one group each, both placements per group — arrow through them over a
 # live camera to compare. #234 picked M1; A (Keynote's own watercolour) is kept so the church
-# group can see the two side by side in the #223 preset review.
+# group can see the two side by side in the #241 style review.
 KEYED_CANDIDATES = [
     ("M1 각진 바 + 금색 룰", "M1"),
     ("A 붓터치 (현행 Keynote)", "A"),
@@ -75,7 +75,7 @@ KEYED_CANDIDATES = [
 
 
 def make_candidates(out_pro: Path) -> Path:
-    """A deck of keyed-label plates — nothing but section labels over chroma green (#234/#223)."""
+    """A deck of keyed-label plates — nothing but section labels over chroma green (#234/#241)."""
     pres = build.new_presentation(out_pro.stem)
     for label, variant in KEYED_CANDIDATES:
         uuids = [
