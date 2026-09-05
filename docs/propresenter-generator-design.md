@@ -91,8 +91,7 @@ the look must be *in the document bytes* we generate.
 
 The original plan was to clone exemplar slides out of an authored style-kit `.pro` (#170).
 **#170 was closed instead (2026-08-12)**: under ground-up generation there is no separate
-"author a Theme in ProPresenter" step, and Phase 5 (#222/#223) wants the look adjustable at
-review time — which a binary style kit works against. So:
+"author a Theme in ProPresenter" step, and a binary style kit works against restyling. So:
 
 1. `styles.py` holds the look as **code constants** — the #168 interim pick (lyric Option A
    검정 스트립, full-screen Option 3 네이비 프레임) transcribed from
@@ -377,7 +376,7 @@ cue as the break between its two forms (#244).
   plate in the deck's own palette: `scripts/make_keyed_art.py` renders a skewed navy-gradient bar
   with a gold rule. Generated rather than sourced means the palette is exact, the licence is not a
   question, and hard edges key more cleanly than the incumbent's soft alpha (#192). Keynote's
-  watercolour stays in `styles.KEYED_ART` as `A`, for the #223 preset review only.
+  watercolour stays in `styles.KEYED_ART` as `A`, for the #241 style review only.
 - `elements.shadow` was added for this — white type over a live camera needs separation from the
   shot, and a shadow is what real broadcasts use instead of a container.
 
