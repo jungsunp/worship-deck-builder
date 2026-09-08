@@ -36,15 +36,18 @@ CHAR_W_KO = 0.83    # avg glyph advance / font — Hangul 1.0 minus space/punct 
 CHAR_W_EN = 0.44    # avg glyph advance / font — proportional Latin incl. spaces
 
 
-def line_height(font: float) -> float:
+def line_height(font: float, pitch: float = LINE_PITCH) -> float:
     """The height a *single* line of ``font`` pt occupies.
 
     Not simply ``font × LINE_PITCH``: CoreText rounds each line up to a whole point, and the
     first line of a block gets a shade more than the pitch (its full ascent, with no leading
     borrowed from the line above) — 44pt measures 54, where the pitch alone predicts 53.2. The
     extra point covers both, which matters for the one-line boxes that hold a slide's labels.
+
+    ``pitch`` is per-face: the default is Apple SD Gothic Neo's, which is what ``master.key`` is
+    set in, and the ProPresenter builder passes its own (``styles.LINE_PITCH``, #247).
     """
-    return math.ceil(font * LINE_PITCH) + 1.0
+    return math.ceil(font * pitch) + 1.0
 
 
 def verse_lines(text: str, box_w: float, font: float, char_w: float) -> int:
@@ -67,6 +70,8 @@ def chunk_verses(
     en_font: float,
     ko_line_h: float = LINE_H_KO,
     en_line_h: float = LINE_H_EN,
+    ko_char_w: float = CHAR_W_KO,
+    en_char_w: float = CHAR_W_EN,
 ) -> list[list[Verse]]:
     """Group consecutive verses so each slide fills well at the target font (#115).
 
@@ -78,7 +83,8 @@ def chunk_verses(
 
     ``*_line_h`` default to the Keynote deck's measured ratios; the ProPresenter builder passes
     its own, because its styles carry an explicit extra leading that widens the line pitch well
-    past what the glyphs alone need.
+    past what the glyphs alone need. ``*_char_w`` likewise default to Apple SD Gothic Neo's, the
+    face ``master.key`` is set in — the ProPresenter deck is set in another one since #247.
     """
     ko_w, ko_h = ko_box
     en_w, en_h = en_box
@@ -89,8 +95,8 @@ def chunk_verses(
     current: list[Verse] = []
     ko_used = en_used = 0
     for v in verses:
-        ko_need = verse_lines(f"{v.number}. {v.korean}", ko_w, ko_font, CHAR_W_KO)
-        en_need = verse_lines(f"{v.number}. {v.english}", en_w, en_font, CHAR_W_EN)
+        ko_need = verse_lines(f"{v.number}. {v.korean}", ko_w, ko_font, ko_char_w)
+        en_need = verse_lines(f"{v.number}. {v.english}", en_w, en_font, en_char_w)
         if current and (ko_used + ko_need > ko_budget or en_used + en_need > en_budget):
             chunks.append(current)
             current, ko_used, en_used = [], 0, 0

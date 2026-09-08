@@ -22,6 +22,7 @@ Each ``STYLE_KEYS`` entry has a builder below returning a finished ``Slide``; th
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -79,13 +80,32 @@ BRUSH = str(ASSET_DIR / "brush-stroke-purple.png")
 BRUSH_ASPECT = 1119 / 251
 # The keyed-label plate (#234). Drawn by `scripts/make_keyed_art.py` rather than sourced, so the
 # palette is exactly the deck's and there is no licence question; hard edges also key more cleanly
-# than a soft-alpha stroke (#192). Both are drawn at BRUSH_ASPECT, so they share the measured rects.
-# `M1` is the shipped look — a skewed navy-gradient bar with a gold rule, chosen over every flat,
-# gradient, scrim and repainted-stroke treatment in the bake-off. `A` is Keynote's own watercolour,
-# kept only so the church group can compare the two in the #241 style review.
-KEYED_ART: dict[str, tuple[str, float]] = {
-    "M1": (str(ASSET_DIR / "m1-angled-bar.png"), BRUSH_ASPECT),
-    "A": (BRUSH, BRUSH_ASPECT),
+# than a soft-alpha stroke (#192). All are drawn at BRUSH_ASPECT, so they share the measured rects.
+
+
+@dataclass(frozen=True)
+class Plate:
+    """One keyed-label plate: the artwork and the two numbers its silhouette dictates.
+
+    ``inset`` is the fraction of the container width kept clear of text at each end. It belongs to
+    the plate rather than to the section because the silhouette decides it — a rounded end eats
+    more of its own box than a square-cut one, so the pill needs more clearance than the skewed bar.
+    """
+
+    image: str
+    aspect: float = BRUSH_ASPECT
+    inset: float = 0.10
+
+
+# **Neither of these ships any more** — the plate is drawn now (#247, see below). They are kept as
+# the #241 review's comparison material: `M1` is what #234's bake-off picked and the deck carried
+# until 2026-09-05 (a skewed bar with a NAVY→DEEP ramp and a gold rule, chosen over every flat,
+# gradient, scrim and repainted-stroke treatment), and `A` is Keynote's own watercolour. #247's own
+# candidates — a backdrop-material fill and three simulated-glass treatments of it — were rejected
+# on review and their bakes deleted; `scripts/make_keyed_art.py` still draws M1.
+KEYED_ART: dict[str, Plate] = {
+    "M1": Plate(str(ASSET_DIR / "m1-angled-bar.png")),
+    "A": Plate(BRUSH),
 }
 # The blurred backdrop behind every full-screen slide (#224). Pre-blurred by
 # `scripts/make_backdrop.py` because ProPresenter cannot blur one itself — see `_framed` below.
@@ -109,14 +129,14 @@ class Backdrop:
 # Three curated sources, baked at the shipped strength. The script re-renders the other strengths
 # for #241's sample sheet; #225 picks the final look and #243 applies it — by then a one-line swap.
 BACKDROP_DIR = ASSET_DIR / "backdrops"
-BACKDROP_STRENGTH = "open"  # must match make_backdrop.SHIPPED
+BACKDROP_STRENGTH = "gentle"  # must match make_backdrop.SHIPPED
 BACKDROPS: dict[str, Backdrop] = {
     # the church building at golden hour
-    "church": Backdrop(str(BACKDROP_DIR / f"church-exterior-{BACKDROP_STRENGTH}.png"), 0.62),
+    "church": Backdrop(str(BACKDROP_DIR / f"church-exterior-{BACKDROP_STRENGTH}.png"), 0.56),
     # the 2025-11 all-church-members photo
-    "congregation": Backdrop(str(BACKDROP_DIR / f"congregation-{BACKDROP_STRENGTH}.png"), 0.62),
+    "congregation": Backdrop(str(BACKDROP_DIR / f"congregation-{BACKDROP_STRENGTH}.png"), 0.56),
     # CC0 dark church interior
-    "sanctuary": Backdrop(str(BACKDROP_DIR / f"sanctuary-cc0-{BACKDROP_STRENGTH}.png"), 0.62),
+    "sanctuary": Backdrop(str(BACKDROP_DIR / f"sanctuary-cc0-{BACKDROP_STRENGTH}.png"), 0.56),
 }
 BACKDROP = BACKDROPS["church"]
 
@@ -134,18 +154,118 @@ BLACK = (0x00, 0x00, 0x00)  # Option A lyric strips
 CHROMA_GREEN = (0x81, 0xD6, 0x54)
 
 TINT_RGBA = (*NAVY, BACKDROP.tint)  # the live half of the BACKDROP look (#224)
+
+
+@contextmanager
+def use_backdrop(backdrop: Backdrop):
+    """Build slides against a *different* backdrop for the length of the block. Dev scripts only.
+
+    ``_framed`` reads the module constants, so a deck can otherwise carry exactly one strength —
+    which makes a side-by-side comparison of two impossible. ``scripts/make_pro_demo.py`` uses this
+    to emit one group per candidate strength; nothing in the pipeline calls it.
+
+    This is **not** #222 returning. There is no runtime style layer, no config surface and no
+    persistence: it swaps two module constants so a comparison deck can be built, and #241's theme
+    sets are the real answer if more than the backdrop ever needs to vary per deck.
+    """
+    global BACKDROP, TINT_RGBA
+    previous = BACKDROP, TINT_RGBA
+    BACKDROP, TINT_RGBA = backdrop, (*NAVY, backdrop.tint)
+    try:
+        yield backdrop
+    finally:
+        BACKDROP, TINT_RGBA = previous
+
+
+@contextmanager
+def use_font(family: str, regular: str, bold: str,
+             ko_char_w: float, en_char_w: float, pitch: float):
+    """Set the whole deck in a different Korean face for the length of the block. Dev scripts only.
+
+    Same shape and same reason as ``use_backdrop``: every ``Style`` below is frozen and was built
+    at import with this module's font names baked in, so one process can otherwise emit exactly one
+    face — which makes a side-by-side deck impossible. ``scripts/make_pro_demo.py --font`` uses it;
+    nothing in the pipeline does. Shipping a face is a six-constant edit here, not this.
+
+    The measurements are not cosmetic and have to travel with the face:
+
+    ``ko_char_w`` sets ``CHAR_W_KO``, which decides how many verses fit on a scripture cue, where a
+    lyric line breaks and whether a 교회 소식 notice needs a second plate.
+
+    ``en_char_w`` sets ``CHAR_W_EN`` separately, because a Korean face's Latin is drawn to its own
+    width — the 교회 소식 rail rows are dates, amounts and email addresses, and those are the boxes
+    that overflowed when only the Hangul number moved.
+
+    ``pitch`` sets ``LINE_PITCH``. The candidate faces measure 1.14 to 1.50 against Apple SD Gothic
+    Neo's 1.20, and a face 4% taller overflows every tight box in the deck by a point.
+
+    ``scripts/measure_advance.swift`` prints all three for an installed face; scale them onto the
+    deck's constants rather than substituting — see the table in ``scripts/make_pro_demo.py``.
+    """
+    global FONT_FAMILY, FONT_REGULAR, FONT_BOLD
+    global CHAR_W_KO, CHAR_W_EN, LINE_PITCH
+    global LITURGY_HEADER_H  # the one module constant baked from the pitch at import
+    scale = {name: value for name, value in globals().items() if isinstance(value, Style)}
+    previous = (FONT_FAMILY, FONT_REGULAR, FONT_BOLD,
+                CHAR_W_KO, CHAR_W_EN, LINE_PITCH, LITURGY_HEADER_H)
+    for name, style in scale.items():  # before FONT_BOLD is rebound out from under the test
+        globals()[name] = replace(style, family=family,
+                                  font=bold if style.font == FONT_BOLD else regular)
+    FONT_FAMILY, FONT_REGULAR, FONT_BOLD = family, regular, bold
+    CHAR_W_KO = ko_char_w
+    CHAR_W_EN, LINE_PITCH = en_char_w, pitch
+    LITURGY_HEADER_H = line_height(LITURGY_TITLE.size) + LITURGY_TITLE_GAP
+    try:
+        yield
+    finally:
+        globals().update(scale)
+        (FONT_FAMILY, FONT_REGULAR, FONT_BOLD,
+         CHAR_W_KO, CHAR_W_EN, LINE_PITCH, LITURGY_HEADER_H) = previous
+
+
 FRAME_FILL_RGBA = (0x0A, 0x14, 0x28, 0.35)
 FRAME_STROKE_RGBA = (*INK, 0.32)
 FRAME_STROKE_WIDTH = 1.5
 FRAME_RADIUS = 0.01  # ProPresenter roundness is a fraction of the shorter side (~10px)
 
-# Fonts. The #189 samples use Pretendard / Noto Sans KR, which are not installed on either
-# Mac (they exist only as web fonts under data/style-samples/fonts/). Apple SD Gothic Neo
-# ships with macOS, so it is the safe default; swapping is a one-line change once the church
-# mini has the real face installed (#191/#197).
-FONT_FAMILY = "Apple SD Gothic Neo"
-FONT_BOLD = "AppleSDGothicNeo-Bold"
-FONT_REGULAR = "AppleSDGothicNeo-Regular"
+# Fonts. The deck was set in Apple SD Gothic Neo — the safe default, since it ships with macOS —
+# until the operator reviewed the keyed plate and objected that it "doesn't really mix well with
+# round boxes" (#247). It doesn't: its terminals are squared and its `ㅇ` flattened, which fights
+# the deck's 10pt rounded furniture. NanumSquare Round won a five-face bake-off run as full weekly
+# decks (SUIT second, both kept in `scripts/make_pro_demo.py` for the #241 review). SIL OFL.
+#
+# **This face must be installed on the church mini** (#191/#197). ProPresenter substitutes
+# silently for a font it cannot find, so a missing face looks like a style bug, not an error.
+FONT_FAMILY = "NanumSquareRound"
+FONT_BOLD = "NanumSquareRoundB"
+FONT_REGULAR = "NanumSquareRoundR"
+
+# The face's own CoreText metrics, which every box in this module is measured against. They live
+# here rather than in `bible.layout` because `master.key` is *not* set in this face: the Keynote
+# builder keeps layout's defaults, and only the .pro path passes these in.
+#
+# Hangul and the pitch are layout's estimates **scaled** by NanumSquare Round's measurements over
+# Apple SD Gothic Neo's (0.7042/0.6737 and 1.1350/1.2000 — run `scripts/measure_advance.swift`),
+# because layout's numbers sit deliberately *above* the true ones to stay conservative against
+# `measure_text.swift`, and that margin has to survive the swap.
+#
+# Latin is the exception: `layout.CHAR_W_EN`'s 0.44 sits *below* what Apple SD Gothic Neo really
+# measures (0.4500), so there is no margin there to preserve — only a 2% optimism the Keynote deck
+# happens to absorb. So this one is the measurement itself.
+#
+# The pitch takes whichever of the two is taller, and for this face that is layout's. NanumSquare
+# Round has no U+2022, and 교회 소식 notices are bulleted; CoreText falls back to a system face for
+# that one glyph and the **fallback's** taller line then governs the whole line. Measured on the
+# 2026-09-06 notices, a bulleted line costs 1.212 rather than the face's own 1.135, which is what
+# put a continuation plate one line over. A face taller than layout's still raises this.
+CHAR_W_KO = layout.CHAR_W_KO * 0.7042 / 0.6737
+CHAR_W_EN = 0.5010
+LINE_PITCH = max(layout.LINE_PITCH, layout.LINE_PITCH * 0.1135 / 0.1200)
+
+
+def line_height(font: float) -> float:
+    """``layout.line_height`` at the deck's own line pitch."""
+    return layout.line_height(font, LINE_PITCH)
 
 # ── Geometry (1920×1080; transcribed from scripts/render_style_samples.py) ─────
 # x, y. The vertical inset is much tighter than the horizontal one because the scripture
@@ -208,7 +328,68 @@ KEYED_LABEL_PLACEMENTS: dict[str, tuple[tuple[float, float, float, float], float
     "top": ((20.0, 23.0, 594.0, 594.0 / BRUSH_ASPECT), 70.0),
     "bottom": ((614.0, 892.0, 736.0, 736.0 / BRUSH_ASPECT), 82.0),
 }
-KEYED_LABEL_INSET = 0.10  # fraction of the container width kept clear at each end
+# Text clearance for the artwork plates is per-plate — see `Plate.inset`, set by the silhouette.
+#
+# ── The shipped plate is drawn, not artwork (#247) ────────────────────────────
+# The artwork was rejected on review as "distant and awkward" beside the rest of the deck, and the
+# mismatch was not the interior #247 diagnosed — it was the *vocabulary*. Everything else the deck
+# draws is orthogonal, rounded ~10pt (`FRAME_BOX`), and uses gold only as a 1–3pt rule (`_rule`,
+# `ANNOUNCE_RAIL_RULE_W`, `LITURGY_RULE_H`). The plate was the one skewed shape in the deck, with a
+# 14pt gold slab nearly five times the heaviest rule anywhere else. So the plate is now `FRAME_BOX`
+# at label size: the same `el.shape` call, the same fill, the same corner.
+#
+# The numbers below are read back off the operator's own hand-restyles of two decks (2026-09-05 and
+# 2026-09-07) — the "read a markup, not a drag" rule #178 round 3 established. The first pass made
+# three changes, each repeated across both placements and so intent rather than noise: the type got
+# smaller **and lighter** (Bold 70/82 -> Regular 50/70), the tracking opened up, and the frame's
+# white hairline came off. The stroke going is the same call they made restyling the least-dense
+# full-screen slides in #178 — "removed borderline to make it cleaner". The second pass took the
+# top placement back up to 58 on its own; see `KEYED_PLATES`.
+KEYED_LABEL_ANCHOR = {"top": "left", "bottom": "center"}
+# What the frame's interior actually *is* on a full-screen slide: the composited backdrop (mean
+# 36,41,52 at the shipped strength) with FRAME_FILL_RGBA's 35% ink over it. Pre-blended and
+# near-opaque, the same trick the palette above uses for RTF's alpha-less inks — a translucent
+# fill cannot be used here, because the green showing through is what the ATEM keyer removes, and
+# it would cut a hole in the plate. `test_the_keyed_plate_is_the_frame_interior_of_the_shipped
+# _backdrop` re-derives it, so a backdrop swap cannot leave this behind.
+KEYED_PLATE_FILL = (0x1B, 0x22, 0x30, 0.93)
+KEYED_PLATE_RADIUS = 10.0   # absolute, matching FRAME_BOX's 0.01 × 1036pt shorter side
+# The plate hugs its heading. The restyle's two boxes disagree on almost everything, but their
+# horizontal padding comes out at 1.54 and 1.57 em — near enough to one number that it is clearly
+# what was being eyeballed, and it is why a fixed 594pt bar looked wrong around a short heading.
+# Vertical they do not agree (0.31 and 0.17 em), so what is baked is the mean of the two drags in
+# absolute points, the same way #244 resolved three disagreeing 문답 anchors.
+# Tracking is absolute, not a fraction of the size: both placements land on exactly 7.0pt, where
+# in em they disagree (0.121 at the top's 58, 0.100 at the bottom's 70). Two files agreeing on one
+# number is what says which model was being eyeballed — it is what made the previous round's
+# 0.10 em, back when the same two placements agreed there instead.
+KEYED_TRACKING = 7.0
+
+
+@dataclass(frozen=True)
+class DrawnPlate:
+    """One placement's plate: type size, horizontal padding in em, vertical padding in points."""
+
+    size: float
+    pad_em: float
+    pad_y: float
+
+
+# The two placements no longer share a scale. The bottom is the 2026-09-05 restyle of the
+# comparison deck; the top is the operator's 2026-09-07 edit of one cue in the NanumSquare Round
+# week deck — "made font and box larger and added spacing between fonts", scoped in the same
+# message to the upper-left label. Which is the right instinct: the bottom plate already runs a
+# third of the frame, while the top one sits in a corner and has to carry from the back pews.
+#
+# `pad_y` is back-solved from the box they drew rather than carried across from it: the top plate
+# was dragged on a render made while the line pitch was briefly the face's own 1.135, and what they
+# were judging is the box's total height (114.72), not the padding left over once `line_height`
+# takes its share. So the padding absorbs the pitch correction and the box stays the size it was
+# signed off at.
+KEYED_PLATES = {
+    "top": DrawnPlate(58.0, 1.23, 21.4),
+    "bottom": DrawnPlate(70.0, 1.55, 13.5),
+}
 
 
 
@@ -259,7 +440,10 @@ ANNOUNCE_TITLE = Style(FONT_BOLD, 88, bold=True, line_spacing=12.0, align="left"
 ANNOUNCE_LABEL = Style(FONT_BOLD, 52, ACCENT, bold=True, line_spacing=10.0, align="right")
 ANNOUNCE_VALUE = Style(FONT_REGULAR, 64, line_spacing=10.0, align="left")
 ANNOUNCE_DETAIL = Style(FONT_REGULAR, 64, MUTED, line_spacing=20.0, align="left")
-KEYED_LABEL = Style(FONT_BOLD, 70, bold=True, tracking=2.0)
+# Regular, not Bold, and smaller than Keynote's 70/82 — the operator's own restyle (#247). A keyed
+# label annotates the shot rather than being read across the sanctuary, so it is not held to the
+# body floor the divider and scripture are; size and tracking come from KEYED_PLATES.
+KEYED_LABEL = Style(FONT_REGULAR, 58, tracking=KEYED_TRACKING)
 DIVIDER_KO = Style(FONT_BOLD, 190, bold=True, tracking=12.0)
 DIVIDER_SUB = Style(FONT_BOLD, 76, ACCENT, bold=True, tracking=2.0)
 LITURGY_TITLE = Style(FONT_BOLD, 48, ACCENT, bold=True, tracking=12.0)
@@ -381,7 +565,7 @@ def _wrapped_height(runs: list[rtf.Run], width: float, scale: float) -> float:
     column, line_size = 0.0, 0.0
     for text, style in runs:
         size = style.size * scale
-        char_w = layout.CHAR_W_KO if any("가" <= c <= "힣" for c in text) else layout.CHAR_W_EN
+        char_w = CHAR_W_KO if any("가" <= c <= "힣" for c in text) else CHAR_W_EN
         paragraphs = text.split("\n")
         for i, paragraph in enumerate(paragraphs):
             if i:
@@ -397,7 +581,7 @@ def _wrapped_height(runs: list[rtf.Run], width: float, scale: float) -> float:
                 lines.append(line_size)
                 column -= width
     lines.append(line_size)
-    return sum(s * layout.LINE_PITCH for s in lines) + lead * len(lines)
+    return sum(s * LINE_PITCH for s in lines) + lead * len(lines)
 
 
 def _fit_scale(runs: list[rtf.Run], width: float, height: float, floor: float = 0.55) -> float:
@@ -527,10 +711,10 @@ def verse_rects() -> dict[str, tuple[float, float, float, float]]:
     as the division between two languages rather than as a slide that failed to fill.
     """
     x, y, w, h = CONTENT_RECT
-    ko_label_h = layout.line_height(VERSE_LABEL.size)
-    en_label_h = layout.line_height(VERSE_EN_LABEL.size)
-    ko_body_h = VERSE_KO_LINES * (VERSE_KO.size * layout.LINE_PITCH + VERSE_KO.line_spacing)
-    en_body_h = VERSE_EN_LINES * (VERSE_EN.size * layout.LINE_PITCH + VERSE_EN.line_spacing)
+    ko_label_h = line_height(VERSE_LABEL.size)
+    en_label_h = line_height(VERSE_EN_LABEL.size)
+    ko_body_h = VERSE_KO_LINES * (VERSE_KO.size * LINE_PITCH + VERSE_KO.line_spacing)
+    en_body_h = VERSE_EN_LINES * (VERSE_EN.size * LINE_PITCH + VERSE_EN.line_spacing)
 
     ko_body_y = y + ko_label_h + VERSE_KO_LABEL_GAP
     en_body_y = y + h - en_body_h
@@ -787,34 +971,79 @@ def section_divider(heading: str, subtitle: str = "") -> slide_pb2.Slide:
     return _front_to_back(slide)
 
 
-def keyed_label(heading: str, placement: str = "top", variant: str = "M1") -> slide_pb2.Slide:
+def _text_width(text: str, style: Style) -> float:
+    """One line's laid-out width, on ``_wrapped_height``'s model: an average glyph advance per
+    script, plus the tracking that sits between the glyphs."""
+    char_w = CHAR_W_KO if any("가" <= c <= "힣" for c in text) else CHAR_W_EN
+    return len(text) * style.size * char_w + max(0, len(text) - 1) * style.tracking
+
+
+def _drawn_plate(
+    slide: slide_pb2.Slide,
+    zone: tuple[float, float, float, float],
+    heading: str,
+    style: Style,
+    placement: str,
+    plate: DrawnPlate,
+) -> tuple[float, float, float, float]:
+    """Draw the keyed plate as ``FRAME_BOX`` at label size; return the rect left for the heading.
+
+    The box hugs the heading rather than filling ``zone``, and keeps that zone's anchor: the
+    top-left label stays pinned to its measured corner, the bottom one centres — on the *canvas*,
+    which is where the operator moved it (960, not the measured rect's 982). So a longer heading
+    grows the plate outward without ever sliding the label off the framing it was placed for.
+
+    No stroke, deliberately: the operator took the frame's hairline off both plates (#247), the
+    same call they made on the least-dense full-screen slides in #178.
+    """
+    pad = plate.pad_em * style.size
+    w = _text_width(heading, style) + 2 * pad
+    h = line_height(style.size) + 2 * plate.pad_y
+    x, y, _zw, zh = zone
+    if KEYED_LABEL_ANCHOR[placement] == "center":
+        x, y = CANVAS[0] / 2 - w / 2, y + (zh - h) / 2
+    el.shape(
+        slide, (x, y, w, h), fill=KEYED_PLATE_FILL, roundness=KEYED_PLATE_RADIUS / min(w, h)
+    )
+    return x + pad, y, w - 2 * pad, h
+
+
+def keyed_label(heading: str, placement: str = "top", variant: str = "") -> slide_pb2.Slide:
     """Section heading keyed over the live camera (회개로의 초대 / 죄사함의 선포 / 합심 기도, #234).
 
     These sections *annotate* the shot rather than replace it, so unlike ``section_divider`` the
     slide is chroma-green backed and carries only a small label — an unbacked slide renders black
     and covers the camera instead of keying (#192), the same reason the sung-lyric styles are
-    backed. The plate is a PNG rather than drawn shapes because the #234 bake-off settled it: the
-    operator preferred artwork to every flat, gradient and scrim treatment tried against it.
+    backed.
 
-    ``variant`` picks the plate from ``KEYED_ART`` — ``M1`` is the shipped look; ``A`` is kept so
-    the church group can see it beside M1 in the #241 style review.
+    The plate is **drawn** — ``FRAME_BOX`` at label size, hugging the heading (#247). Passing a
+    ``variant`` places a ``KEYED_ART`` PNG in the measured zone instead, which is what #234's
+    bake-off picked and what the deck shipped until the operator's restyle; they are kept only so
+    the #241 style review can put the drawn plate beside them.
 
     Both placements exist, and both are emitted per section: Keynote carries one per service part,
     but in ProPresenter the operator holds on a cue and chooses by where the label can sit without
     covering the live shot.
     """
     slide = _slide(background=CHROMA_GREEN)
-    (x, y, w, h), size = KEYED_LABEL_PLACEMENTS[placement]
-    style = replace(KEYED_LABEL, size=size)
-    inset = w * KEYED_LABEL_INSET
-    el.image(slide, (x, y, w, h), KEYED_ART[variant][0], fill_frame=False)
+    zone, art_size = KEYED_LABEL_PLACEMENTS[placement]
+    if variant:
+        style = replace(KEYED_LABEL, font=FONT_BOLD, bold=True, size=art_size, tracking=2.0)
+        inset = zone[2] * KEYED_ART[variant].inset
+        rect = (zone[0] + inset, zone[1], zone[2] - 2 * inset, zone[3])
+        el.image(slide, zone, KEYED_ART[variant].image, fill_frame=False)
+    else:
+        plate = KEYED_PLATES[placement]
+        style = replace(KEYED_LABEL, size=plate.size, tracking=KEYED_TRACKING)
+        rect = _drawn_plate(slide, zone, heading, style, placement, plate)
     element = el.text(
-        slide,
-        (x + inset, y, w - 2 * inset, h),
-        rtf.document(_scaled([(heading, style)], w - 2 * inset, h)),
-        style,
+        slide, rect, rtf.document(_scaled([(heading, style)], rect[2], rect[3])), style
     )
-    el.shadow(element)
+    if variant:
+        # Artwork only. The drawn plate is its own separation from the shot, and nothing else in
+        # the deck shadows its type; the PNGs' soft or unoutlined edges leave white glyphs sitting
+        # almost directly on the camera.
+        el.shadow(element)
     return _front_to_back(slide)
 
 
@@ -823,7 +1052,7 @@ def _liturgy_body_rect(slide: slide_pb2.Slide, title: str) -> tuple[float, float
     x, y, w, h = _framed(slide)
     el.text(
         slide,
-        (x, y, w, layout.line_height(LITURGY_TITLE.size)),
+        (x, y, w, line_height(LITURGY_TITLE.size)),
         rtf.plain(title, LITURGY_TITLE),
         LITURGY_TITLE,
     )

@@ -52,13 +52,28 @@ SATURATE = 0.75   # from the sample CSS; easy to miss next to the blur/brightnes
 # the image and `test_the_bake_strengths_and_the_shipped_tint_agree` pins the two files together.
 # Tint is by far the strongest of the three — it alone decides how much photo survives — so a
 # strength that varied blur and brightness but not tint would not be a distinct look at all.
+#
+# Two axes, and they are not equally strong. `soft`/`open`/`mid`/`light` were the #189-era trial:
+# they move blur a lot and tint barely. The measured result is that they barely differ — `open`'s
+# composited frame has a luma standard deviation of **7.2** across the whole 1920×1080, which is
+# flat navy with a suggestion in it. Reviewing the first decks built on `open`, the operator said
+# the church behind the slide is hard to distinguish at all, so `gentle`/`moderate`/`strong` walk
+# the axis that actually decides it: **tint down, brightness up, blur down**, together.
+#   key       composited luma / sd (church-exterior)
+#   open       35.8 /  7.2   flat navy
+#   gentle     40.6 /  9.9
+#   moderate   45.1 / 12.5   ~1.7× today's contrast
+#   strong     54.0 / 17.3   unmistakably a photograph
 STRENGTHS = {
-    "soft": (26, 0.32, 0.62),   # #189 as specified — the photo reads as flat navy
-    "open": (16, 0.32, 0.62),   # SHIPPED: soft's darkness, less blur so the building reads
-    "mid": (20, 0.55, 0.45),    # the source is clearly legible as atmosphere
-    "light": (14, 0.70, 0.32),  # photographic, but bright areas start to fight white text
+    "soft": (26, 0.32, 0.62),      # #189 as specified — the photo reads as flat navy
+    "open": (16, 0.32, 0.62),      # #224 as first shipped — too flat to make the church out
+    "gentle": (14, 0.38, 0.56),    # SHIPPED: the church reads, with the most air under white type
+    "moderate": (12, 0.42, 0.50),  # clearly a building, but a busier ground for 84pt scripture
+    "strong": (10, 0.50, 0.42),    # closest to a photograph; the most it can fight white text
+    "mid": (20, 0.55, 0.45),       # the source is clearly legible as atmosphere
+    "light": (14, 0.70, 0.32),     # photographic, but bright areas start to fight white text
 }
-SHIPPED = "open"
+SHIPPED = "gentle"
 SOURCES = ("church-exterior", "congregation", "sanctuary-cc0")
 
 

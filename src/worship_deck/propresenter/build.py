@@ -362,11 +362,12 @@ def _verse_boxes() -> tuple[tuple[float, float], tuple[float, float]]:
 def _pitch(style: styles.Style) -> float:
     """A line's vertical advance: ``LINE_PITCH`` × the font, plus the style's extra leading.
 
-    The font itself claims more room than its point size — 1.21× for Apple SD Gothic Neo — so
-    budgeting a line at ``size + line_spacing`` overruns every box by ~13% and lands the
-    passage in ProPresenter's "text is too large" state (#178 review).
+    The font itself claims more room than its point size — 1.14× for the deck's NanumSquare Round,
+    1.21× for Apple SD Gothic Neo — so budgeting a line at ``size + line_spacing`` overruns every
+    box by over 10% and lands the passage in ProPresenter's "text is too large" state (#178
+    review). ``styles.LINE_PITCH``, not ``layout``'s: that one is the Keynote template's face.
     """
-    return style.size * layout.LINE_PITCH + style.line_spacing
+    return style.size * styles.LINE_PITCH + style.line_spacing
 
 
 def _verse_cues(
@@ -383,6 +384,8 @@ def _verse_cues(
         en_font=styles.VERSE_EN.size,
         ko_line_h=_pitch(styles.VERSE_KO) / styles.VERSE_KO.size,
         en_line_h=_pitch(styles.VERSE_EN) / styles.VERSE_EN.size,
+        ko_char_w=styles.CHAR_W_KO,
+        en_char_w=styles.CHAR_W_EN,
     )
     return [
         add_cue(
