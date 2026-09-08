@@ -83,9 +83,10 @@ _KOREAN_BOOKS: dict[str, str] = {
 }
 
 # Full Korean book names also appear in bulletins (e.g. the sermon ref "요한복음 4:43-54"),
-# so accept them alongside the abbreviations above. Merged into _KOREAN_BOOKS so both
-# parse_ref() and the bulletin ref-stripping regexes recognize either form.
-_KOREAN_BOOKS.update({
+# so accept them alongside the abbreviations above. Merged into _KOREAN_BOOKS below so both
+# parse_ref() and the bulletin ref-stripping regexes recognize either form, and kept as a
+# constant of its own so korean_ref() can spell an abbreviation back out.
+_KOREAN_FULL_BOOKS: dict[str, str] = {
     "창세기": "Genesis", "출애굽기": "Exodus", "레위기": "Leviticus", "민수기": "Numbers",
     "신명기": "Deuteronomy", "여호수아": "Joshua", "사사기": "Judges", "룻기": "Ruth",
     "사무엘상": "1 Samuel", "사무엘하": "2 Samuel", "열왕기상": "1 Kings", "열왕기하": "2 Kings",
@@ -103,7 +104,11 @@ _KOREAN_BOOKS.update({
     "히브리서": "Hebrews", "야고보서": "James", "베드로전서": "1 Peter", "베드로후서": "2 Peter",
     "요한일서": "1 John", "요한이서": "2 John", "요한삼서": "3 John", "유다서": "Jude",
     "요한계시록": "Revelation",
-})
+}
+_KOREAN_BOOKS.update(_KOREAN_FULL_BOOKS)
+
+# The inverse, for korean_ref(): canonical English name -> full Korean name.
+_FULL_BY_ENGLISH: dict[str, str] = {en: ko for ko, en in _KOREAN_FULL_BOOKS.items()}
 
 _REF_RE = re.compile(
     r"^(?P<book>\S+)\s+(?P<chapter>\d+)(?::(?P<vs>\d+)(?:-(?P<ve>\d+))?)?$"
@@ -143,3 +148,24 @@ def parse_ref(reference: str) -> BibleRef:
         verse_start=int(vs) if vs is not None else None,
         verse_end=int(ve) if ve is not None else None,
     )
+
+
+def korean_ref(reference: str) -> str:
+    """Spell a reference's book out in full Korean: "삼상 14:23-52" -> "사무엘상 14:23-52".
+
+    Bulletins abbreviate, and the verse plates keep that: their reference is a small heading
+    read at a glance beside the 개역한글/ESV label, where 삼상 is what the congregation is used
+    to. A **divider** is the opposite — one line of type across the whole screen announcing
+    what is about to be read — and there the abbreviation reads as a shorthand nobody needs
+    (#250). So the abbreviation stays on the small headings and the full name goes on the plates.
+
+    Returns ``reference`` unchanged when it can't be parsed or the book isn't recognized: a
+    divider subtitle is decoration, and a week with an odd reference should still build.
+    """
+    m = _REF_RE.match(reference.strip())
+    if not m:
+        return reference
+    english = _KOREAN_BOOKS.get(m.group("book"))
+    if english is None:
+        return reference
+    return f"{_FULL_BY_ENGLISH[english]} {reference.strip()[m.end('book'):].lstrip()}"
