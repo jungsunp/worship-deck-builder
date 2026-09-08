@@ -1,5 +1,8 @@
-# Only the shipped strength (make_backdrop.SHIPPED) is committed. `make_backdrop.py --all`
-# renders the alternatives locally for #241's sample sheet and the #225 decision.
+# Only the shipped strength (make_backdrop.SHIPPED, currently `gentle`) is committed.
+# `make_backdrop.py --all` renders the alternatives locally for #241's sample sheet and #225.
 *-soft.png
+*-open.png
+*-moderate.png
+*-strong.png
 *-mid.png
 *-light.png

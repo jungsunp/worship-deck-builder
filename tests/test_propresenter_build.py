@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from PIL import Image
+from PIL import Image, ImageStat
 
 from worship_deck.propresenter import pb  # noqa: F401 -- puts pb/ on sys.path
 
@@ -571,37 +571,143 @@ def test_divider_subtitles_carry_no_brackets(tmp_path):
         assert "[" not in _rtf_text(_slide_of_cue(cue))
 
 
-def test_keyed_label_keys_over_the_camera_on_the_measured_plate():
+def test_keyed_label_keys_over_the_camera_on_a_drawn_plate():
     """#234: these headings annotate the live shot, so the slide is green-backed (an unbacked one
-    renders black and covers the camera, #192) and carries the plate PNG instead of a navy frame."""
+    renders black and covers the camera, #192). #247 replaced the artwork the bake-off had picked:
+    the shipped plate is drawn, so the slide carries no image at all."""
     for placement in ("top", "bottom"):
         slide = styles.keyed_label("회개로의 초대", placement)
         assert _green(slide)
-        assert not _has_frame(slide)
-        assert "m1-angled-bar" in _images_of(slide)
-
-        rect, _ = styles.KEYED_LABEL_PLACEMENTS[placement]
-        art = next(e.element.bounds for e in slide.elements
-                   if e.element.fill.HasField("media"))
-        assert (art.origin.x, art.origin.y) == (rect[0], rect[1])
-        assert (art.size.width, art.size.height) == (rect[2], rect[3])
+        assert _images_of(slide) == []
 
 
-def test_keyed_label_text_stays_inside_the_plate():
+def _plate_bounds(slide):
+    """The drawn plate's own box."""
+    return next(e.element.bounds for e in slide.elements if e.element.fill.enable)
+
+
+def test_the_drawn_plate_is_the_deck_frame_at_label_size():
+    """#247. The artwork was rejected on review as "distant and awkward" beside the rest of the
+    deck, and the mismatch was vocabulary, not interior: it was the only skewed shape in a deck
+    whose furniture is a rounded box with a ~10pt corner. So the plate is ``FRAME_BOX`` at label
+    size — and it carries **no stroke**, which the operator took off both plates restyling the
+    comparison deck, the same call they made on the least-dense slides in #178.
+    """
     for placement in ("top", "bottom"):
-        slide = styles.keyed_label("죄사함의 선포", placement)
-        rect, _ = styles.KEYED_LABEL_PLACEMENTS[placement]
-        text = next(e.element.bounds for e in slide.elements if e.element.HasField("text"))
-        assert text.origin.x >= rect[0]
-        assert text.origin.x + text.size.width <= rect[0] + rect[2]
-        assert text.origin.y >= rect[1]
-        assert text.origin.y + text.size.height <= rect[1] + rect[3]
+        box = next(e.element for e in styles.keyed_label("회개로의 초대", placement).elements
+                   if e.element.fill.enable)
+
+        assert not box.stroke.enable, placement
+        assert box.path.shape.type == graphicsData_pb2.Graphics.Path.Shape.TYPE_ROUNDED_RECTANGLE
+        radius = box.path.shape.rounded_rectangle.roundness * min(
+            box.bounds.size.width, box.bounds.size.height)
+        assert radius == pytest.approx(styles.KEYED_PLATE_RADIUS), placement
+        # Near-opaque, and that is not a style choice: the green showing through a translucent
+        # fill is exactly what the ATEM keyer removes, so it would cut a hole in the plate (#192).
+        assert box.fill.color.alpha >= 0.9, placement
+
+
+def test_the_keyed_plate_is_the_frame_interior_of_the_shipped_backdrop():
+    """``KEYED_PLATE_FILL`` is not a colour someone liked — it is what the 네이비 프레임 frame box
+    actually *is* on a full-screen slide, so the label reads as a piece of the deck laid over the
+    camera (#247). Nothing links the two at runtime: the plate is a flat pre-blended fill (it has
+    to be — a translucent one would key green through), so a backdrop swap would silently leave the
+    label the wrong colour. This re-derives it from the shipped backdrop instead.
+    """
+    backdrop = Image.open(styles.BACKDROP.image).convert("RGB")
+    composited = Image.blend(
+        backdrop, Image.new("RGB", backdrop.size, styles.NAVY), styles.BACKDROP.tint)
+    mean = ImageStat.Stat(composited).mean
+    *ink, alpha = styles.FRAME_FILL_RGBA
+    interior = [m + (c - m) * alpha for m, c in zip(mean, ink)]
+
+    assert styles.KEYED_PLATE_FILL[:3] == pytest.approx(interior, abs=1.0)
+
+
+def test_the_plate_hugs_its_heading_and_keeps_its_placement_anchor():
+    """A fixed 594pt bar left a lot of empty plate around a four-syllable heading, which the
+    operator closed up by hand (#247). Sizing the box to the text must not slide the label out from
+    under the camera framing it was placed for: the top-left one stays pinned to its measured
+    corner, the bottom one centres on the canvas — 960, where the operator moved it."""
+    for placement in ("top", "bottom"):
+        zone, _art_size = styles.KEYED_LABEL_PLACEMENTS[placement]
+        short = _plate_bounds(styles.keyed_label("축도", placement))
+        long = _plate_bounds(styles.keyed_label("회개로의 초대", placement))
+
+        assert short.size.width < long.size.width, placement
+        assert long.size.width < zone[2], placement
+        assert short.size.height == pytest.approx(long.size.height), placement
+        if styles.KEYED_LABEL_ANCHOR[placement] == "left":
+            assert (short.origin.x, short.origin.y) == (zone[0], zone[1])
+        else:
+            for box in (short, long):
+                assert box.origin.x + box.size.width / 2 == pytest.approx(styles.CANVAS[0] / 2)
+                assert box.origin.y + box.size.height / 2 == pytest.approx(zone[1] + zone[3] / 2)
+
+
+def test_the_keyed_heading_is_set_at_the_operators_size_weight_and_tracking():
+    """Read back off two hand-restyles (#247): Regular rather than Bold, and 58/70 rather than
+    Keynote's 70/82 — the top placement grew on the second pass, where the bottom did not. Tracking
+    is 7.0pt on both, which is the number the two files agree on. RTF holds tracking as size × 20."""
+    assert not styles.KEYED_LABEL.bold
+    assert styles.KEYED_LABEL.font == styles.FONT_REGULAR
+
+    for placement, plate in styles.KEYED_PLATES.items():
+        rtf_data = next(e.element.text.rtf_data
+                        for e in styles.keyed_label("죄사함의 선포", placement).elements
+                        if e.element.HasField("text"))
+
+        assert styles.FONT_REGULAR.encode() in rtf_data
+        assert b"\\b\\fs" not in rtf_data  # `\\blue255` lives in the colour table; the weight does not
+        # The heading must not be shrunk to fit: the box was sized from this very text.
+        assert f"\\fs{round(plate.size * 2)}".encode() in rtf_data, placement
+        assert f"\\expndtw{round(styles.KEYED_TRACKING * 20)}".encode() in rtf_data
+
+
+def test_the_keyed_plates_reproduce_the_operators_own_boxes():
+    """The two placements were sized by hand in ProPresenter on different days, and the constants
+    are derived from those files rather than chosen (#247). This pins the derivation to what the
+    operator's decks actually measure, so a change to the padding model, the face's advance or the
+    line pitch cannot quietly resize a plate that was signed off by eye.
+
+    The top is cue 66 of the `2026-09-06 NanumSquare Round` week deck (2026-09-07), in the shipped
+    face — so it pins outright. The bottom is `Style Candidates 247 v3.pro` (2026-09-05), drawn
+    before the face changed, so only its *height* survives literally: its width legitimately moved
+    with NanumSquare Round's wider Hangul.
+    """
+    top = _plate_bounds(styles.keyed_label("회개로의 초대", "top"))
+    assert (top.origin.x, top.origin.y) == pytest.approx((20.0, 23.0), abs=0.5)
+    assert (top.size.width, top.size.height) == pytest.approx((536.79, 114.72), abs=0.5)
+
+    bottom = _plate_bounds(styles.keyed_label("죄사함의 선포", "bottom"))
+    assert bottom.size.height == pytest.approx(113.0, abs=0.5)
+
+
+def test_the_deck_measures_itself_against_the_face_it_is_set_in():
+    """The .pro deck is set in NanumSquare Round; ``master.key`` is not (#247). Every width and
+    height estimate in this module is calibrated to a face, so the two builders must not share one
+    set of constants — and the ratios must be scaled onto ``layout``'s, not substituted for them,
+    because those carry a deliberate margin over what Apple SD Gothic Neo really measures.
+
+    ``scripts/measure_advance.swift`` is where these numerators come from.
+    """
+    assert styles.FONT_REGULAR == "NanumSquareRoundR"
+    assert styles.CHAR_W_KO == pytest.approx(layout.CHAR_W_KO * 0.7042 / 0.6737)
+    assert styles.CHAR_W_EN == pytest.approx(0.5010)  # measured, not scaled — see its comment
+    # Never *under* the Keynote baseline. NanumSquare Round's own line is shorter than Apple SD
+    # Gothic Neo's, but it has no U+2022 and 교회 소식 is bulleted, so CoreText's fallback face sets
+    # the real line height on exactly the plates that are tightest.
+    assert styles.LINE_PITCH == pytest.approx(layout.LINE_PITCH)
+    assert styles.CHAR_W_KO > layout.CHAR_W_KO
+    assert styles.CHAR_W_EN > layout.CHAR_W_EN
 
 
 def test_keyed_art_ships_every_plate_it_names():
-    """The .pro embeds an absolute file:// URL, so a missing asset is a blank slide at church."""
-    for path, _ in styles.KEYED_ART.values():
-        assert Path(path).exists(), path
+    """Kept only for the #241 review, but the .pro embeds an absolute file:// URL, so a missing
+    asset would be a blank slide at church if one is ever put back into service."""
+    for variant, plate in styles.KEYED_ART.items():
+        assert Path(plate.image).exists(), plate.image
+        assert _images_of(styles.keyed_label("회개로의 초대", "top", variant)) != []
 
 
 def test_only_the_camera_annotating_sections_get_a_keyed_label(tmp_path):
@@ -617,10 +723,11 @@ def test_only_the_camera_annotating_sections_get_a_keyed_label(tmp_path):
     for name in ("회개로의 초대", "죄사함의 선포", "합심 기도"):
         cues = [by_name[f"{name} ({p})"] for p in ("위", "아래")]
         slides = [_slide_of_cue(c) for c in cues]
-        assert all(_green(s) and "m1-angled-bar" in _images_of(s) for s in slides)
-        assert [s.elements[0].element.bounds.origin.y for s in slides] == [
-            styles.KEYED_LABEL_PLACEMENTS[p][0][1] for p in ("top", "bottom")
-        ]
+        assert all(_green(s) and _images_of(s) == [] for s in slides)  # the plate is drawn (#247)
+        assert {round(_plate_bounds(s).origin.y) for s in slides} == {
+            round(styles.keyed_label(name, p).elements[-1].element.bounds.origin.y)
+            for p in ("top", "bottom")
+        }
 
     for name in ("봉 헌", "교회 소식", "예배의 부름", "축도"):
         plate = _slide_of_cue(_cues_of(pres, name)[0])
@@ -1234,7 +1341,7 @@ def test_a_text_block_is_budgeted_with_the_leading_after_its_last_line():
     ``scripts/audit_pro_layout.py`` applies the same rule.
     """
     style = replace(styles.VERSE_KO, size=100.0, line_spacing=20.0)
-    per_line = 100.0 * layout.LINE_PITCH + 20.0
+    per_line = 100.0 * styles.LINE_PITCH + 20.0
 
     one = styles._wrapped_height([("가", style)], 4000.0, 1.0)
     three = styles._wrapped_height([("가\n나\n다", style)], 4000.0, 1.0)

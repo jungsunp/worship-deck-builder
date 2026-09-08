@@ -110,11 +110,11 @@ def test_the_weekly_deck_bundles_its_shipped_artwork(tmp_path):
     with zipfile.ZipFile(bundle.write_bundle(pro)) as zf:
         names = zf.namelist()
 
-    # M1 keyed-art plate (#234) is the first non-opening-plate media the deck references, since
-    # 회개로의 초대 falls early in the service and the offering hymn PNGs (later) aren't fetched here.
+    # Just the opening plates' artwork and the backdrop. The keyed labels used to add a plate PNG
+    # here; since #247 that plate is drawn from shapes, so the weekly deck references no other
+    # media at all until the offering hymn pages (not fetched here) arrive.
     assert names == [
-        styles.LOGO, styles.BACKDROP.image, *styles.PRE_SERVICE_IMAGES,
-        styles.KEYED_ART["M1"][0], "week.pro",
+        styles.LOGO, styles.BACKDROP.image, *styles.PRE_SERVICE_IMAGES, "week.pro",
     ]
     assert all(n.startswith("/") for n in names[:-1])  # absolute, leading slash preserved
 
