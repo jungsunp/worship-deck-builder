@@ -108,10 +108,11 @@ KEYED_CANDIDATES = [
 # label, family, regular, bold, then the face's own CoreText metrics straight out of
 # `scripts/measure_advance.swift`: Hangul body advance, Latin advance, inter-line pitch.
 #
-# The metrics are applied as **ratios** against Apple SD Gothic Neo's, not as replacements. The
-# deck's `layout` constants each sit a little off what that face really measures (0.83 vs 0.6737,
-# 1.21 vs 1.2000), and the offset is deliberate — the estimate has to stay conservative against
-# `measure_text.swift`. Scaling keeps that margin; substituting would spend it.
+# How each is applied is `_use_font` below, and the reasoning is on the constants it feeds —
+# `styles.CHAR_W_KO` / `CHAR_W_EN` / `LINE_PITCH`. In short: the Hangul advance is scaled onto
+# layout's estimate because that one carries a deliberate margin, the Latin advance is taken as
+# measured because layout's carries none, and the pitch is whichever of the two is taller, because
+# CoreText falls back to another face for glyphs a Korean face lacks (a bullet, most of all).
 FONT_CANDIDATES = {
     "nanum": ("NanumSquare Round (현행)", styles.FONT_FAMILY,
               styles.FONT_REGULAR, styles.FONT_BOLD, 0.7042, 0.5010, 1.1350),
