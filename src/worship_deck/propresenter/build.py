@@ -57,7 +57,8 @@ from worship_deck.parse import ServiceData
 
 from . import announce, content, elements, rtf, styles
 
-# The dev/church ProPresenter build the vendored protos are pinned to (#191 re-pins to 18.4).
+# The ProPresenter build the vendored protos are pinned to, stamped into `application_info`.
+# The church's 18.4 opens these decks and restamps it, so the pin stays 21.4 (#191).
 PP_VERSION = (21, 4)
 
 # The service order — top to bottom, weekly groups from ServiceData and fixed-wording ones from

@@ -71,9 +71,9 @@ decoded TheCove theme), one ProPresenter group per section. Because the slides
 are baked PNGs, styles can't be tweaked live in ProPresenter during the
 meeting — live-editable native text slides need the #172 text-element
 generation (planned follow-up for the finalist options). The `.pro` was
-authored against PP 21.4; whether the church's 18.4 opens it is the open #191
-question — trying it there doubles as that verification, and the Keynote deck
-is the meeting fallback if it doesn't.
+authored against PP 21.4; the church's 18.4 opens 21.4-written decks (verified
+with a real weekly deck, #191), and the Keynote deck remains the meeting
+fallback.
 
 Inputs live in git-ignored `data/style-samples/`: `fonts/` (Pretendard, SUIT,
 Noto Sans KR, Noto Serif KR — free downloads), `bg/` (frames extracted from

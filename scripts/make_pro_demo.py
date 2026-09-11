@@ -103,7 +103,8 @@ KEYED_CANDIDATES = [
 # Plex Sans KR and Gothic A1 were dropped at the plate stage.
 #
 # Every face here has to be installed on the church mini before a deck set in it renders there
-# (#191/#197): ProPresenter substitutes silently, so a missing face looks like a style bug.
+# (only NanumSquare Round is, since #191): ProPresenter substitutes silently, so a missing face
+# looks like a style bug.
 #
 # label, family, regular, bold, then the face's own CoreText metrics straight out of
 # `scripts/measure_advance.swift`: Hangul body advance, Latin advance, inter-line pitch.
