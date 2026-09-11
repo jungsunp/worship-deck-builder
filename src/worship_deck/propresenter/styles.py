@@ -237,8 +237,9 @@ FRAME_RADIUS = 0.01  # ProPresenter roundness is a fraction of the shorter side 
 # the deck's 10pt rounded furniture. NanumSquare Round won a five-face bake-off run as full weekly
 # decks (SUIT second, both kept in `scripts/make_pro_demo.py` for the #241 review). SIL OFL.
 #
-# **This face must be installed on the church mini** (#191/#197). ProPresenter substitutes
-# silently for a font it cannot find, so a missing face looks like a style bug, not an error.
+# **This face must be installed on the church mini** — done on mini #1 on 2026-09-09 (#191; README
+# "Presentation machine"). ProPresenter substitutes silently for a font it cannot find, so a
+# missing face looks like a style bug, not an error.
 FONT_FAMILY = "NanumSquareRound"
 FONT_BOLD = "NanumSquareRoundB"
 FONT_REGULAR = "NanumSquareRoundR"

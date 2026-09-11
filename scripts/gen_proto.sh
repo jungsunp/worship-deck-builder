@@ -4,11 +4,13 @@
 # The .proto files under src/worship_deck/propresenter/proto/ are a pinned snapshot
 # of greyshirtguy/ProPresenter7-Proto's autogen-proto, matching the installed
 # ProPresenter version (see proto/version.txt and proto/SOURCE.md). They are
-# UNOFFICIAL and version-sensitive: re-vendor + regenerate when ProPresenter is
-# upgraded on the church Mac mini.
+# UNOFFICIAL: re-vendor + regenerate only if a ProPresenter release fails to open
+# a generated deck (the 21.4 pin opens on the church's 18.4, #191).
 #
 # Requires protoc (`brew install protobuf`). The generated *_pb2.py land in
-# src/worship_deck/propresenter/pb/ and are committed so runtime needs no protoc.
+# src/worship_deck/propresenter/pb/ and are git-ignored — rerun this after every
+# fresh checkout and in every new worktree. Only generating needs protoc; the
+# church mini that opens the decks needs none of this.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
