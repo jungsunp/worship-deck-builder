@@ -376,7 +376,7 @@ def test_search_scored_propagates_network_error(monkeypatch: pytest.MonkeyPatch)
 def test_lookup_live_bojwa(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(online, "_THROTTLE_S", 2.5)  # autouse fixture zeroed it
     try:
-        httpx.get("http://gasazip.com", timeout=5)
+        httpx.get(online._BASE, timeout=5)
     except httpx.HTTPError:
         pytest.skip("gasazip.com unreachable")
     match, _ = online.lookup(["보좌 앞으로"], _BOJWA_FRAGMENTS)
