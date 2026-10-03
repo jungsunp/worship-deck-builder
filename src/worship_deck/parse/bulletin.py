@@ -249,6 +249,9 @@ def _extract_announcements(page) -> list[dict]:
     before the first numbered item (the column tagline) are skipped. The 봉사자 모집 footer
     sits in bordered boxes below the list, so the scan stops at the first such box.
 
+    The numbering is hand-typed, so the space after "N." is sometimes missing ("1.성찬식");
+    both spellings start a new item, and a decimal ("11.1") never does.
+
     Some titles run an inline sentence on the same visual line ("N. 임직식 - 6/28 …
     있습니다."); pdfplumber jitters that tail by ~1px, so rows are clustered with
     ``_cluster_rows`` (not bucketed by exact top) to keep the line whole, then the title
@@ -268,7 +271,10 @@ def _extract_announcements(page) -> list[dict]:
     cur: dict | None = None
     for row in _cluster_rows(mid_words):
         text = " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])).strip()
-        m = re.match(r"^(\d+)\.\s+(.+)", text)
+        # The space after "N." is typed by hand, so some weeks it is missing ("1.성찬식", #256) —
+        # accept either a space or a non-digit, so a decimal ("11.1") is not read as a
+        # new item. Without this the item AND its detail rows vanish silently.
+        m = re.match(r"^(\d+)\.(?:\s+|(?=\D))(.+)", text)
         if m:
             title, sep, tail = m.group(2).strip().partition(" - ")
             cur = {"number": m.group(1), "title": title.strip(),
