@@ -23,7 +23,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-_BASE = "http://gasazip.com"
+_BASE = "https://gasazip.com"  # http 301s to https since 2026-10; httpx raises on 3xx
 _HEADERS = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
 _TIMEOUT = 10.0
 
@@ -88,7 +88,7 @@ def _throttled_get(url: str, **kwargs) -> httpx.Response:
     if wait > 0:
         time.sleep(wait)
     try:
-        return httpx.get(url, **kwargs)
+        return httpx.get(url, follow_redirects=True, **kwargs)
     finally:
         _last_request = time.monotonic()
 
