@@ -62,6 +62,27 @@ def test_extract_announcements_keeps_same_line_tail_with_its_own_item() -> None:
     assert by_num["3"]["detail"][0] == "6/28 있습니다."
     assert "(피택" in by_num["3"]["detail"][1]
 
+
+def test_extract_announcements_accepts_missing_space_after_number() -> None:
+    """"1.성찬식" (no space after the period) still starts item 1, with its detail attached.
+
+    The 2026-10-04 bulletin typed item 1 that way; the old `\\d+\\.\\s+` match skipped the
+    title row, and its detail row then fell into the pre-first-item header and vanished too.
+    A decimal ("11.1") must still not be read as a new item.
+    """
+    words = [
+        _mw("1.성찬식", 110),
+        _mw("10/4", 120), _mw("(주일)", 120, x0=372), _mw("예배중", 120, x0=394),
+        _mw("2.", 137), _mw("제직회", 137, x0=362),
+        _mw("11.1", 147), _mw("기도회", 147, x0=372),  # a date, not item 11
+    ]
+    anns = _extract_announcements(_FakePage(words))
+    assert [a["number"] for a in anns] == ["1", "2"]
+    assert anns[0]["title"] == "성찬식"
+    assert anns[0]["detail"] == ["10/4 (주일) 예배중"]
+    assert anns[1]["detail"] == ["11.1 기도회"]
+
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
