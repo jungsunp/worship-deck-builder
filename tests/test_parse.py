@@ -16,6 +16,7 @@ from worship_deck.parse.bulletin import (
     _masthead_date,
     _parse_offering_hymn,
     _part_cell,
+    _reading_order,
     _split_content,
     _split_performer,
     announcement_blocks,
@@ -341,6 +342,24 @@ def test_split_performer_no_gap_performer_only_is_performer() -> None:
     title, perf = _split_performer(words)
     assert title == []
     assert _texts(perf) == ["강선우", "목사"]
+
+
+# ── _reading_order() unit tests ───────────────────────────────────────────────
+# A long 말씀 cell wraps its ref onto a second line ~8pt lower; sorting by x alone interleaved
+# the lines into "단단한 마음 (삼상 - 하나님이 17:23-37) …" and lost the ref (2026-10-25).
+
+def test_reading_order_keeps_wrapped_line_after_first() -> None:
+    words = [
+        {"text": t, "x0": x, "x1": x + 10, "top": top}
+        for t, x, top in [
+            ("단단한", 112.5, 285.0), ("마음", 135.3, 285.0), ("-", 151.1, 285.0),
+            ("하나님이", 156.2, 285.0), ("보시는", 185.8, 285.0), ("마음", 208.5, 285.0),
+            ("2", 224.4, 285.0), ("(삼상", 146.3, 293.0), ("17:23-37)", 164.9, 293.0),
+        ]
+    ]
+    content = " ".join(w["text"] for w in _reading_order(words))
+    assert content == "단단한 마음 - 하나님이 보시는 마음 2 (삼상 17:23-37)"
+    assert _split_content(content) == ("단단한 마음 - 하나님이 보시는 마음 2", "", "삼상 17:23-37")
 
 
 # ── _find_row() unit tests ────────────────────────────────────────────────────
