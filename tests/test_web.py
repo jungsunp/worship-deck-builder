@@ -1074,6 +1074,38 @@ def test_put_run_looks_up_changed_extra_refs(_runs, monkeypatch) -> None:
     assert store.load(_runs).sermon_extra_passages == saved.sermon_extra_passages
 
 
+def test_put_run_sermon_title_ref_editable_and_relooked_up(_runs, monkeypatch) -> None:
+    store.save(_runs, _fake_run())
+    calls: list[str] = []
+
+    def _fake_lookup(ref):
+        if ref == "요 99:1":
+            raise ValueError("no such chapter")
+        calls.append(ref)
+        return [Verse(number=23, korean="한글", english="english")]
+
+    monkeypatch.setattr(app_module.verses, "lookup_verses", _fake_lookup)
+    run = client.get(f"/runs/{_runs}").json()
+    run["sermon_title"] = " 단단한 마음 "
+    run["sermon_ref"] = "삼상 17: 23 - 37"
+    assert "warnings" not in client.put(f"/runs/{_runs}", json=run).json()
+    saved = store.load(_runs)
+    assert (saved.sermon_title, saved.sermon_ref) == ("단단한 마음", "삼상 17:23-37")
+    assert calls == ["삼상 17:23-37"]
+    assert saved.sermon_passage == [{"number": 23, "korean": "한글", "english": "english"}]
+    assert {"sermon_title", "sermon_ref"} <= set(saved.edited_fields)  # kept on re-assemble
+
+    # unchanged ref → no lookup; a bad ref warns, clears the passage, and still saves
+    calls.clear()
+    client.put(f"/runs/{_runs}", json=client.get(f"/runs/{_runs}").json())
+    assert calls == []
+    run = client.get(f"/runs/{_runs}").json()
+    run["sermon_ref"] = "요 99:1"
+    body = client.put(f"/runs/{_runs}", json=run).json()
+    assert "요 99:1" in body["warnings"][0]
+    assert store.load(_runs).sermon_passage == []
+
+
 def test_put_run_failed_extra_ref_warns_and_saves(_runs, monkeypatch) -> None:
     store.save(_runs, _fake_run())
 

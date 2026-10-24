@@ -40,6 +40,9 @@ _PART_GAP = 16
 # Worship rows jitter by ~2px between the part-name and content cells, so words are clustered
 # into a row when their tops fall within this many points of each other.
 _ROW_JITTER = 8
+# Within one content cell, a wrapped second line sits ~8pt below the first while words on the
+# same line share a top to within a point — a bigger jump than this is a new line.
+_LINE_GAP = 4
 
 # The performer (다함께/성가대/clergy/ensemble) sits in a right sub-column of the content cell.
 # It is separated from the title by a clear horizontal gap and never starts left of _LEADER_X,
@@ -213,6 +216,22 @@ def _split_performer(content_words: list[dict]) -> tuple[list[dict], list[dict]]
     return (s[:k], s[k:]) if k is not None else (s, [])
 
 
+def _reading_order(words: list[dict]) -> list[dict]:
+    """Order a cell's words line by line, then left to right.
+
+    A long content cell wraps onto a second line ~8pt lower ("단단한 마음 - 하나님이 보시는 마음 2"
+    over "(삼상 17:23-37)"); sorting by x alone interleaves the two lines and splits the Bible
+    ref apart. Words on one line share a top to within a point, so a > _LINE_GAP jump starts a
+    new line.
+    """
+    lines: list[list[dict]] = []
+    for w in sorted(words, key=lambda w: w["top"]):
+        if not lines or w["top"] - lines[-1][0]["top"] > _LINE_GAP:
+            lines.append([])
+        lines[-1].append(w)
+    return [w for line in lines for w in sorted(line, key=lambda w: w["x0"])]
+
+
 def _parse_worship_order(page) -> list[dict]:
     """Extract the main worship order from page 1's left column.
 
@@ -233,7 +252,7 @@ def _parse_worship_order(page) -> list[dict]:
         if (not part or part.startswith(("인도", "(*"))
                 or not (gutter or title_words or perf_words)):
             continue  # column title, the 인도 line, the (*표는…) footnote
-        content = " ".join(gutter + [w["text"] for w in title_words])
+        content = " ".join(gutter + [w["text"] for w in _reading_order(title_words)])
         title, tok_leader, ref = _split_content(content)
         geo_leader = " ".join(w["text"] for w in perf_words)
         leader = " ".join(x for x in (tok_leader, geo_leader) if x).strip()

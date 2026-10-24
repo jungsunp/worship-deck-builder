@@ -49,6 +49,8 @@ _EDITABLE_PARSED = (
     "announcements",
     "offering_hymn_number",
     "offering_hymn_title",
+    "sermon_title",
+    "sermon_ref",
 )
 
 # Human-readable labels for the re-assemble confirmation (#105): names exactly which sections a
@@ -61,6 +63,8 @@ _EDIT_LABELS = {
     "announcements": "교회소식 announcements (edited)",
     "offering_hymn_number": "봉헌 hymn number (edited)",
     "offering_hymn_title": "봉헌 hymn title (edited)",
+    "sermon_title": "말씀 sermon title (edited)",
+    "sermon_ref": "말씀 Bible ref (edited)",
 }
 _REFRESH_LABELS = {
     "worship_songs": "찬양 songs (re-transcribed)",
@@ -70,6 +74,8 @@ _REFRESH_LABELS = {
     "announcements": "교회소식 announcements (re-parsed)",
     "offering_hymn_number": "봉헌 hymn number",
     "offering_hymn_title": "봉헌 hymn title",
+    "sermon_title": "말씀 sermon title",
+    "sermon_ref": "말씀 Bible ref",
 }
 
 
@@ -771,6 +777,17 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     data.sermon_extra_refs = [
         re.sub(r"\s*([:-])\s*", r"\1", r.strip()) for r in data.sermon_extra_refs if r.strip()
     ]
+    # The 말씀 title/ref are editable too (a wrapped bulletin cell can mangle them): a changed ref
+    # re-looks-up the main passage here, same as the extra refs below.
+    data.sermon_title = data.sermon_title.strip()
+    data.sermon_ref = re.sub(r"\s*([:-])\s*", r"\1", data.sermon_ref.strip())
+    if data.sermon_ref != (existing.sermon_ref if existing else ""):
+        data.sermon_passage = []
+        if data.sermon_ref:
+            try:
+                data.sermon_passage = [asdict(v) for v in verses.lookup_verses(data.sermon_ref)]
+            except Exception:  # noqa: BLE001 - bad ref or lookup hiccup; keep the other edits
+                warnings.append(f"말씀 구절 '{data.sermon_ref}' 조회 실패 — 확인 후 다시 저장")
     if data.sermon_extra_refs != (existing.sermon_extra_refs if existing else []):
         data.sermon_extra_passages = []
         for ref in data.sermon_extra_refs:
