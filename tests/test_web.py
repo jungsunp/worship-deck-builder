@@ -1178,7 +1178,7 @@ def _seed_hymn_pngs(tmp_path, monkeypatch, date, names) -> list[str]:
 
 def test_list_hymn_slides(_runs, tmp_path, monkeypatch) -> None:
     paths = _seed_hymn_pngs(tmp_path, monkeypatch, _runs, ["slide-1.png", "slide-2.png", "slide-3.png"])
-    assert client.get(f"/runs/{_runs}/hymn").json() == {"images": paths}
+    assert client.get(f"/runs/{_runs}/hymn").json() == {"images": paths, "labels": [None] * 3}
 
 
 def test_list_hymn_slides_empty_when_no_dir(_runs, tmp_path, monkeypatch) -> None:

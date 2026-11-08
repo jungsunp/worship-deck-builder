@@ -23,8 +23,11 @@ LibreOffice ``soffice`` (pptx → pdf) and poppler ``pdftoppm`` (pdf → png).
 
 from __future__ import annotations
 
+import hashlib
+import re
 import subprocess
 import tempfile
+import zipfile
 from pathlib import Path
 
 BIBLETOPPT = "https://bibletoppt.com"
@@ -135,3 +138,36 @@ def fetch_hymn_slides(
     """
     pptx = download_hymn_ppt(number, work_dir, design)
     return pptx_to_pngs(pptx, work_dir)
+
+
+def verse_labels(pptx: Path) -> list[dict]:
+    """Which verse each slide of a bibletoppt hymn PPTX shows, in slide (= PNG page) order.
+
+    The slides are flat images, but each carries a separate small "verse dots" picture (the
+    1·2·3·4 pager in the corner) that is byte-identical for every page of one verse and differs
+    between verses. Grouping slides by that last image therefore gives the verse number (order of
+    first appearance) and the page within it: ``{"verse": 2, "page": 1, "pages": 2, "label": "2절 (1/2)"}``
+    (no ``(i/k)`` when the verse has a single page). A slide without that picture — or an older
+    two-image PPTX layout — gets ``None`` rather than a guess.
+    """
+    with zipfile.ZipFile(pptx) as z:
+        names = z.namelist()
+        count = len([n for n in names if re.fullmatch(r"ppt/slides/slide\d+\.xml", n)])
+        keys: list[str | None] = []
+        for i in range(1, count + 1):
+            rels = z.read(f"ppt/slides/_rels/slide{i}.xml.rels").decode("utf-8")
+            media = re.findall(r'Target="\.\./media/([^"]+)"', rels)
+            keys.append(hashlib.md5(z.read(f"ppt/media/{media[-1]}")).hexdigest() if len(media) >= 3 else None)
+    order = list(dict.fromkeys(k for k in keys if k))
+    totals = {k: keys.count(k) for k in order}
+    seen: dict[str, int] = {}
+    out: list[dict | None] = []
+    for k in keys:
+        if k is None:
+            out.append(None)
+            continue
+        seen[k] = seen.get(k, 0) + 1
+        verse, n = order.index(k) + 1, totals[k]
+        label = f"{verse}절" + (f" ({seen[k]}/{n})" if n > 1 else "")
+        out.append({"verse": verse, "page": seen[k], "pages": n, "label": label})
+    return out

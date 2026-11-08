@@ -127,6 +127,10 @@
   .hymnthumb .badge { position: absolute; top: 0; right: 0; padding: 0.1rem 0.4rem;
                       font-size: 0.75rem; color: #fff; background: var(--green); }
   .hymnthumb.dropped .badge { background: var(--gray-500); }
+  .hymnthumb .vlabel { position: absolute; left: 0; bottom: 0; padding: 0.1rem 0.4rem;
+    background: rgba(0,0,0,0.65); color: #fff; font-size: 0.8rem; }
+  .hymnwarn { margin-top: 0.4rem; padding: 0.4rem 0.6rem; border-radius: 6px; font-size: 0.85rem;
+    background: #fff4d6; color: #7a5300; border: 1px solid #f0c96a; }
   .hymncount { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.4rem; }
   #status { color: var(--gray-600); white-space: pre-wrap; }
   #status.err { color: var(--red); border-color: var(--red); }
@@ -887,6 +891,7 @@ function mkInput(id, ph, val) {
 // Full ordered list of downloaded hymn PNG paths (kept + dropped); the grid renders from
 // this while run.offering_hymn_images holds the kept subset the build will place (#84/#108).
 let hymnAll = [];
+let hymnLabels = [];  // parallel to hymnAll: {verse, label} or null
 
 function renderHymn(div) {
   div.appendChild(mkInput('hymnNumber', '찬송가 번호', run.offering_hymn_number));
@@ -895,8 +900,12 @@ function renderHymn(div) {
   div.appendChild(grid);
   const count = document.createElement('div'); count.id = 'hymncount'; count.className = 'hymncount';
   div.appendChild(count);
+  const warn = document.createElement('div'); warn.id = 'hymnwarn'; warn.className = 'hymnwarn';
+  warn.hidden = true;
+  div.appendChild(warn);
   fetch('/runs/' + date + '/hymn').then(r => r.json()).then(j => {
     hymnAll = j.images || [];
+    hymnLabels = j.labels || [];
     renderHymnGrid();
   });
 }
@@ -916,8 +925,24 @@ function renderHymnGrid() {
     const badge = document.createElement('span'); badge.className = 'badge';
     badge.textContent = on ? '✓' : '제외';
     cell.append(img, badge);
+    const lab = hymnLabels[hymnAll.indexOf(path)];
+    if (lab) {
+      const v = document.createElement('span'); v.className = 'vlabel'; v.textContent = lab.label;
+      cell.appendChild(v);
+    }
     grid.appendChild(cell);
   });
+  // Bulletin named only some verses but every page is still kept → the extra verses would be sung-over.
+  const warn = document.getElementById('hymnwarn');
+  if (warn) {
+    const present = [...new Set(hymnLabels.filter(Boolean).map(l => l.verse))];
+    const named = (run.offering_hymn_verses || []).map(Number);
+    const extra = present.filter(v => !named.includes(v));
+    const allKept = hymnAll.length > 0 && kept.length >= hymnAll.length;
+    warn.hidden = !(named.length && extra.length && allKept);
+    warn.textContent = '주보에는 ' + named.join('·') + '절만 나와 있는데 모든 슬라이드가 선택되어 있습니다 — '
+      + extra.join('·') + '절 슬라이드를 제외하세요.';
+  }
   const c = document.getElementById('hymncount');
   if (c) c.textContent = '선택 ' + (run.offering_hymn_images || []).length + ' / ' + hymnAll.length + ' 슬라이드';
 }
