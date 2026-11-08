@@ -52,9 +52,21 @@ _LEADER_GAP = 18   # min whitespace (pt) between the title and the performer sub
 _LEADER_X = 230    # the performer sub-column never starts left of this
 
 # Announcement (교회소식) middle-column bounds: the column sits at x≈348–688 and the 기도제목
-# (prayer-topics) column begins at x≈694, so _MID_RIGHT must stay left of it. Each rendered row
-# is one intended line (the bulletin breaks lines by hand), so rows are kept as-is.
+# (prayer-topics) column begins at x≈694, so _MID_RIGHT must stay left of it.
 _MID_LEFT, _MID_RIGHT = 339, 692
+# A detail row ending this far right ran out of column (the widest rows end at ≈670–682), so it
+# is a width wrap even when it doesn't end a sentence — "…강선우 목사님과 모든 교회학교".
+_WRAP_X = 640
+
+# 교회소식 detail cleanup: the bulletin's column is a third of a slide's width, so its hand
+# line breaks land mid-line on screen and the operator re-joined them by hand every week, along
+# with spacing the bullets and setting them off from the prose. These shapes decide which rows
+# are prose (joined into one paragraph) and which keep their own line.
+_ANN_BULLET = re.compile(r"^[•·]")
+_ANN_LABEL = re.compile(r"^[가-힣A-Za-z][^\s:：]{0,11}\s*[:：]")  # "테마(Theme): …", "기간: …"
+_ANN_DATE = re.compile(r"^\d{1,2}/\d{1,2}")
+_ANN_TRAILING_PAREN = re.compile(r"\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*$")
+_ANN_CONTACT = re.compile(r"\s*(\(문의\s*[:：][^()]*(?:\([^()]*\)[^()]*)*\))\s*$")
 
 
 @dataclass
@@ -290,6 +302,7 @@ def _extract_announcements(page) -> list[dict]:
     cur: dict | None = None
     for row in _cluster_rows(mid_words):
         text = " ".join(w["text"] for w in sorted(row, key=lambda w: w["x0"])).strip()
+        wrapped = max(w["x1"] for w in row) >= _WRAP_X
         # The space after "N." is typed by hand, so some weeks it is missing ("1.성찬식", #256) —
         # accept either a space or a non-digit, so a decimal ("11.1") is not read as a
         # new item. Without this the item AND its detail rows vanish silently.
@@ -297,10 +310,12 @@ def _extract_announcements(page) -> list[dict]:
         if m:
             title, sep, tail = m.group(2).strip().partition(" - ")
             cur = {"number": m.group(1), "title": title.strip(),
-                   "detail": [tail.strip()] if sep else []}
+                   "detail": [tail.strip()] if sep else [],
+                   "wrapped": [wrapped] if sep else []}
             anns.append(cur)
         elif cur is not None:  # detail row (skip any header text before the first numbered item)
             cur["detail"].append(text)
+            cur["wrapped"].append(wrapped)
     return anns
 
 
@@ -328,19 +343,75 @@ def _announcement_blocks(anns: list[dict]) -> list[str]:
     (the numbered title) renders gold and the detail paragraphs render white.
 
     Detail lines that are a parenthetical list of Korean label:value items (e.g. 임직식 nominees)
-    are expanded into one bullet per item for readability.
+    are expanded into one bullet per item for readability, then the detail is tidied for the
+    slide (`_tidy_detail`).
     """
     blocks = []
     for a in anns:
         title = f"{a['number']}. {a['title']}"
         if a["detail"]:
-            expanded: list[str] = []
-            for line in a["detail"]:
-                expanded.extend(_expand_list_paren(line))
-            blocks.append(title + "\n\n" + "\n".join(expanded))
+            wrapped = a.get("wrapped") or [False] * len(a["detail"])
+            lines: list[str] = []
+            flags: list[bool] = []
+            for line, wrap in zip(a["detail"], wrapped):
+                parts = _expand_list_paren(line)
+                lines.extend(parts)
+                flags.extend([wrap if len(parts) == 1 else False] * len(parts))
+            blocks.append(title + "\n\n" + "\n".join(_tidy_detail(lines, flags)))
         else:
             blocks.append(title)
     return blocks
+
+
+def _sentence_end(line: str) -> bool:
+    """Does the line finish a sentence, ignoring trailing parentheticals like "(문의: …)"?"""
+    prev = None
+    while prev != line:
+        prev, line = line, _ANN_TRAILING_PAREN.sub("", line)
+    return line.rstrip().endswith((".", "!", "?", "다", "요"))
+
+
+def _tidy_detail(lines: list[str], wrapped: list[bool]) -> list[str]:
+    """Reshape a notice's bulletin rows the way the operator fixed them by hand every week.
+
+    The bulletin's column is a third of a slide wide, so its hand breaks land mid-line on
+    screen. Consecutive prose rows are joined into one paragraph. Rows that keep their own line:
+    bullets, ``라벨: 값`` rows, and a date/time row that isn't a sentence ("11/1 (오늘) - 11/21
+    (토) 7:00 PM, 노스필드장로교회 (본당)") unless it ran out of column. Then: a space after each
+    "•", a blank line between prose and the bullets under it, a trailing "(문의: …)" on its own
+    line under prose, and the stray hyphen the bulletin leaves before a phone number's ")".
+    """
+
+    def prose(line: str, wrap: bool) -> bool:
+        if _ANN_BULLET.match(line) or _ANN_LABEL.match(line):
+            return False
+        return not (_ANN_DATE.match(line) and not _sentence_end(line) and not wrap)
+
+    joined: list[str] = []
+    prev_prose = False
+    for line, wrap in zip(lines, wrapped):
+        line = re.sub(r"(\d)-\)", r"\1)", line)
+        is_prose = prose(line, wrap)
+        if is_prose and prev_prose:
+            joined[-1] = f"{joined[-1]} {line}"
+        else:
+            joined.append(line)
+        prev_prose = is_prose
+
+    out: list[str] = []
+    for line in joined:
+        if _ANN_BULLET.match(line):
+            line = re.sub(r"^•\s*", "• ", line)
+            if out and out[-1] and not _ANN_BULLET.match(out[-1]):
+                out.append("")
+            out.append(line)
+            continue
+        m = _ANN_CONTACT.search(line)
+        if m and m.start() > 0 and not _ANN_LABEL.match(line):
+            out.extend([line[: m.start()].rstrip(), m.group(1)])
+        else:
+            out.append(line)
+    return out
 
 
 def _find_row(worship_order: list[dict], part: str) -> dict:

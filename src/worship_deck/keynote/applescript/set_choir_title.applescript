@@ -3,6 +3,7 @@ on run argv
     set slideIndex to (item 2 of argv) as integer
     set titleText to item 3 of argv
     set composerText to item 4 of argv
+    set fontText to item 5 of argv  -- fitted size (pt) for the one-line bar; "0" = leave as is
     -- The two 성가대 title slides in master.key are laid out differently:
     --   * the section-divider slide (77) is ONE box of 3 paragraphs — a static "성가대 찬양"
     --     heading, the song title, then the composer credit (each paragraph keeps its own font);
@@ -29,6 +30,9 @@ on run argv
                     if np ≥ 3 then set paragraph 3 of object text of t to composerText
                 else
                     set object text of t to lineText
+                    if fontText is not "0" then
+                        set size of object text of t to (fontText as number)
+                    end if
                 end if
             end if
         end repeat

@@ -548,6 +548,33 @@ def test_fit_title_short_keeps_one_line_at_base_font() -> None:
     assert font == 130
 
 
+def test_wrap_balanced_prefers_the_shortest_longest_line() -> None:
+    # greedy packing gave "한 사람의 / 용기와 믿음의 파급력"; the operator wrote this
+    assert _wrap_balanced("한 사람의 용기와 믿음의 파급력", 2) == ["한 사람의 용기와", "믿음의 파급력"]
+
+
+def test_wrap_balanced_breaks_after_a_separator_on_a_tie() -> None:
+    assert _wrap_balanced("단단한 마음 - 하나님이 보시는 마음 2", 2) == [
+        "단단한 마음 -", "하나님이 보시는 마음 2"
+    ]
+    assert _wrap_balanced("악신과 함께 하는 자 vs 성신과 함께 하는 자", 2) == [
+        "악신과 함께 하는 자 vs", "성신과 함께 하는 자"
+    ]
+
+
+@pytest.mark.parametrize(("title", "wrapped"), [
+    # the operator's own rewraps, Aug–Nov 2026: one line when it reads large, else two
+    ("리더로 살아요 2", "리더로 살아요 2"),
+    ("사울은 무슨 생각일까요?", "사울은 무슨 생각일까요?"),
+    ("한 사람의 용기와 믿음의 파급력", "한 사람의 용기와\n믿음의 파급력"),
+    ("실패를 용납하는 마음 - 하나님이 보시는 마음 4", "실패를 용납하는 마음 -\n하나님이 보시는 마음 4"),
+])
+def test_fit_title_in_the_wide_frame_matches_operator_rewraps(title: str, wrapped: str) -> None:
+    text, font = _fit_title(title, B._TITLE_MAX_W, B._TITLE_MAX_H, 130)
+    assert text == wrapped
+    assert B._PREF_FONT_TITLE <= font <= 130
+
+
 def test_fit_title_long_wraps_to_two_lines_under_base() -> None:
     text, font = _fit_title("왜 그럼 그 때는 가만히 계셨을까?", 758, 326, 130)
     assert text == "왜 그럼 그 때는\n가만히 계셨을까?"
@@ -730,13 +757,20 @@ def test_set_choir_title_passes_args(monkeypatch: pytest.MonkeyPatch) -> None:
         "77",
         "사랑은",
         "(윤학준 곡)",
+        "0",  # bar font: 0 = leave the template size
     ]
 
 
 def _mock_choir_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Record fill_choir_slides' Keynote primitive calls instead of running osascript."""
-    calls: dict = {"title": [], "lyric": [], "duplicate": None, "delete": None}
-    monkeypatch.setattr(B, "set_choir_title", lambda k, i, t, c: calls["title"].append((i, t, c)))
+    calls: dict = {"title": [], "lyric": [], "duplicate": None, "delete": None, "font": []}
+    monkeypatch.setattr(
+        B, "set_choir_title",
+        lambda k, i, t, c, f=0: (calls["title"].append((i, t, c)), calls["font"].append(f)),
+    )
+    # the title card's box, and a stub fit (the real one shells out to CoreText)
+    monkeypatch.setattr(B, "read_text_boxes", lambda k, i, n: [(1925, 138, "ArialHebrew-Bold", 94)])
+    monkeypatch.setattr(B, "_fit_one_line", lambda text, font, base, w: 0)
     monkeypatch.setattr(B, "set_slide_text", lambda k, i, t: calls["lyric"].append((i, t)))
     monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
     monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
@@ -773,6 +807,37 @@ def test_fill_choir_slides_trims_when_template_has_surplus(
     assert calls["delete"] == (81, 15)  # trim 15 surplus slides at first_lyric+target (79+2)
     assert calls["duplicate"] is None
     assert [i for i, _ in calls["lyric"]] == [79, 80]
+
+
+def test_fill_choir_slides_fits_the_title_card_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _mock_choir_primitives(monkeypatch)
+    seen: dict = {}
+
+    def fake_fit(text: str, font: str, base: int, w: int) -> int:
+        seen.update(text=text, font=font, base=base, w=w)
+        return 79
+
+    monkeypatch.setattr(B, "_fit_one_line", fake_fit)
+    song = Song(title="은혜 아니면", lines=["1"], composer="Bobbie Mason 곡 Arr. 홍지열")
+
+    fill_choir_slides("k", 77, song, title_count=2, existing_lyric_count=1)
+
+    # the card's one-line "title (composer)" is measured against the bar at the box's font/base
+    assert seen == {"text": "은혜 아니면 (Bobbie Mason 곡 Arr. 홍지열)",
+                    "font": "ArialHebrew-Bold", "base": 94, "w": B._CHOIR_CARD_W}
+    assert calls["font"] == [79, 79]  # the script applies it to the one-line bar only
+
+
+def test_fit_one_line_picks_largest_size_on_one_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    # pretend the line fits on one line from 80pt down
+    monkeypatch.setattr(
+        B, "_measure_line_counts", lambda reqs: [1 if r["size"] <= 80 else 2 for r in reqs]
+    )
+    assert B._fit_one_line("긴 제목 (Composer 곡)", "F", 94, 1450) == 80
+    monkeypatch.setattr(B, "_measure_line_counts", lambda reqs: [1] * len(reqs))
+    assert B._fit_one_line("짧은 제목", "F", 94, 1450) == 0  # already fits at base: leave it
+    monkeypatch.setattr(B, "_measure_line_counts", lambda reqs: None)
+    assert B._fit_one_line("짧은 제목", "F", 94, 1450) == 0  # no swift: leave it
 
 
 # ---------------------------------------------------------------------------
@@ -867,6 +932,26 @@ def test_fill_worship_songs_three_song_medley(monkeypatch: pytest.MonkeyPatch) -
     assert n == 11
 
 
+def test_fill_worship_songs_untitled_song_continues_the_previous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = _mock_worship_primitives(monkeypatch)
+    deletes: list = []
+    monkeypatch.setattr(B, "delete_slides", lambda k, i, n: deletes.append((i, n)))
+    songs = [
+        Song(title="주의 나라가 임할 때", lines=["1", "2"]),
+        Song(title="", lines=["1", "2"]),  # an untitled continuation page
+    ]
+
+    n = fill_worship_songs("k", 6, 41, songs)
+
+    # both units are filled as usual (back-to-front) …
+    assert calls["fill"] == [(10, ""), (7, "주의 나라가 임할 때")]
+    # … then the untitled unit's blank separator + empty title bar (6 + 3*1 = 9) are dropped
+    assert deletes == [(9, 38), (9, 2)]
+    assert n == 2 * 3 + 1 - 2
+
+
 def test_fill_worship_songs_single_song_skips_fan_out(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _mock_worship_primitives(monkeypatch)
     songs = [Song(title="마라나타", lines=["1", "2"])]
@@ -926,13 +1011,20 @@ def test_set_announcement_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> 
         "draft.key",
         "117",
         "1. 제목\n\n   상세 내용",
+        "0",  # fitted font: 0 = leave the box's base size
     ]
 
 
 def _mock_announce_primitives(monkeypatch: pytest.MonkeyPatch) -> dict:
     """Record fill_announcement_slides' Keynote primitive calls instead of running osascript."""
     calls: dict = {"set": [], "duplicate": None, "delete": None}
-    monkeypatch.setattr(B, "set_announcement_slide", lambda k, i, t: calls["set"].append((i, t)))
+    monkeypatch.setattr(
+        B, "set_announcement_slide", lambda k, i, t, f=0: calls["set"].append((i, t))
+    )
+    monkeypatch.setattr(
+        B, "read_text_boxes", lambda k, i, n: [(1876, 1009, "NanumGothicBold", 80)] * n
+    )
+    monkeypatch.setattr(B, "_fit_announcement_sizes", lambda items, boxes: [0] * len(items))
     monkeypatch.setattr(B, "duplicate_slide", lambda k, i, n: calls.__setitem__("duplicate", (i, n)))
     monkeypatch.setattr(B, "delete_slides", lambda k, i, n: calls.__setitem__("delete", (i, n)))
     return calls
@@ -962,6 +1054,45 @@ def test_fill_announcement_slides_trims_when_template_has_surplus(
     assert calls["delete"] == (119, 3)  # trim 3 surplus at start+target
     assert calls["duplicate"] is None
     assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째")]
+
+
+def test_fit_announcement_sizes_shrinks_only_what_overflows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # item 1 is short (4 lines at any size); item 2 wraps to 12 lines at 80/75pt and 10 below
+    def fake_measure(reqs: list[dict]) -> list[int]:
+        return [4 if r["text"] == "short" else (12 if r["size"] >= 75 else 10) for r in reqs]
+
+    monkeypatch.setattr(B, "_measure_line_counts", fake_measure)
+    box = (1876, 1009, "NanumGothicBold", 80)
+
+    sizes = B._fit_announcement_sizes(["short", "long"], [box, box])
+
+    # 12 lines × 1.2625 × 80 ≈ 1203 > 1009; 10 lines at 70pt ≈ 876 fits, so 70 (75 still 12 lines)
+    assert sizes == [0, 70]
+
+
+def test_fit_announcement_sizes_floors_and_skips_unmeasurable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(B, "_measure_line_counts", lambda reqs: [30] * len(reqs))
+    box = (1876, 1009, "NanumGothicBold", 80)
+    assert B._fit_announcement_sizes(["huge"], [box]) == [B._MIN_FONT_ANNOUNCE]
+    monkeypatch.setattr(B, "_measure_line_counts", lambda reqs: [-1] * len(reqs))  # no font
+    assert B._fit_announcement_sizes(["x"], [box]) == [0]
+    monkeypatch.setattr(B, "_measure_line_counts", lambda reqs: None)  # no swift
+    assert B._fit_announcement_sizes(["x"], [box]) == [0]
+
+
+def test_fill_announcement_slides_applies_fitted_fonts(monkeypatch: pytest.MonkeyPatch) -> None:
+    _mock_announce_primitives(monkeypatch)
+    fonts: list = []
+    monkeypatch.setattr(B, "set_announcement_slide", lambda k, i, t, f=0: fonts.append((i, f)))
+    monkeypatch.setattr(B, "_fit_announcement_sizes", lambda items, boxes: [0, 65])
+
+    fill_announcement_slides("k", 117, ["1. 짧음", "2. 김"], existing_count=2)
+
+    assert fonts == [(117, 0), (118, 65)]
 
 
 def test_fill_announcement_slides_empty_list_trims_whole_block(
