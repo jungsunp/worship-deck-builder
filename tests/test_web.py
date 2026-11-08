@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, replace
 from pathlib import Path
 
@@ -1277,6 +1278,21 @@ def test_build_runs_pipeline_and_opens(_runs, monkeypatch) -> None:
     assert exported == [f"/tmp/draft-{_runs}.pdf"]  # PDF exported from the built draft (#23)
     assert status["pdf"] == f"/runs/{_runs}/draft.pdf"
     assert opened and opened[0][0] == ["open", f"/tmp/draft-{_runs}.key"]
+
+
+def test_build_status_lists_announcements_the_fit_shrank(_runs, monkeypatch, tmp_path) -> None:
+    """The Keynote build's fit sidecar reaches the page, so the operator can shorten the item."""
+    store.save(_runs, _fake_run())
+    draft = tmp_path / f"draft-{_runs}.key"
+    shrunk = [{"item": 6, "pt": 70, "floor": False}, {"item": 9, "pt": 60, "floor": True}]
+    app_module.pipeline.fit_path(str(draft)).write_text(json.dumps(shrunk))
+    monkeypatch.setattr(app_module.pipeline, "run", lambda d, t: str(draft))
+    monkeypatch.setattr(app_module.keynote_build, "export_pdf", lambda p: None)
+    monkeypatch.setattr(app_module.subprocess, "run", lambda *a, **kw: None)
+
+    client.post(f"/runs/{_runs}/build")
+
+    assert client.get(f"/runs/{_runs}/build/status").json()["announce_shrunk"] == shrunk
 
 
 def test_build_pdf_export_failure_is_nonfatal(_runs, monkeypatch) -> None:

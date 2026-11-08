@@ -41,6 +41,22 @@ def test_write_run_record_persists_phase_steps_and_timestamp(tmp_path, monkeypat
     assert rec["ts"]
 
 
+def test_run_keynote_writes_the_fit_sidecar_next_to_the_draft(tmp_path, monkeypatch):
+    """The 교회소식 items the Keynote build shrank land beside the draft for the review page."""
+    monkeypatch.setattr(obs, "LOG_DIR", tmp_path)
+    logging.getLogger("worship_deck").handlers.clear()
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(pipeline, "DRAFTS_DIR", tmp_path / "drafts")
+    monkeypatch.setenv("TEMPLATE_KEY", "tpl.key")
+    shrunk = [{"item": 6, "pt": 70, "floor": False}]
+    monkeypatch.setattr(pipeline.keynote_build, "build", lambda d, t, out: (out, {}, shrunk))
+    store.save("2026-05-31", ServiceData(date="2026-05-31"))
+
+    out = pipeline.run("2026-05-31")
+
+    assert json.loads(pipeline.fit_path(out).read_text()) == shrunk
+
+
 def test_run_rejects_an_unknown_target():
     with pytest.raises(ValueError, match="unknown build target"):
         pipeline.run("2026-05-31", "powerpoint")

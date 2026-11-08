@@ -6,6 +6,7 @@ tested independently. Human review happens in the web app between `assemble` and
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -13,6 +14,11 @@ from . import obs, store
 from .keynote import build as keynote_build
 
 DRAFTS_DIR = Path("data/drafts")
+
+
+def fit_path(draft: str) -> Path:
+    """The Keynote draft's sidecar listing the 교회소식 items auto-fit shrank (keynote build())."""
+    return Path(draft).with_suffix(".fit.json")
 
 
 def run(service_date: str, target: str = "keynote") -> str:
@@ -65,6 +71,8 @@ def run(service_date: str, target: str = "keynote") -> str:
         template = os.environ.get("TEMPLATE_KEY")
         if not template:
             raise RuntimeError("TEMPLATE_KEY is not set — point it at the master .key template.")
-        path, build_steps = keynote_build.build(data, template, f"{out}.key")
+        path, build_steps, shrunk = keynote_build.build(data, template, f"{out}.key")
         timer.merge(build_steps)
+        # Which 교회소식 items auto-fit shrank, next to the draft for the review page (fit_path).
+        fit_path(path).write_text(json.dumps(shrunk))
         return path
