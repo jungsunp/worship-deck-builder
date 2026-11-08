@@ -307,6 +307,14 @@ def test_parse_arrangement_dash_form() -> None:
     assert T.parse_arrangement("V1-C-C") == ["V1", "C", "C"]
 
 
+def test_parse_arrangement_expands_repeat_counts() -> None:
+    # Sheet-style ×N used to survive as an unknown "Cx2" label and vanish from the deck.
+    assert T.parse_arrangement("V1 Cx2 B C×3") == ["V1", "C", "C", "B", "C", "C", "C"]
+    assert T.parse_arrangement("C x 3") == ["C", "C", "C"]
+    assert T.parse_arrangement("Cx4 - Cx2(목소리)") == ["C"] * 6
+    assert T.parse_arrangement("V1, C*2 → B") == ["V1", "C", "C", "B"]
+
+
 def test_parse_arrangement_tolerates_junk_and_empty() -> None:
     assert T.parse_arrangement("") == []
     assert T.parse_arrangement("   ") == []

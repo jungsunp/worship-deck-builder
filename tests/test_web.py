@@ -894,6 +894,24 @@ def test_list_runs_newest_first(_runs, tmp_path, monkeypatch) -> None:
     assert client.get("/runs").json() == {"runs": ["2026-06-07", "2026-05-31"], "pdfs": []}
 
 
+def test_list_runs_skips_suggest_sidecar(_runs, tmp_path, monkeypatch) -> None:
+    """A /prep-week sidecar (#209) sits next to the run file but is not a run."""
+    monkeypatch.chdir(tmp_path)
+    store.save("2026-05-31", _fake_run())
+    (store.RUNS_DIR / "2026-05-31.suggest.json").write_text("{}", encoding="utf-8")
+    assert client.get("/runs").json()["runs"] == ["2026-05-31"]
+
+
+def test_get_suggestions_reads_sidecar(_runs) -> None:
+    """GET /runs/<date>/suggest returns the sidecar as-is, {} when there is none (#209)."""
+    assert client.get(f"/runs/{_runs}/suggest").json() == {}
+    store.RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    doc = {"version": 1, "worship_songs": [{"ref": 0, "arrangement": "V1 C"}]}
+    (store.RUNS_DIR / f"{_runs}.suggest.json").write_text(json.dumps(doc), encoding="utf-8")
+    assert client.get(f"/runs/{_runs}/suggest").json() == doc
+    assert client.get("/runs/2026-5-1/suggest").status_code == 400
+
+
 def test_list_runs_empty(_runs) -> None:
     assert client.get("/runs").json() == {"runs": [], "pdfs": []}
 
