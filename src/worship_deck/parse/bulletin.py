@@ -91,6 +91,11 @@ class ServiceData:
     sermon_passage: list[dict] = field(default_factory=list)
     # One slide-ready block per 교회소식 item: "N. title\n\ndetail lines" (gold title, white detail).
     announcements: list[str] = field(default_factory=list)
+    # 교회소식 photos uploaded in review (server-managed, never edited via PUT /runs): ordered
+    # {path, w, h} of the already-shrunk JPEGs. The Keynote build lays them out as collage slides
+    # after announcement item `announcement_photos_after` (1-based; 0 = after the last item).
+    announcement_photos: list[dict] = field(default_factory=list)
+    announcement_photos_after: int = 0
     call_to_worship_ref: str = ""
     sermon_title: str = ""
     sermon_ref: str = ""

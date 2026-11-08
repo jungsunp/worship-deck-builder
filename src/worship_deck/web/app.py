@@ -7,6 +7,7 @@ a PDF preview of the draft. This is the human-in-the-loop checkpoint.
 
 from __future__ import annotations
 
+import io
 import json
 import re
 import shutil
@@ -20,7 +21,7 @@ from fastapi import BackgroundTasks, Body, FastAPI, File, HTTPException, UploadF
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from worship_deck import hymn, library, obs, parse, pipeline, store
+from worship_deck import hymn, library, obs, parse, photos, pipeline, store
 from worship_deck.bible import verses
 from worship_deck.keynote import build as keynote_build
 from worship_deck.lyrics import linebreak
@@ -109,6 +110,8 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
         kept.append("봉헌 verse picks (" + ", ".join(str(v) for v in existing.offering_hymn_verses) + ")")
     if existing.sermon_extra_refs:
         kept.append("추가 말씀 구절 (" + ", ".join(existing.sermon_extra_refs) + ")")
+    if existing.announcement_photos:
+        kept.append(f"교회소식 사진 ({len(existing.announcement_photos)}장)")
     kept += [_EDIT_LABELS[f] for f in existing.edited_fields if f in _EDIT_LABELS]
     return kept
 
@@ -660,6 +663,8 @@ def assemble(background_tasks: BackgroundTasks, confirm: bool = False) -> dict:
         data.offering_hymn_verses = existing.offering_hymn_verses
         data.sermon_extra_refs = existing.sermon_extra_refs
         data.sermon_extra_passages = existing.sermon_extra_passages
+        data.announcement_photos = existing.announcement_photos
+        data.announcement_photos_after = existing.announcement_photos_after
         # Preserve the operator's kept 봉헌 slide subset (#108) unless the hymn changed; leaving
         # it non-empty makes _assemble_async skip the re-fetch that would reselect all slides.
         if not hymn_changed:
@@ -761,6 +766,10 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     existing = store.load(service_date) if store.exists(service_date) else None
     data = ServiceData(**{k: v for k, v in body.items() if k in known})
     data.offering_hymn_verses = [int(v) for v in data.offering_hymn_verses]
+    # The photo list is owned by the /photos endpoints (files live on disk beside it); a page
+    # holding a stale copy must not resurrect deleted photos. Only the placement is editable here.
+    data.announcement_photos = existing.announcement_photos if existing else []
+    data.announcement_photos_after = max(0, int(data.announcement_photos_after or 0))
     # The single-song sections seed an empty V1 card in review; an untouched section must read as
     # "no content" (title-less, no lyrics) so it isn't built and isn't flagged as an edit (#105).
     for f in ("worship_after_sermon", "confession_song"):
@@ -927,6 +936,107 @@ def get_hymn_slide(service_date: str, name: str) -> FileResponse:
     if not target.is_file():
         raise HTTPException(status_code=404, detail="not found")
     return FileResponse(target)
+
+
+# ── 교회소식 photos ──────────────────────────────────────────────────────────
+# Uploaded in review, shrunk on arrival (photos.downscale_photo) and stored beside the run's other
+# generated files. The ordered list lives on ServiceData.announcement_photos and is managed only
+# by these endpoints (PUT /runs keeps it as stored). The Keynote build lays them out as collage
+# slides. Limits follow the #153 upload-hardening intent: type (must decode), size, count.
+_MAX_PHOTO_BYTES = 30 * 1024 * 1024
+_MAX_PHOTOS = 18
+
+
+def _announce_dir(service_date: str) -> Path:
+    return HYMN_DIR / service_date / "announce"
+
+
+def _run_or_404(service_date: str) -> ServiceData:
+    try:
+        store.path_for(service_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    if not store.exists(service_date):
+        raise HTTPException(status_code=404, detail="no run for that date")
+    return store.load(service_date)
+
+
+def _photo_state(data: ServiceData) -> dict:
+    return {"photos": data.announcement_photos, "after": data.announcement_photos_after}
+
+
+@app.post("/runs/{service_date}/photos")
+def upload_photos(service_date: str, files: list[UploadFile] = File(...)) -> dict:
+    """Add 교회소식 photos to the run: each is validated, shrunk to a JPEG and appended in order."""
+    data = _run_or_404(service_date)
+    if len(data.announcement_photos) + len(files) > _MAX_PHOTOS:
+        raise HTTPException(status_code=400, detail=f"사진은 최대 {_MAX_PHOTOS}장까지 가능합니다")
+    out_dir = _announce_dir(service_date)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    stamp = int(time.time() * 1000)
+    added: list[dict] = []
+    try:
+        for i, f in enumerate(files):
+            raw = f.file.read(_MAX_PHOTO_BYTES + 1)
+            if len(raw) > _MAX_PHOTO_BYTES:
+                raise HTTPException(status_code=400, detail="사진 한 장이 30MB를 넘습니다")
+            # Server-chosen name: nothing from the client's filename reaches the filesystem.
+            dest = out_dir / f"photo-{stamp}-{i}.jpg"
+            try:
+                w, h = photos.downscale_photo(io.BytesIO(raw), dest)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="이미지 파일이 아닙니다")
+            added.append({"path": str(dest), "w": w, "h": h})
+    except HTTPException:
+        for a in added:  # all-or-nothing: don't leave half a batch on disk
+            Path(a["path"]).unlink(missing_ok=True)
+        raise
+    data.announcement_photos = data.announcement_photos + added
+    store.save(service_date, data)
+    return _photo_state(data)
+
+
+@app.get("/runs/{service_date}/photos/{name}")
+def get_photo(service_date: str, name: str) -> FileResponse:
+    """Serve one stored photo for the review thumbnails, path-safe (mirrors the hymn guard)."""
+    try:
+        store.path_for(service_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
+    if Path(name).name != name:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    target = _announce_dir(service_date) / name
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="not found")
+    return FileResponse(target)
+
+
+@app.delete("/runs/{service_date}/photos/{name}")
+def delete_photo(service_date: str, name: str) -> dict:
+    """Remove one photo (file and list entry)."""
+    data = _run_or_404(service_date)
+    if Path(name).name != name:
+        raise HTTPException(status_code=400, detail="invalid filename")
+    keep = [p for p in data.announcement_photos if Path(p["path"]).name != name]
+    if len(keep) == len(data.announcement_photos):
+        raise HTTPException(status_code=404, detail="not found")
+    (_announce_dir(service_date) / name).unlink(missing_ok=True)
+    data.announcement_photos = keep
+    store.save(service_date, data)
+    return _photo_state(data)
+
+
+@app.put("/runs/{service_date}/photos/order")
+def reorder_photos(service_date: str, body: dict = Body(...)) -> dict:
+    """Reorder photos: `order` is the full list of stored file names in the new order."""
+    data = _run_or_404(service_date)
+    by_name = {Path(p["path"]).name: p for p in data.announcement_photos}
+    order = body.get("order", [])
+    if sorted(order) != sorted(by_name):
+        raise HTTPException(status_code=400, detail="order must list every photo exactly once")
+    data.announcement_photos = [by_name[n] for n in order]
+    store.save(service_date, data)
+    return _photo_state(data)
 
 
 @app.get("/runs/{service_date}/draft.pdf")

@@ -14,6 +14,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from worship_deck import photos as photo_layout
 from worship_deck.bible import layout
 from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.keynote.anchors import detect_anchors
@@ -44,6 +45,7 @@ _SET_OFFERING_HYMN_TITLE = (
     Path(__file__).parent / "applescript" / "set_offering_hymn_title.applescript"
 )
 _PLACE_IMAGE = Path(__file__).parent / "applescript" / "place_image.applescript"
+_PLACE_COLLAGE = Path(__file__).parent / "applescript" / "place_collage.applescript"
 _HYMN_IMAGE_BLOCK = Path(__file__).parent / "applescript" / "hymn_image_block.applescript"
 _READ_TITLE_BOX = Path(__file__).parent / "applescript" / "read_title_box.applescript"
 _SET_CTW_REF = Path(__file__).parent / "applescript" / "set_ctw_ref.applescript"
@@ -1047,6 +1049,48 @@ def fill_announcement_slides(
     return fonts
 
 
+def place_collage(key_path: str, slide_index: int, photos: list[dict]) -> str:
+    """Blank the 1-based slide's text and place `photos` ({path, w, h}) on it as a collage.
+
+    Positions come from `photos.collage_layout` (justified rows: whole photos, no cropping or
+    overlap, edge to edge). The slide should be a duplicate of a 교회소식 item slide so it carries
+    the dark background. Returns "ok".
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    boxes = photo_layout.collage_layout([(p["w"], p["h"]) for p in photos])
+    args: list[str] = []
+    for p, (x, y, w, _h) in zip(photos, boxes):
+        # Absolute for the same reason as place_image: a relative POSIX file can't be loaded.
+        args += [str(Path(p["path"]).expanduser().absolute()), str(x), str(y), str(w)]
+    key = str(Path(key_path).expanduser())
+    return _run_osascript(_PLACE_COLLAGE, key, str(slide_index), *args).strip()
+
+
+def fill_announcement_photos(key_path: str, after_slide: int, photos: list[dict]) -> int:
+    """Add collage slide(s) of 교회소식 photos right after the 1-based slide `after_slide`.
+
+    Photos are spread over the fewest slides (up to `photos.MAX_PER_SLIDE` each, evenly). Each
+    new slide is a duplicate of `after_slide` (an announcement item slide, so the background
+    matches) turned into a photo-only slide by `place_collage`. Photos whose file is missing are
+    skipped. Returns the number of slides added (0 when there are no photos).
+
+    Note: inserting shifts the indices of all later slides; `build` calls this inside the
+    back-to-front order, so only already-filled later sections move.
+    """
+    present = [p for p in photos if Path(p["path"]).expanduser().is_file()]
+    if len(present) < len(photos):
+        logger.warning("%d 교회소식 photo(s) missing on disk — skipped", len(photos) - len(present))
+    chunks = photo_layout.chunk_photos(present)
+    if not chunks:
+        return 0
+    duplicate_slide(key_path, after_slide, len(chunks))
+    for i, chunk in enumerate(chunks, start=1):
+        place_collage(key_path, after_slide + i, chunk)
+    return len(chunks)
+
+
 def hymn_image_block(key_path: str, start_index: int, max_scan: int = 20) -> tuple[int, int]:
     """Find last week's 봉헌 hymn-page block: the contiguous image slides at/after start_index.
 
@@ -1223,6 +1267,19 @@ def build(
             {"item": i, "pt": f, "floor": f == _MIN_FONT_ANNOUNCE}
             for i, f in enumerate(fonts, start=1) if f
         ]
+        # Photo collage slides after the item the operator picked (0 = the last item). Runs after
+        # the item fill so the duplicated slide already carries its final background; it only
+        # shifts slides after the announcements, which are all filled already (back-to-front).
+        if data.announcement_photos:
+            item = data.announcement_photos_after or len(data.announcements)
+            item = min(max(item, 1), len(data.announcements))
+            _t(
+                "announcement_photos",
+                fill_announcement_photos,
+                out_key,
+                a.announcements_start + item - 1,
+                data.announcement_photos,
+            )
 
     # 봉헌 offering-hymn images: replace last week's pages (detected after the section's
     # title/intro slides) with this week's. An empty list (failed/absent download) keeps
