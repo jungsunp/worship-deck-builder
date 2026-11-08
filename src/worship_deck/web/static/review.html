@@ -441,6 +441,7 @@ function renderMedley(div) {
     add.className = 'addcard'; add.textContent = '＋ 구간';
     add.onclick = () => { readCards(s); song.sections.push({label: '', lines: []}); bump(s); };
     sd.appendChild(add);
+    sd.appendChild(libSaveButton(s, '/library/worship'));  // bank it for next time (#204)
     const arr = document.createElement('div'); arr.className = 'arr'; arr.dataset.i = s;
     sd.appendChild(arr);
     renderCards(cardsHost, s);    // render into the refs directly — sd isn't in the document yet,
@@ -471,7 +472,7 @@ const editKeyOf = ref => (ref === 'confession' ? 'confession'
 // Provenance badge (#200): where a song's lyrics came from, so the operator knows what to trust.
 // gasazip match → green pill linking to the source, with both coverage %s (low on either = worth
 // proofreading). Lookup miss → red pill; the song has no lyrics until one is picked (#213).
-// Typed/library songs → no badge.
+// Library hit (#204) → green pill with the same two coverages; typed songs → no badge.
 // Reads run data (not DOM), so it survives the medley tab round-trip; syncFromDom never writes it.
 function provBadge(song) {
   const p = (song && song.provenance) || {};
@@ -486,6 +487,13 @@ function provBadge(song) {
       ? ` · 일치 ${pct(p.cand_cov)}% · 악보 ${pct(p.ocr_cov)}%` : '';
     a.textContent = `가사집 ✓ ${p.artist || ''}${scores}`;
     return a;
+  }
+  if (p.source === 'library') {  // an earlier week's operator-confirmed text (#204), matched before gasazip
+    const s = document.createElement('span');
+    s.className = 'prov ok'; s.title = '이전 주에 확인해 저장한 가사입니다 (라이브러리)';
+    const pct = c => Math.round((c || 0) * 100);
+    s.textContent = `라이브러리 ✓ · 일치 ${pct(p.cand_cov)}% · 악보 ${pct(p.ocr_cov)}%`;
+    return s;
   }
   if (p.source === 'ocr') {
     const s = document.createElement('span');
@@ -598,7 +606,7 @@ function applySuggestion(s, g) {
   song.sections = g.sections.map(c => ({label: c.label, lines: c.lines.slice()}));
   song.lines = g.lines.slice();
   song.arrangement = g.arrangement;
-  if (String(prov.song_id || '') !== g.song_id) {  // a different song than assemble picked
+  if (g.song_id && String(prov.song_id || '') !== g.song_id) {  // a different song than assemble picked
     song.provenance = {source: 'gasazip', song_id: g.song_id, artist: g.artist || '',
                        ...(prov.merged_sheets ? {merged_sheets: prov.merged_sheets} : {})};
   }
@@ -903,35 +911,35 @@ function renderSong(div, song, kind, hint) {
   sd.appendChild(ta);
   // 고백의 찬양 rotates weekly — let the operator bank a polished song so next week it can be
   // picked on the home screen instead of re-uploaded + re-transcribed + re-polished.
-  if (kind === 'confession') {
-    const lib = document.createElement('button');
-    lib.id = 'libSave'; lib.type = 'button'; lib.className = 'libsave';
-    lib.textContent = '라이브러리에 저장';
-    lib.onclick = saveConfessionToLibrary;
-    sd.appendChild(lib);
-  }
+  if (kind === 'confession') sd.appendChild(libSaveButton('confession', '/library/confession'));
   div.appendChild(sd);
 }
 
-async function saveConfessionToLibrary() {
+// A "라이브러리에 저장" button for song `ref` (medley index or 'confession'/'sermonsong'); `url`
+// picks the library: /library/confession (home picker) or /library/worship (matched at assemble, #204).
+function libSaveButton(ref, url) {
+  const lib = document.createElement('button');
+  lib.type = 'button'; lib.className = 'libsave'; lib.textContent = '라이브러리에 저장';
+  lib.onclick = () => saveToLibrary(ref, url, lib);
+  return lib;
+}
+
+async function saveToLibrary(ref, url, btn) {
   const get = sel => (document.querySelector('#order ' + sel)?.value || '').trim();
-  const title = get('input[data-kind="confession-title"]');
-  const composer = get('input[data-kind="confession-composer"]');
-  readCards('confession');  // DOM cards -> sections; flatten to blank-line-separated lyric lines
-  const song = run.confession_song;
+  const title = (titleInput(ref)?.value || '').trim();
+  readCards(ref);  // DOM cards -> sections; flatten to blank-line-separated lyric lines
+  const song = songByRef(ref);
+  const composer = get('input[data-kind="' + ref + '-composer"]') || song.composer || '';
   const secs = song.sections || [];
   const lines = secs.flatMap((sec, i) => i ? [''].concat(sec.lines) : sec.lines);
   if (!title) { showStatus('✕ 곡 제목을 입력해야 저장할 수 있습니다', true); return; }
-  const btn = document.getElementById('libSave');
-  // Persist the labeled section cards + 진행순서 so a picked song comes back pre-split (not a lone V1).
-  const r = await fetch('/library/confession', {
+  // Persist the labeled section cards + 진행순서 so a picked/matched song comes back pre-split.
+  const r = await fetch(url, {
     method: 'POST', headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({title, composer, lines, sections: secs, arrangement: song.arrangement || ''}),
   });
-  if (btn) {
-    btn.textContent = r.ok ? '라이브러리에 저장됨 ✓' : '저장 ✕';
-    setTimeout(() => { btn.textContent = '라이브러리에 저장'; }, 3000);
-  }
+  btn.textContent = r.ok ? '라이브러리에 저장됨 ✓' : '저장 ✕';
+  setTimeout(() => { btn.textContent = '라이브러리에 저장'; }, 3000);
 }
 
 function renderChoir(div) {
@@ -940,7 +948,7 @@ function renderChoir(div) {
 
 // 고백의 찬양 / 설교후 찬양: a single song the operator can group into V1/C sections in review —
 // the same section-card + arrangement editor as the 찬양 medley, minus only the medley tabs.
-function renderLabeledSong(div, ref, libSave) {
+function renderLabeledSong(div, ref, libUrl) {
   const song = songByRef(ref);
   const sd = document.createElement('div'); sd.className = 'song';
   const ti = document.createElement('input');
@@ -960,13 +968,7 @@ function renderLabeledSong(div, ref, libSave) {
   add.className = 'addcard'; add.textContent = '＋ 구간';
   add.onclick = () => { readCards(ref); song.sections.push({label: '', lines: []}); bump(ref); };
   sd.appendChild(add);
-  if (libSave) {  // 고백의 찬양 rotates weekly — bank a polished song for next week's home picker.
-    const lib = document.createElement('button');
-    lib.id = 'libSave'; lib.type = 'button'; lib.className = 'libsave';
-    lib.textContent = '라이브러리에 저장';
-    lib.onclick = saveConfessionToLibrary;
-    sd.appendChild(lib);
-  }
+  sd.appendChild(libSaveButton(ref, libUrl));  // bank a polished song for a later week
   const arr = document.createElement('div'); arr.className = 'arr'; arr.dataset.i = ref;
   sd.appendChild(arr);
   div.appendChild(sd);
@@ -974,8 +976,8 @@ function renderLabeledSong(div, ref, libSave) {
   renderArrangement(arr, ref);      // so refreshSong's #order querySelector would find nothing here
 }
 
-function renderConfession(div) { renderLabeledSong(div, 'confession', true); }
-function renderSermonSong(div) { renderLabeledSong(div, 'sermonsong', false); }
+function renderConfession(div) { renderLabeledSong(div, 'confession', '/library/confession'); }
+function renderSermonSong(div) { renderLabeledSong(div, 'sermonsong', '/library/worship'); }
 
 function mkInput(id, ph, val) {
   const i = document.createElement('input'); i.id = id; i.placeholder = ph; i.value = val || '';

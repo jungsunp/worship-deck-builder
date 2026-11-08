@@ -28,7 +28,7 @@ $PY show <date>
 ```
 
 This lists the inbox sheets (assemble's order) and the run's worship songs, by `ref`. For each
-song it shows the gasazip `song_id`, `merged_sheets` (continuation pages assemble already
+song it shows its `source` (`gasazip`, `library`, or `ocr` for an unresolved song), the gasazip `song_id`, `merged_sheets` (continuation pages assemble already
 folded in), its current sections and arrangement, and the candidates for an unresolved song.
 
 ## 2. Read each sheet once (Read tool on the image)
@@ -45,6 +45,10 @@ For each sheet, note:
 
 ## 3. Get the canonical lyrics
 
+- **`source=library`** (#204): assemble reused lyrics and section labels the operator confirmed
+  in an earlier week, so there is nothing to look up or anchor. Check only that the sheet's
+  title agrees with the song (if it doesn't, treat it like an unresolved song below), then
+  skip to step 4 and give just the play order.
 - If assemble matched the right song (title agrees with the sheet), use its `song_id`.
 - Otherwise search with the sheet's real title, then take the best candidate whose lyrics
   agree with the sheet:
@@ -76,6 +80,13 @@ $PY lines <song_id>
    "note": "short, only if something is ambiguous", "confidence": "high"},
   {"ref": 1, "continuation_of": 0, "sheets": ["004"], "note": "곡 1의 2쪽"}
 ]}```
+
+A **library** song needs only its play order, no `song_id` or `sections` (the run's own cards
+are used, so labels in `arrangement` must be the ones `show` lists):
+
+```json
+  {"ref": 2, "sheets": ["005"], "arrangement": "V1 Cx2 V2 C", "marks": "V1 - Cx2 - V2 - C"}
+```
 
 Rules:
 - **One entry per run song (`ref`).** If a continuation page or intro strip became its own

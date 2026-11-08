@@ -1537,3 +1537,21 @@ def test_research_apply_suggests_sections(_runs, monkeypatch) -> None:
     assert body["arrangement"] == "V1 C V1 C C"
     # lines are the deduped flattened mirror of the cards, matching the assemble path
     assert body["lines"] == verse + [""] + chorus
+
+
+# ── worship song library (#204) ────────────────────────────────────────────────
+
+
+def test_save_and_list_worship_library(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(library, "WORSHIP_DIR", tmp_path / "worship")
+    song = {"title": "찬양곡", "lines": ["가사"], "sections": [{"label": "V1", "lines": ["가사"]}]}
+    assert client.post("/library/worship", json=song).json() == {"slug": "찬양곡", "title": "찬양곡"}
+    assert client.get("/library/worship").json()["songs"] == [
+        {"slug": "찬양곡", "title": "찬양곡", "composer": ""}]
+    assert library.load_song("찬양곡", library.WORSHIP_DIR)["sections"] == song["sections"]
+    assert library.list_songs() == []  # the confession library is untouched
+
+
+def test_save_worship_library_requires_title(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(library, "WORSHIP_DIR", tmp_path / "worship")
+    assert client.post("/library/worship", json={"title": " ", "lines": ["x"]}).status_code == 400
