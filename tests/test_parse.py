@@ -19,6 +19,7 @@ from worship_deck.parse.bulletin import (
     _reading_order,
     _split_content,
     _split_performer,
+    _tidy_detail,
     announcement_blocks,
 )
 
@@ -168,8 +169,11 @@ def test_announcement_blocks_title_and_detail() -> None:
     lines = first.split("\n")
     assert lines[0] == "1. 2026년도 24 나무 소그룹"  # title keeps its number (paragraph 1 = gold)
     assert lines[1] == ""  # blank line between title and detail
-    # each rendered row is kept as its own detail line (the bulletin breaks lines by hand)
-    assert "그룹 리더분들의 안내에 따라 함께 친교해 주시기 바랍니다." in lines
+    # the bulletin's hand-broken prose rows are joined into one paragraph for the wide slide
+    assert lines[2] == (
+        "오늘부터 친교 시간에는 지정된 테이블로 이동하셔서 "
+        "그룹 리더분들의 안내에 따라 함께 친교해 주시기 바랍니다."
+    )
     assert "  " not in first  # no stray leading/double spacing from pdf wrapping
 
 
@@ -213,6 +217,35 @@ def test_announcement_blocks_expands_list_paren() -> None:
     assert "· 피택 시무장로: 손성호" in lines
     assert "· 피택 안수집사: 범시훈" in lines
     assert "· 피택시무권사: 김현진, 이옥례" in lines
+
+
+def test_tidy_detail_joins_prose_and_keeps_structured_rows() -> None:
+    lines = [
+        "11/1 (오늘) - 11/21 (토) 7:00 PM, 노스필드장로교회 (본당)",  # schedule row: own line
+        "새벽기도회는 일정대로 진행되며, 금요기도회는",
+        "다니엘 기도회로 대체됩니다.",
+        "테마(Theme): In the name of Jesus",  # label row: own line
+        "많은 관심과 참여를 바랍니다. (문의: 유OO 전도사)",
+        "•대상: 전교인",
+        "•문의: 김OO 집사 (224-805-6714-)",
+    ]
+    assert _tidy_detail(lines, [False] * len(lines)) == [
+        "11/1 (오늘) - 11/21 (토) 7:00 PM, 노스필드장로교회 (본당)",
+        "새벽기도회는 일정대로 진행되며, 금요기도회는 다니엘 기도회로 대체됩니다.",
+        "테마(Theme): In the name of Jesus",
+        "많은 관심과 참여를 바랍니다.",
+        "(문의: 유OO 전도사)",  # a trailing 문의 under prose gets its own line
+        "",  # blank line between the prose and the bullets
+        "• 대상: 전교인",
+        "• 문의: 김OO 집사 (224-805-6714)",  # bullet spaced, stray phone hyphen dropped
+    ]
+
+
+def test_tidy_detail_joins_a_dated_row_that_ran_out_of_column() -> None:
+    lines = ["11/8 (주일) 친교 후 1:30 PM, 강OO 목사님과 모든 교회학교", "학부모님과의 간담회가 있습니다."]
+    # not a sentence, but it reached the column edge (a width wrap), so it continues
+    assert _tidy_detail(lines, [True, False]) == [" ".join(lines)]
+    assert _tidy_detail(lines, [False, False]) == lines  # a short dated row stays a schedule row
 
 
 def test_parse_bible_refs_and_sermon_title() -> None:

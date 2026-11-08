@@ -8,6 +8,8 @@ PDF preview for phone review. AppleScript sources live in ./applescript/.
 
 from __future__ import annotations
 
+import json
+import logging
 import subprocess
 import time
 from pathlib import Path
@@ -17,6 +19,8 @@ from worship_deck.bible.verses import Verse, english_ref, verse_labels
 from worship_deck.keynote.anchors import detect_anchors
 from worship_deck.lyrics.transcribe import Song, arranged_chunks
 from worship_deck.parse.bulletin import ServiceData
+
+logger = logging.getLogger(__name__)
 
 _SAVE_DRAFT = Path(__file__).parent / "applescript" / "save_draft.applescript"
 _FINALIZE = Path(__file__).parent / "applescript" / "finalize.applescript"
@@ -29,6 +33,8 @@ _DELETE_SLIDES = Path(__file__).parent / "applescript" / "delete_slides.applescr
 _SET_SLIDE_TEXT = Path(__file__).parent / "applescript" / "set_slide_text.applescript"
 _SET_SLIDE_NOTES = Path(__file__).parent / "applescript" / "set_slide_notes.applescript"
 _SET_ANNOUNCEMENT_SLIDE = Path(__file__).parent / "applescript" / "set_announcement_slide.applescript"
+_READ_TEXT_BOXES = Path(__file__).parent / "applescript" / "read_text_boxes.applescript"
+_MEASURE_LINES = Path(__file__).with_name("measure_lines.swift")
 _SET_CHOIR_TITLE = Path(__file__).parent / "applescript" / "set_choir_title.applescript"
 _SET_CONFESSION_TITLE = (
     Path(__file__).parent / "applescript" / "set_confession_title.applescript"
@@ -77,6 +83,36 @@ _TITLE_CHAR_W_KO = 0.83  # Hangul title advance / font: calibrated to master.key
                          # ("이를 행하여 / 나를 기념하라" = 7-char lines at 130pt in a 758pt box)
 _MIN_FONT_TITLE = 70   # readability floor (pt); options at/above it are preferred when wrapping
 _MAX_TITLE_LINES = 4   # cap on wrapped title lines considered
+# The box auto-sizes to its text, so read_title_box's width is just last week's title — fitting
+# to it wrapped titles onto 3 narrow lines, and in 7 of 13 weeks (Aug–Nov 2026) the operator
+# widened the box to ~1060–1150pt and rewrapped to 1–2 lines at 89–104pt. So fit to that frame
+# instead, and take the FEWEST lines that still reach _PREF_FONT_TITLE. The height keeps a
+# 2-line title ≤100pt, clear of the gold ref box below it (the box stays centred at y≈505).
+_TITLE_MAX_W = 1150
+_TITLE_MAX_H = 240
+_PREF_FONT_TITLE = 90
+
+# --- 교회소식 auto-fit -------------------------------------------------------------------------
+# Item boxes are fixed-size and vertically centred; Keynote neither shrinks text nor reports
+# overflow, so an over-long item at the template's 80pt just falls off the slide and the operator
+# shrank it by hand. We measure line breaks with CoreText (measure_lines.swift) and pick the
+# largest size, in 5pt steps down to the floor, whose height fits the box. Calibrated on the
+# 2026-10-25 draft/final PDF renders at 80/70/60pt: text width = box width − 60, rendered height
+# = lines × 1.2625 × size − 0.1125 × size. Over the 10-18/10-25/11-01 decks this flagged exactly
+# the three items the operator shrank for overflow, and nothing else.
+_ANNOUNCE_INSET_W = 60
+_ANNOUNCE_LINE_H = 1.2625
+_ANNOUNCE_TRIM = 0.1125
+_ANNOUNCE_STEP = 5
+_MIN_FONT_ANNOUNCE = 60
+
+# --- 성가대 title card ----------------------------------------------------------------------------
+# "title (composer)" on one line in a full-width box over a 1522pt lower-third bar, at the
+# template's 94pt. The operator shrank it by hand in 4 of 13 weeks (Aug–Nov 2026) to 75–86pt; the
+# widest line they left at 94pt measures 1427pt and the ones they shrank 1554–1879pt. Fitting to
+# 1450pt reproduces their sizes to within 3pt and leaves the other weeks alone.
+_CHOIR_CARD_W = 1450
+_MIN_FONT_CARD = 60
 
 
 def _run_osascript(script: Path, *args: str) -> str:
@@ -252,6 +288,12 @@ def _wrap_balanced(text: str, lines: int) -> list[str]:
     words = text.split()
     if lines <= 1 or len(words) <= 1:
         return [text.strip()] if words else []
+    if lines == 2:  # exact: the break that makes the longer line shortest; on a tie, break after
+        # a separator ("단단한 마음 - / 하나님이 …", "… 자 vs / …"), else keep the longer line first
+        splits = [(" ".join(words[:i]), " ".join(words[i:])) for i in range(1, len(words))]
+        return list(min(splits, key=lambda s: (
+            max(map(len, s)), not s[0].endswith(("-", ",", ":", "vs")), -len(s[0])
+        )))
     target = len(text) / lines
     out: list[str] = []
     cur = ""
@@ -271,9 +313,11 @@ def _fit_title(text: str, box_w: int, box_h: int, base_font: int) -> tuple[str, 
 
     Keynote can't word-wrap or autoshrink via AppleScript, so we do both: try 1.._MAX_TITLE_LINES
     lines, balance-wrapping each way, and size each option by what fits the box width (longest
-    line) and height (line count). Pick the LARGEST font (ties → fewest lines) so the title stays
-    prominent; restrict to options at/above _MIN_FONT_TITLE when any qualify. The font is capped at
-    the template's base font so short titles are never enlarged. Hangul advance is _TITLE_CHAR_W_KO.
+    line) and height (line count). Take the fewest lines that reach _PREF_FONT_TITLE (the
+    operator's choice: one line when it reads large, else two); failing that, the LARGEST font
+    (ties → fewest lines), restricted to options at/above _MIN_FONT_TITLE when any qualify. The
+    font is capped at the template's base font so short titles are never enlarged. Hangul advance
+    is _TITLE_CHAR_W_KO.
     """
     options: list[tuple[int, int, list[str]]] = []  # (line_count, font, lines)
     for n in range(1, _MAX_TITLE_LINES + 1):
@@ -283,6 +327,10 @@ def _fit_title(text: str, box_w: int, box_h: int, base_font: int) -> tuple[str, 
             min(base_font, box_w / (longest * _TITLE_CHAR_W_KO), box_h / (len(wrapped) * _LINE_H))
         )
         options.append((len(wrapped), font, wrapped))
+    preferred = [o for o in options if o[1] >= _PREF_FONT_TITLE]
+    if preferred:
+        _, font, lines = min(preferred, key=lambda o: o[0])
+        return "\n".join(lines), font
     pool = [o for o in options if o[1] >= _MIN_FONT_TITLE] or options
     _, font, lines = max(pool, key=lambda o: (o[1], -o[0]))
     return "\n".join(lines), font
@@ -545,15 +593,16 @@ def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str
     blank the reference box.
 
     The title box does not word-wrap or autoshrink, so a long title overflows it (#106 follow-up):
-    the box geometry is read and `_fit_title` wraps the title to the fewest readable lines and the
-    font shrunk to fit, both applied by the script. Returns "ok".
+    `_fit_title` wraps the title to the fewest readable lines within the _TITLE_MAX_W×_TITLE_MAX_H
+    frame and shrinks the font to fit (capped at the box's base font, read from the slide), both
+    applied by the script. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    box_w, box_h, base_font = read_title_box(key, slide_index)
-    wrapped, font = _fit_title(title, box_w, box_h, base_font)
+    _, _, base_font = read_title_box(key, slide_index)
+    wrapped, font = _fit_title(title, _TITLE_MAX_W, _TITLE_MAX_H, base_font)
     return _run_osascript(
         _SET_SERMON_TITLE, key, str(slide_index), wrapped, ref, str(font)
     ).strip()
@@ -677,21 +726,38 @@ def fill_song_slides(
     return 1 + target
 
 
-def set_choir_title(key_path: str, slide_index: int, title: str, composer: str) -> str:
+def set_choir_title(
+    key_path: str, slide_index: int, title: str, composer: str, font: int = 0
+) -> str:
     """Set a 성가대 title slide's song title + composer credit, in place (#88).
 
     The two choir title slides are laid out differently in master.key. The section-divider slide
     is one box of three paragraphs — a static "성가대 찬양" heading, the title, then the composer —
     so the heading is kept and `title`/`composer` go in paragraphs 2/3 (per-paragraph styling
     preserved). The title-card slide is a single-line lower-third bar, so it takes the combined
-    "title composer" line. The script picks the branch per box (heading box vs single-line);
-    off-canvas leftovers are skipped. Returns "ok".
+    "title composer" line, at `font` pt when non-zero (`_fit_one_line`). The script picks the
+    branch per box (heading box vs single-line); off-canvas leftovers are skipped. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    return _run_osascript(_SET_CHOIR_TITLE, key, str(slide_index), title, composer).strip()
+    return _run_osascript(
+        _SET_CHOIR_TITLE, key, str(slide_index), title, composer, str(font)
+    ).strip()
+
+
+def _fit_one_line(text: str, font: str, base: int, max_w: int) -> int:
+    """Largest size ≤ base (1pt steps, floor _MIN_FONT_CARD) keeping `text` on one line within
+    max_w — 0 when base already fits or it can't be measured."""
+    sizes = list(range(base, _MIN_FONT_CARD - 1, -1))
+    counts = _measure_line_counts(
+        [{"text": text, "font": font, "size": s, "width": max_w} for s in sizes]
+    )
+    if not counts or counts[0] < 0:
+        return 0
+    fit = next((s for s, n in zip(sizes, counts) if n == 1), sizes[-1])
+    return 0 if fit == base else fit
 
 
 def fill_choir_slides(
@@ -721,8 +787,13 @@ def fill_choir_slides(
     composer = song.composer
     if composer and not composer.startswith("("):
         composer = f"({composer})"
+    # The one-line title card (the last title slide) overflows its bar on long English credits.
+    _, _, card_font, card_base = read_text_boxes(key_path, title_index + title_count - 1, 1)[0]
+    fitted = _fit_one_line(
+        f"{song.title} {composer}".strip(), card_font, card_base, _CHOIR_CARD_W
+    )
     for i in range(title_count):
-        set_choir_title(key_path, title_index + i, song.title, composer)
+        set_choir_title(key_path, title_index + i, song.title, composer, fitted)
     chunks = arranged_chunks(song)
     target = len(chunks)
     first_lyric = title_index + title_count
@@ -820,6 +891,11 @@ def fill_worship_songs(
     for i in reversed(range(m)):
         used = fill_song_slides(key_path, s + _WORSHIP_UNIT * i + 1, songs[i])
         total += used - 2  # used = 1 title + L lyrics; the unit already counted 1 title + 1 lyric
+        # An untitled song is a continuation page of the one before it — the operator deleted
+        # its blank separator and empty title bar by hand, so its lyrics follow straight on.
+        if i > 0 and not songs[i].title.strip():
+            delete_slides(key_path, s + _WORSHIP_UNIT * i, 2)
+            total -= 2
     return total
 
 
@@ -842,19 +918,94 @@ def fill_worship_after_sermon(
     fill_song_slides(key_path, sermon_title + 2, song)  # unit: blank at +1, title at +2, 1 seed lyric
 
 
-def set_announcement_slide(key_path: str, slide_index: int, text: str) -> str:
+def set_announcement_slide(key_path: str, slide_index: int, text: str, font: int = 0) -> str:
     """Set one 교회소식 item slide's native text, styling title gold + detail white (#16).
 
     `text` is one announcement: paragraph 1 is the title (rendered gold), the remaining
     paragraphs are the detail (rendered white) — matching master.key's item slides, which use a
-    single top-anchored box per item with a gold title paragraph over white detail. Both stacked
-    on-canvas copies are set; off-canvas {0,0} leftovers are skipped. Returns "ok".
+    single vertically centred box per item with a gold title paragraph over white detail. `font`
+    is the auto-fitted size in pt (0 leaves the box's base size). Both stacked on-canvas copies
+    are set; off-canvas {0,0} leftovers are skipped. Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    return _run_osascript(_SET_ANNOUNCEMENT_SLIDE, key, str(slide_index), text).strip()
+    return _run_osascript(
+        _SET_ANNOUNCEMENT_SLIDE, key, str(slide_index), text, str(font)
+    ).strip()
+
+
+def read_text_boxes(
+    key_path: str, start_index: int, count: int
+) -> list[tuple[int, int, str, int]]:
+    """Return (width, height, font name, base pt) of each slide's first on-canvas text box.
+
+    Raises:
+        RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
+    """
+    key = str(Path(key_path).expanduser())
+    out = _run_osascript(_READ_TEXT_BOXES, key, str(start_index), str(count))
+    boxes = []
+    for line in out.strip().splitlines():
+        w, h, font, size = line.split("\t")
+        boxes.append((int(w), int(h), font, int(size)))
+    return boxes
+
+
+def _measure_line_counts(requests: list[dict]) -> list[int] | None:
+    """Line counts for [{text, font, size, width}] via CoreText, or None if `swift` is missing."""
+    try:
+        result = subprocess.run(
+            ["swift", str(_MEASURE_LINES)],
+            input=json.dumps(requests),
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=True,
+        )
+    except FileNotFoundError:  # no Xcode Command Line Tools: build at base size, as before
+        logger.warning("`swift` not found — 교회소식 auto-fit skipped")
+        return None
+    return json.loads(result.stdout)
+
+
+def _fit_announcement_sizes(
+    items: list[str], boxes: list[tuple[int, int, str, int]]
+) -> list[int]:
+    """Pick each 교회소식 item's font: the largest size that fits its box (0 = leave as is).
+
+    Candidates step down from the box's base size by _ANNOUNCE_STEP to _MIN_FONT_ANNOUNCE; all
+    are measured in one CoreText call. An item that still overflows at the floor gets the floor
+    and a warning — it needs condensing in review, not a smaller font.
+    """
+    candidates = [
+        list(range(base, _MIN_FONT_ANNOUNCE - 1, -_ANNOUNCE_STEP)) for _, _, _, base in boxes
+    ]
+    requests = [
+        {"text": text, "font": font, "size": size, "width": w - _ANNOUNCE_INSET_W}
+        for text, (w, _, font, _), sizes in zip(items, boxes, candidates)
+        for size in sizes
+    ]
+    counts = _measure_line_counts(requests)
+    if counts is None:
+        return [0] * len(items)
+    fitted = []
+    it = iter(counts)
+    for n, ((_, h, _, base), sizes) in enumerate(zip(boxes, candidates), start=1):
+        lines = [next(it) for _ in sizes]
+        fits = [
+            size for size, count in zip(sizes, lines)
+            if 0 < count and count * _ANNOUNCE_LINE_H * size - _ANNOUNCE_TRIM * size <= h
+        ]
+        if fits:
+            fitted.append(fits[0] if fits[0] != base else 0)
+        elif min(lines, default=-1) < 0:  # font not installed: can't measure, leave as is
+            fitted.append(0)
+        else:
+            logger.warning("교회소식 item %d overflows its box even at %dpt", n, sizes[-1])
+            fitted.append(sizes[-1])
+    return fitted
 
 
 def fill_announcement_slides(
@@ -870,7 +1021,8 @@ def fill_announcement_slides(
     len(announcements) (trimming surplus or duplicating the first item slide), then sets each
     slide's native text to one item. Each item string is title (paragraph 1) + detail (the
     remaining paragraphs); set_announcement_slide styles the title gold and the detail white to
-    match master.key. Returns the slides used.
+    match master.key, at the size `_fit_announcement_sizes` measured to fit each item's box.
+    Returns the slides used.
 
     An empty list trims the whole block (target 0); real bulletins always have announcements,
     so this degenerate case is left unguarded (mirrors fill_song_slides' empty-lyrics handling).
@@ -886,8 +1038,12 @@ def fill_announcement_slides(
         delete_slides(key_path, start_index + target, existing_count - target)
     elif target > existing_count:
         duplicate_slide(key_path, start_index, target - existing_count)
-    for i, item in enumerate(announcements):
-        set_announcement_slide(key_path, start_index + i, item)
+    fonts = [0] * target
+    if target:
+        boxes = read_text_boxes(key_path, start_index, target)
+        fonts = _fit_announcement_sizes(announcements, boxes)
+    for i, (item, font) in enumerate(zip(announcements, fonts)):
+        set_announcement_slide(key_path, start_index + i, item, font)
     return target
 
 
