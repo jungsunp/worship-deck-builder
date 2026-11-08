@@ -192,9 +192,18 @@ def build_song(spec: dict, run_song: dict) -> dict:
     for k in ("sheets", "marks", "note", "confidence", "continuation_of"):
         if k in spec:
             out[k] = spec[k]
-    if "continuation_of" in spec or not spec.get("song_id"):
-        return out  # a continuation page / intro strip / no song: note only, nothing to apply
+    if "continuation_of" in spec:
+        return out  # a continuation page / intro strip: note only, nothing to apply
     prov = run_song.get("provenance") or {}
+    if not spec.get("song_id"):
+        if prov.get("source") == "library" and run_song.get("sections") and spec.get("arrangement"):
+            # Library hit (#204): assemble used the operator-confirmed lines and section labels, so
+            # the sheet only has to give this week's play order — no gasazip, no anchors.
+            cards = [{"label": c["label"], "lines": list(c["lines"])} for c in run_song["sections"]]
+            arrangement, warnings = expand_arrangement(spec["arrangement"], cards)
+            out.update(title=run_song.get("title", ""), sections=cards, lines=sections.flatten(cards),
+                       arrangement=arrangement, warnings=warnings)
+        return out  # otherwise no song: note only, nothing to apply
     same = str(prov.get("song_id", "")) == str(spec["song_id"])
     title = spec.get("title") or (run_song.get("title", "") if same else "")
     artist = spec.get("artist") or (prov.get("artist", "") if same else "")
@@ -246,7 +255,7 @@ def _show(service_date: str) -> None:
     for i, s in enumerate(run.worship_songs):
         prov = s.get("provenance") or {}
         print(f"  ref {i}: {s.get('title')!r} source={prov.get('source')} "
-              f"song_id={prov.get('song_id', '')} merged_sheets={prov.get('merged_sheets', 1)} "
+              f"song_id={prov.get('song_id', '')} slug={prov.get('slug', '')} merged_sheets={prov.get('merged_sheets', 1)} "
               f"cand_cov={prov.get('cand_cov', 0):.2f}")
         print(f"    sections={[c['label'] for c in s.get('sections', [])]} "
               f"arrangement={s.get('arrangement', '')!r}")

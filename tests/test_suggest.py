@@ -177,3 +177,20 @@ def test_apply_spec_rejects_bad_ref(tmp_path, monkeypatch) -> None:
     store.save("2026-11-08", ServiceData())
     with pytest.raises(ValueError):
         S.apply_spec("2026-11-08", {"worship_songs": [{"ref": 0, "song_id": "100"}]})
+
+
+def test_library_song_needs_only_the_play_order(monkeypatch) -> None:
+    """A library hit (#204) already has this song's confirmed cards: no song_id, no anchors, no network."""
+    monkeypatch.setattr(httpx, "get", lambda *a, **kw: pytest.fail("no network for a library song"))
+    run_song = {
+        "title": "곡", "provenance": {"source": "library", "slug": "곡"},
+        "sections": [{"label": "V1", "lines": ["가"]}, {"label": "C", "lines": ["나"]}],
+    }
+    rec = S.build_song({"ref": 0, "arrangement": "V1 Cx2 TAG", "marks": "V1 - Cx2"}, run_song)
+    assert rec["arrangement"] == "V1 C C" and rec["lines"] == ["가", "", "나"]
+    assert [c["label"] for c in rec["sections"]] == ["V1", "C"] and "song_id" not in rec
+    assert rec["warnings"] == ["진행 순서에 없는 구간 라벨: TAG"]
+    # No arrangement given → a note-only record, nothing for review to apply.
+    assert "sections" not in S.build_song({"ref": 0, "note": "?"}, run_song)
+    # A non-library song without a song_id stays note-only too.
+    assert "sections" not in S.build_song({"ref": 0, "arrangement": "V1"}, {"title": "x", "provenance": {}})
