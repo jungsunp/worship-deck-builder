@@ -1826,3 +1826,32 @@ def test_build_skips_empty_sections(monkeypatch: pytest.MonkeyPatch) -> None:
     ]
     assert calls[1][1] == ("out.key", "2026년 6월 7일", "", "")
     assert calls[2][1] == ("out.key", 135, 18)
+
+
+@pytest.mark.local_only
+def test_fill_announcement_photos_live_adds_collage_slides(
+    real_template_key: Path, tmp_path: Path
+) -> None:
+    """Real Keynote: 8 photos become two photo-only slides right after the chosen item slide, each
+    photo fully inside the slide (collage_layout never crops or overlaps)."""
+    from PIL import Image
+
+    draft = tmp_path / "draft.key"
+    save_draft(str(real_template_key), str(draft))
+    photos = []
+    for i in range(8):
+        w, h = 1440, 1080  # all landscape → 8 photos split 4 + 4
+        p = tmp_path / f"p{i}.jpg"
+        Image.new("RGB", (w, h), (30 * i, 90, 160)).save(p, "JPEG")
+        photos.append({"path": str(p), "w": w, "h": h})
+    items = ["1. 첫째\n\n상세", "2. 둘째\n\n상세"]
+    fill_announcement_slides(str(draft), 117, items, existing_count=5)
+
+    assert B.fill_announcement_photos(str(draft), 117, photos) == 2  # 8 photos -> 4 + 4
+
+    assert "첫째" in _on_canvas_text(str(draft), 117)
+    for collage in (118, 119):
+        assert _on_canvas_text(str(draft), collage).strip() == ""  # photo-only, no leftover text
+        n, x, y, w, h, dw, dh = _last_image_frame(str(draft), collage)
+        assert n == 4 and x >= 0 and y >= 0 and x + w <= dw + 1 and y + h <= dh + 1
+    assert "둘째" in _on_canvas_text(str(draft), 120)  # the next item slide followed the collage

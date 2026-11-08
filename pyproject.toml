@@ -11,6 +11,7 @@ dependencies = [
     "uvicorn",         # ASGI server
     "python-multipart",# file uploads in the web app
     "protobuf",        # read/write ProPresenter .pro files (v3 migration, #165)
+    "Pillow",          # shrink uploaded 교회소식 photos (photos.py)
 ]
 
 [project.optional-dependencies]

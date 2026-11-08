@@ -141,6 +141,22 @@
                             border: 1px solid var(--purple); }
   .stickybar #generatePro:disabled { background: #fff; color: #c4b5fd; border-color: #c4b5fd; }
   a { color: var(--blue); }
+  /* 교회소식 photo collage uploads: thumbnails with reorder/delete */
+  .photogrid { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
+  .photothumb { position: relative; width: 30%; border: 2px solid var(--gray-200);
+                border-radius: 6px; overflow: hidden; }
+  .photothumb img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; }
+  .photothumb .num { position: absolute; top: 0; left: 0; padding: 0.1rem 0.45rem;
+                     font-size: 0.75rem; color: #fff; background: var(--blue); }
+  .photothumb .acts { display: flex; }
+  .photothumb .acts button { flex: 1; padding: 0.35rem 0; font-size: 1rem; border: 0;
+                             border-top: 1px solid var(--gray-200); background: #fff; }
+  .photothumb .acts .del { color: var(--red); }
+  .photoadd { width: auto; padding: 0.5rem 1rem; font-size: 0.95rem; border: 1px solid var(--blue);
+              border-radius: var(--radius); background: #fff; color: var(--blue); cursor: pointer; }
+  .photomsg { color: var(--gray-600); font-size: 0.85rem; margin-top: 0.4rem; }
+  .photomsg.err { color: var(--red); }
+  select#photoAfter { font-size: 1rem; padding: 0.4rem; }
 </style>
 </head>
 <body>
@@ -936,6 +952,99 @@ function renderAnnounce(div) {
   ta.placeholder = '항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)';
   ta.value = (run.announcements || []).join('\n---\n');
   div.appendChild(ta);
+  renderAnnouncePhotos(div);
+}
+
+// 교회소식 photos (collage slides): files upload one request each, are shrunk server-side and
+// stored with the run. The server owns the list (run.announcement_photos is refreshed from each
+// response); only the "follow item N" placement is saved with the page's 저장.
+const photoName = p => p.path.split('/').pop();
+let photoEls = null;
+function renderAnnouncePhotos(div) {
+  const hd = document.createElement('div'); hd.className = 'subhd'; hd.textContent = '사진 (콜라주 슬라이드)';
+  const input = document.createElement('input');
+  input.type = 'file'; input.multiple = true; input.accept = 'image/*'; input.hidden = true;
+  input.onchange = () => uploadPhotos(input);
+  const add = document.createElement('button'); add.type = 'button'; add.className = 'photoadd';
+  add.textContent = '＋ 사진 추가'; add.onclick = () => input.click();
+  const msg = document.createElement('div'); msg.id = 'photomsg'; msg.className = 'photomsg';
+  const grid = document.createElement('div'); grid.id = 'photogrid'; grid.className = 'photogrid';
+  const after = document.createElement('div'); after.id = 'photoAfterRow'; after.className = 'photomsg';
+  div.append(hd, add, input, msg, grid, after);
+  photoEls = {grid, after};  // the card isn't attached yet, so getElementById can't find them
+  renderPhotoGrid();
+}
+
+function renderPhotoGrid() {
+  if (!photoEls) return;
+  const grid = photoEls.grid;
+  grid.innerHTML = '';
+  const photos = run.announcement_photos || [];
+  photos.forEach((p, i) => {
+    const cell = document.createElement('div'); cell.className = 'photothumb';
+    const img = document.createElement('img'); img.src = '/runs/' + date + '/photos/' + photoName(p);
+    const num = document.createElement('span'); num.className = 'num'; num.textContent = i + 1;
+    const acts = document.createElement('div'); acts.className = 'acts';
+    const mk = (label, cls, fn, off) => {
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = label;
+      if (cls) b.className = cls; b.disabled = !!off; b.onclick = fn; return b;
+    };
+    acts.append(mk('◀', '', () => movePhoto(i, -1), i === 0),
+                mk('✕', 'del', () => deletePhoto(photoName(p))),
+                mk('▶', '', () => movePhoto(i, 1), i === photos.length - 1));
+    cell.append(img, num, acts);
+    grid.appendChild(cell);
+  });
+  // Placement: which item the photo slide(s) follow (0 = after the last item, the default).
+  const row = photoEls.after;
+  row.innerHTML = '';
+  if (!photos.length) return;
+  const n = (run.announcements || []).length;
+  const sel = document.createElement('select'); sel.id = 'photoAfter';
+  sel.add(new Option('마지막 항목 뒤', 0));
+  for (let k = 1; k < n; k++) sel.add(new Option(k + '번 항목 뒤', k));
+  sel.value = (run.announcement_photos_after || 0) >= n ? 0 : (run.announcement_photos_after || 0);
+  sel.onchange = () => { run.announcement_photos_after = +sel.value; markEdited('announce'); };
+  row.append('사진 슬라이드 위치: ', sel,
+             ' · 한 슬라이드에 최대 6장, 더 많으면 슬라이드가 나뉩니다');
+}
+
+function photoMsg(text, bad) {
+  const m = document.getElementById('photomsg');
+  if (m) { m.textContent = text; m.className = 'photomsg' + (bad ? ' err' : ''); }
+}
+function applyPhotoState(j) { run.announcement_photos = j.photos; renderPhotoGrid(); }
+
+async function uploadPhotos(input) {
+  const files = [...input.files]; input.value = '';
+  for (let i = 0; i < files.length; i++) {
+    photoMsg('올리는 중 ' + (i + 1) + '/' + files.length + ' …');
+    const fd = new FormData(); fd.append('files', files[i]);
+    const r = await fetch('/runs/' + date + '/photos', {method: 'POST', body: fd});
+    if (!r.ok) {
+      let d = ''; try { d = (await r.json()).detail || ''; } catch (e) { /* non-JSON error */ }
+      photoMsg('✕ ' + (files[i].name || '사진') + ': ' + (d || r.status), true);
+      return;
+    }
+    applyPhotoState(await r.json());
+  }
+  photoMsg('✓ ' + files.length + '장 추가됨');
+  markEdited('announce');
+}
+async function deletePhoto(name) {
+  const r = await fetch('/runs/' + date + '/photos/' + encodeURIComponent(name), {method: 'DELETE'});
+  if (r.ok) { applyPhotoState(await r.json()); markEdited('announce'); }
+  else photoMsg('✕ 삭제 실패: ' + r.status, true);
+}
+async function movePhoto(i, d) {
+  const names = (run.announcement_photos || []).map(photoName);
+  const j = i + d;
+  if (j < 0 || j >= names.length) return;
+  [names[i], names[j]] = [names[j], names[i]];
+  const r = await fetch('/runs/' + date + '/photos/order', {
+    method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({order: names})});
+  if (r.ok) { applyPhotoState(await r.json()); markEdited('announce'); }
+  else photoMsg('✕ 순서 변경 실패: ' + r.status, true);
 }
 
 // Korean block first, then English — reviewing each translation as one run of text is
@@ -1020,6 +1129,8 @@ function syncFromDom() {
   });
   const annTa = document.querySelector('#order textarea[data-kind="ann"]');
   if (annTa) run.announcements = annTa.value.split(/\n-{3,}\n/).map(s => s.trim()).filter(Boolean);
+  const photoAfter = document.getElementById('photoAfter');
+  if (photoAfter) run.announcement_photos_after = +photoAfter.value;
   const hn = document.getElementById('hymnNumber');
   if (hn) run.offering_hymn_number = hn.value.trim();
   const ht = document.getElementById('hymnTitle');
