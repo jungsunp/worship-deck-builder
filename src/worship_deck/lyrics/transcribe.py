@@ -335,14 +335,28 @@ def chunk(lines: list[str], max_lines: int = 2) -> list[list[str]]:
     return slides
 
 
+_ARR_NOTE = re.compile(r"[(（][^)）]*[)）]")
+_ARR_REPEAT = re.compile(r"^(.*?)[xX×*](\d+)$")
+
+
 def parse_arrangement(s: str) -> list[str]:
     """Parse a play-order string into a list of section labels (#113).
 
-    Splits on dashes/whitespace and drops empties: "V1 C V1 C B C" -> ["V1","C","V1","C","B","C"].
-    There are no repeat counts — a section is replayed by repeating its label (the operator keeps
-    the slide on screen for live ×N repeats, watching the band sheet), keeping the deck small.
+    Splits on dashes/whitespace/commas/arrows and drops empties: "V1 C V1 C B C" ->
+    ["V1","C","V1","C","B","C"]. The stored form repeats a label per played group (the operator
+    keeps the slide on screen for live ×N repeats). Sheet-style repeat counts are expanded so
+    they aren't silently dropped as unknown labels: "Cx2", "C×2", "C*2" and "C x 2" -> ["C","C"];
+    parenthesized notes ("Cx2(목소리)") are ignored.
     """
-    return [t for t in re.split(r"[-\s]+", s.strip()) if t]
+    s = re.sub(r"\s*([xX×*])\s*(\d+)", r"\1\2", _ARR_NOTE.sub(" ", s))  # "C x 3" -> "Cx3"
+    out: list[str] = []
+    for tok in re.split(r"[-\s,→>]+", s.strip()):
+        m = _ARR_REPEAT.match(tok)
+        if m:
+            out.extend([m.group(1)] * int(m.group(2)) if m.group(1) else [])
+        elif tok:
+            out.append(tok)
+    return out
 
 
 def arranged_chunks(song: Song) -> list[tuple[str, list[str]]]:

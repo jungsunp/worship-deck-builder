@@ -88,6 +88,17 @@
                     background: #fff; color: var(--green); cursor: pointer; flex: none; }
   .cand .candprev { margin-top: 0.3rem; color: var(--gray-600); font-size: 0.85rem;
                     white-space: pre-wrap; }
+  /* /prep-week suggestion (#209): Claude's read of the sheet, applied only on tap. */
+  .sugg { border: 1px solid var(--purple); border-radius: var(--radius); padding: 0.6rem;
+          margin: 0.5rem 0; background: #faf5ff; }
+  .sugg .sugghd { display: flex; align-items: center; gap: 0.5rem; }
+  .sugg .suggtitle { font-weight: 600; color: var(--purple); }
+  .sugg .suggmeta { color: var(--gray-600); font-size: 0.85rem; }
+  .sugg .suggapply { width: auto; margin-left: auto; padding: 0.35rem 0.9rem; font-size: 0.85rem;
+                     border: 0; border-radius: var(--radius); background: var(--purple);
+                     color: #fff; cursor: pointer; flex: none; }
+  .sugg .suggline { margin-top: 0.3rem; font-size: 0.85rem; white-space: pre-wrap; }
+  .sugg .suggwarn { margin-top: 0.3rem; font-size: 0.85rem; color: var(--amber); }
   .arr { margin-top: 0.8rem; }
   .arrhint { color: var(--gray-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
   .arrhint b { color: var(--gray-700); }
@@ -171,6 +182,7 @@ const date = location.pathname.split('/').pop();
 const dm = date.match(/^\d{4}-(\d{2})-(\d{2})$/);
 document.getElementById('date').textContent = dm ? Number(dm[1]) + '월 ' + Number(dm[2]) + '일' : date;
 let run = null;
+let suggestions = {};  // /prep-week sidecar (#209); {} on weeks without a Claude session
 
 function fmtDur(s) {
   const m = Math.floor(s / 60), sec = Math.round(s % 60);
@@ -202,6 +214,7 @@ async function load() {
   if (!r.ok) { showStatus('✕ 불러오기 오류: ' + r.status, true); return; }
   run = await r.json();
   try { customLabels = (await (await fetch('/api/labels')).json()).labels || []; } catch (e) { /* offline: dropdown still has the defaults */ }
+  try { suggestions = await (await fetch('/runs/' + date + '/suggest')).json(); } catch (e) { /* no sidecar shown */ }
   render();
 }
 
@@ -396,6 +409,7 @@ function renderMedley(div) {
     const del = document.createElement('button'); del.textContent = '✕'; del.onclick = () => deleteSong(s);
     hd.append(ti, up, dn, del); sd.appendChild(hd);
     appendProvRow(sd, song, s);  // lyric origin badge (#200) + 재검색 (#203)
+    appendSuggestion(sd, song, s);  // Claude 제안 from /prep-week (#209)
     // Start unlabeled lyrics as one V1 card so the operator always has something to split/label.
     if (!song.sections || !song.sections.length) {
       song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];
@@ -515,6 +529,63 @@ function appendProvRow(sd, song, ref) {
     }
     song.candidates.forEach(c => list.appendChild(candCard(ref, c, list, true)));
   }
+}
+
+// The /prep-week suggestion for medley song `s` (#209): the sidecar record whose ref is this index
+// and whose title (as assembled, or as suggested) still matches, else any record matching by title
+// — songs may have been reordered or deleted since the skill ran.
+function suggestionFor(song, s) {
+  const list = suggestions.worship_songs || [];
+  const hit = g => [g.run_title, g.title].includes(song.title || '');
+  return list.find(g => g.ref === s && hit(g)) || (song.title && list.find(hit)) || null;
+}
+
+// "Claude 제안" block: suggested song, play order, the sheet marks it was read from, notes and
+// warnings, plus 적용 — which only fills the #113 cards/arrangement; the operator still saves.
+// A continuation-page / intro-strip record has no lyrics: it just says so (delete with ✕).
+function appendSuggestion(sd, song, s) {
+  const g = suggestionFor(song, s);
+  if (!g) return;
+  const box = document.createElement('div'); box.className = 'sugg';
+  const hd = document.createElement('div'); hd.className = 'sugghd';
+  const t = document.createElement('span'); t.className = 'suggtitle'; t.textContent = 'Claude 제안';
+  const m = document.createElement('span'); m.className = 'suggmeta';
+  m.textContent = [g.title, (g.sheets || []).length ? '악보 ' + g.sheets.join(', ') : '', g.confidence]
+    .filter(Boolean).join(' · ');
+  hd.append(t, m);
+  const line = (txt, cls) => { const d = document.createElement('div'); d.className = cls || 'suggline'; d.textContent = txt; box.appendChild(d); };
+  box.appendChild(hd);
+  if (g.continuation_of !== undefined) {
+    line(`곡 ${g.continuation_of + 1}에 이어지는 악보입니다 — 가사가 없으니 ✕로 삭제하세요`);
+  } else if (g.sections) {  // a note-only record (song not on gasazip) has nothing to apply
+    const ap = document.createElement('button'); ap.type = 'button'; ap.className = 'suggapply';
+    ap.textContent = '적용'; ap.onclick = () => applySuggestion(s, g);
+    hd.appendChild(ap);
+    line('구간: ' + (g.sections || []).map(c => c.label).join(' · '));
+    line('진행: ' + (g.arrangement || '(없음)'));
+  }
+  if (g.marks) line('악보 표기: ' + g.marks);
+  if (g.note) line(g.note);
+  (g.warnings || []).forEach(w => line('⚠ ' + w, 'suggwarn'));
+  sd.appendChild(box);
+}
+
+function applySuggestion(s, g) {
+  syncFromDom();  // keep unsaved edits to other songs
+  const song = run.worship_songs[s];
+  const prov = song.provenance || {};
+  song.title = g.title || song.title;
+  song.sections = g.sections.map(c => ({label: c.label, lines: c.lines.slice()}));
+  song.lines = g.lines.slice();
+  song.arrangement = g.arrangement;
+  if (String(prov.song_id || '') !== g.song_id) {  // a different song than assemble picked
+    song.provenance = {source: 'gasazip', song_id: g.song_id, artist: g.artist || '',
+                       ...(prov.merged_sheets ? {merged_sheets: prov.merged_sheets} : {})};
+  }
+  song.candidates = [];
+  edited.opening = true;
+  render();
+  showStatus('Claude 제안 적용됨 — 확인 후 저장하세요');
 }
 
 // The title <input> backing a song ref — the operator's corrected title is read from the DOM.
@@ -694,9 +765,16 @@ function chunkCountLines(lines) {
   return slides + (cur ? 1 : 0);
 }
 // transcribe.parse_arrangement in JS: "V1 C V1 C" -> ["V1","C","V1","C"] (a label per played slide-
-// group; repeat a label to repeat the section — no ×N counter).
+// group; repeat a label to repeat the section). Sheet-style "Cx2"/"C×2"/"C x 2" expand to "C C" and
+// "(…)" notes are dropped, so an older stored ×N isn't shown as an unknown label.
 function parseArr(str) {
-  return (str || '').trim().split(/[-\s]+/).filter(Boolean);
+  const s = (str || '').replace(/[(（][^)）]*[)）]/g, ' ').replace(/\s*([xX×*])\s*(\d+)/g, '$1$2');
+  const out = [];
+  s.trim().split(/[-\s,→>]+/).forEach(t => {
+    const m = t.match(/^(.*?)[xX×*](\d+)$/);
+    if (m) { if (m[1]) for (let k = 0; k < +m[2]; k++) out.push(m[1]); } else if (t) out.push(t);
+  });
+  return out;
 }
 
 // Serialize a [label,...] sequence back to the stored arrangement string ("V1 C V1 C").

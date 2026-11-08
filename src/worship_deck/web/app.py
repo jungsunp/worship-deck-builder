@@ -26,6 +26,7 @@ from worship_deck.keynote import build as keynote_build
 from worship_deck.lyrics import linebreak
 from worship_deck.lyrics import online as lyrics_online
 from worship_deck.lyrics import sections as lyrics_sections
+from worship_deck.lyrics import suggest as lyrics_suggest
 from worship_deck.lyrics import transcribe as lyrics_transcribe
 from worship_deck.lyrics.choir import parse_choir_text
 from worship_deck.parse import ServiceData
@@ -732,7 +733,9 @@ def list_runs() -> dict:
     """
     if not store.RUNS_DIR.exists():
         return {"runs": [], "pdfs": []}
-    runs = sorted((p.stem for p in store.RUNS_DIR.glob("*.json")), reverse=True)
+    runs = sorted(  # skip <date>.suggest.json sidecars (#209)
+        (p.stem for p in store.RUNS_DIR.glob("*.json") if "." not in p.stem), reverse=True
+    )
     pdfs = [d for d in runs if Path(f"data/drafts/draft-{d}.pdf").is_file()]
     return {"runs": runs, "pdfs": pdfs}
 
@@ -882,6 +885,19 @@ def apply_research(service_date: str, body: dict = Body(...)) -> dict:
         secs, arrangement = suggestion
         return {"lines": lyrics_sections.flatten(secs), "sections": secs, "arrangement": arrangement}
     return {"lines": lines, "sections": [], "arrangement": ""}
+
+
+@app.get("/runs/{service_date}/suggest")
+def get_suggestions(service_date: str) -> dict:
+    """The ``/prep-week`` sidecar (#209): Claude's per-song lyric suggestions, or ``{}``.
+
+    Read-only — review offers each one behind an apply button; applying edits the in-page run
+    and the operator saves as usual. Kept out of the run file because every PUT replaces it.
+    """
+    try:
+        return lyrics_suggest.load_sidecar(service_date) or {}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="service_date must be YYYY-MM-DD")
 
 
 @app.get("/runs/{service_date}/hymn")
