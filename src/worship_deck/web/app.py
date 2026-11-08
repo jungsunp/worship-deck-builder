@@ -898,8 +898,20 @@ def list_hymn_slides(service_date: str) -> dict:
     hymn_dir = HYMN_DIR / service_date / "hymn"
     if not hymn_dir.is_dir():
         return {"images": []}
-    pngs = sorted(p for p in hymn_dir.iterdir() if p.suffix.lower() == ".png")
-    return {"images": [str(p) for p in pngs]}
+    # pdftoppm zero-pads page numbers (slide-01…slide-10), so sort by page number, not name.
+    pngs = sorted((p for p in hymn_dir.iterdir() if p.suffix.lower() == ".png"),
+                  key=lambda p: int(p.stem.split("-")[-1]))
+    # Per-page verse labels (parallel to images) from the PPTX's structure; best-effort.
+    labels: list = []
+    try:
+        pptx = next(hymn_dir.glob("hymn-*.pptx"), None)
+        if pptx:
+            labels = hymn.verse_labels(pptx)
+    except Exception:  # noqa: BLE001
+        labels = []  # unreadable PPTX → unlabeled cards, never a broken review page
+    if len(labels) != len(pngs):
+        labels = [None] * len(pngs)
+    return {"images": [str(p) for p in pngs], "labels": labels}
 
 
 @app.get("/runs/{service_date}/hymn/{name}")

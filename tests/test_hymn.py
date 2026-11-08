@@ -121,3 +121,37 @@ def test_fetch_hymn_slides_live(tmp_path: Path) -> None:
     for p in pngs:
         assert p.suffix == ".png"
         assert p.stat().st_size > 0
+
+
+# ---------------------------------------------------------------------------
+# verse_labels — verse of each page from the PPTX's per-slide "verse dots" image
+# ---------------------------------------------------------------------------
+
+def _make_pptx(path: Path, dots: list[bytes | None]) -> Path:
+    """A minimal PPTX: each slide has bg + body + (optional) dots media; None = 2-image slide."""
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as z:
+        for i, d in enumerate(dots, 1):
+            z.writestr(f"ppt/slides/slide{i}.xml", "<x/>")
+            media = [f"image-{i}-1.png", f"image-{i}-2.png"] + ([f"image-{i}-3.png"] if d else [])
+            rels = "".join(f'<Relationship Id="r{j}" Target="../media/{m}"/>' for j, m in enumerate(media))
+            z.writestr(f"ppt/slides/_rels/slide{i}.xml.rels", f"<Relationships>{rels}</Relationships>")
+            for m in media:
+                z.writestr(f"ppt/media/{m}", d if m.endswith("-3.png") else f"{m}".encode())
+    return path
+
+
+def test_verse_labels_groups_pages_by_dots_image(tmp_path) -> None:
+    from worship_deck.hymn import verse_labels
+
+    pptx = _make_pptx(tmp_path / "h.pptx", [b"v1", b"v1", b"v2", b"v3", b"v3"])
+    assert [(x["verse"], x["label"]) for x in verse_labels(pptx)] == [
+        (1, "1절 (1/2)"), (1, "1절 (2/2)"), (2, "2절"), (3, "3절 (1/2)"), (3, "3절 (2/2)"),
+    ]
+
+
+def test_verse_labels_old_two_image_layout_is_unlabeled(tmp_path) -> None:
+    from worship_deck.hymn import verse_labels
+
+    assert verse_labels(_make_pptx(tmp_path / "h.pptx", [None, None])) == [None, None]
