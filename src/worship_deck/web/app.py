@@ -963,7 +963,13 @@ def _build_async(service_date: str, target: str) -> None:
         # Export the PDF preview from the still-open draft (#23). Best-effort: the build already
         # succeeded, so a failed export shouldn't flip the status to error — just no preview link.
         pdf_url = None
+        shrunk = []
         if target == "keynote":
+            # 교회소식 items auto-fit shrank — the page lists them so the operator can shorten
+            # an item (elders read these) rather than accept the smaller font.
+            fit = pipeline.fit_path(path)
+            if fit.exists():
+                shrunk = json.loads(fit.read_text())
             try:
                 keynote_build.export_pdf(str(Path(path).with_suffix(".pdf")))
                 pdf_url = f"/runs/{service_date}/draft.pdf"
@@ -976,7 +982,7 @@ def _build_async(service_date: str, target: str) -> None:
         total = round(time.monotonic() - t0, 1)
         _BUILD_STATUS[service_date] = {
             "status": "done", "target": target, "path": path, "pdf": pdf_url,
-            "error": None, "seconds": total,
+            "announce_shrunk": shrunk, "error": None, "seconds": total,
         }
         logger.info("Built %s draft for %s at %s in %.1fs", target, service_date, path, total)
     except Exception as e:  # surface to the page, don't crash the worker

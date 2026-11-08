@@ -1037,7 +1037,7 @@ def test_fill_announcement_slides_duplicates_when_items_exceed_template(
 
     n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째", "3. 셋째"], existing_count=1)
 
-    assert n == 3
+    assert len(n) == 3  # one applied font per slide used
     assert calls["duplicate"] == (117, 2)  # add 2 to reach 3
     assert calls["delete"] is None
     assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째"), (119, "3. 셋째")]
@@ -1050,7 +1050,7 @@ def test_fill_announcement_slides_trims_when_template_has_surplus(
 
     n = fill_announcement_slides("k", 117, ["1. 첫째", "2. 둘째"], existing_count=5)
 
-    assert n == 2
+    assert len(n) == 2
     assert calls["delete"] == (119, 3)  # trim 3 surplus at start+target
     assert calls["duplicate"] is None
     assert calls["set"] == [(117, "1. 첫째"), (118, "2. 둘째")]
@@ -1090,9 +1090,10 @@ def test_fill_announcement_slides_applies_fitted_fonts(monkeypatch: pytest.Monke
     monkeypatch.setattr(B, "set_announcement_slide", lambda k, i, t, f=0: fonts.append((i, f)))
     monkeypatch.setattr(B, "_fit_announcement_sizes", lambda items, boxes: [0, 65])
 
-    fill_announcement_slides("k", 117, ["1. 짧음", "2. 김"], existing_count=2)
+    applied = fill_announcement_slides("k", 117, ["1. 짧음", "2. 김"], existing_count=2)
 
     assert fonts == [(117, 0), (118, 65)]
+    assert applied == [0, 65]  # returned so build() can report the shrunk item to review
 
 
 def test_fill_announcement_slides_empty_list_trims_whole_block(
@@ -1102,7 +1103,7 @@ def test_fill_announcement_slides_empty_list_trims_whole_block(
 
     n = fill_announcement_slides("k", 117, [], existing_count=5)
 
-    assert n == 0
+    assert n == []
     assert calls["delete"] == (117, 5)  # whole block trimmed
     assert calls["duplicate"] is None
     assert calls["set"] == []  # nothing to set
@@ -1506,7 +1507,7 @@ def test_fill_announcement_slides_live_resizes_no_leftover(
         "3. 셋째 소식\n\n   셋째 상세 내용입니다.",
     ]
     n = fill_announcement_slides(str(draft), 117, items, existing_count=5)
-    assert n == 3
+    assert len(n) == 3
 
     s117 = _on_canvas_text(str(draft), 117)
     assert "1. 첫째 소식" in s117 and "첫째 상세 내용입니다." in s117  # title + detail both set
@@ -1670,10 +1671,10 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
     """
     calls: list[tuple] = []
 
-    def rec(name):
+    def rec(name, result=0):
         def f(*args, **kwargs):
             calls.append((name, args, kwargs))
-            return 0
+            return result
         return f
 
     for name in (
@@ -1693,6 +1694,8 @@ def _stub_fills(monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
         "finalize_draft",
     ):
         monkeypatch.setattr(B, name, rec(name))
+    # The 교회소식 fill returns each item's applied font (0 = template size): item 2 shrank.
+    monkeypatch.setattr(B, "fill_announcement_slides", rec("fill_announcement_slides", [0, 70]))
     # Stubbed silently (not recorded): build() calls it before save_draft to clear stale docs;
     # it would otherwise launch Keynote and isn't part of the section-dispatch sequence.
     monkeypatch.setattr(B, "_ensure_keynote_ready", lambda *a, **k: None)
@@ -1727,9 +1730,11 @@ def _full_run() -> ServiceData:
 def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_fills(monkeypatch)
 
-    path, steps = build(_full_run(), "tpl.key", "out.key")
+    path, steps, shrunk = build(_full_run(), "tpl.key", "out.key")
     assert path == "out.key"
     assert isinstance(steps, dict)
+    # 교회소식 item 2 came back at 70pt (stub below) — reported for the review page
+    assert shrunk == [{"item": 2, "pt": 70, "floor": False}]
 
     names = [c[0] for c in calls]
     # save_draft first, then date (count-neutral), then the ad-hoc 말씀 special-block delete

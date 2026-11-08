@@ -1130,6 +1130,16 @@ async function generate(target) {
       setStep('build', 'done');
       const dur = s.seconds ? ' • ' + fmtDur(s.seconds) : '';
       showStatus('● 완료' + dur + ' — ' + s.path + '\n' + BUILD_APP[target] + '에서 여는 중…');
+      // 교회소식 items the Keynote build shrank to fit their slide. Elders read these, so name
+      // them: shortening one in the 소식 card and rebuilding brings it back to full size.
+      const shrunk = s.announce_shrunk || [];
+      if (shrunk.length) {
+        const floor = shrunk.filter(x => x.floor).map(x => x.item + '번');
+        document.getElementById('status').append(
+          '\n\n✎ 교회소식 글자 축소: ' + shrunk.map(x => x.item + '번 ' + x.pt + 'pt').join(' · ')
+          + (floor.length ? '\n⚠ ' + floor.join(', ') + '은 최소 크기(60pt)라 넘칠 수 있어요 — 내용을 줄이고 다시 생성하세요'
+                          : '\n내용을 줄이고 다시 생성하면 원래 크기로 보입니다'));
+      }
       if (s.pdf) {  // tap to preview the rendered slides inline on the phone (#23)
         const a = document.createElement('a');
         a.href = s.pdf; a.target = '_blank'; a.className = 'pdf-link';

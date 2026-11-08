@@ -1022,7 +1022,7 @@ def fill_announcement_slides(
     slide's native text to one item. Each item string is title (paragraph 1) + detail (the
     remaining paragraphs); set_announcement_slide styles the title gold and the detail white to
     match master.key, at the size `_fit_announcement_sizes` measured to fit each item's box.
-    Returns the slides used.
+    Returns each item's applied font, one per slide used (0 = left at the template's size).
 
     An empty list trims the whole block (target 0); real bulletins always have announcements,
     so this degenerate case is left unguarded (mirrors fill_song_slides' empty-lyrics handling).
@@ -1044,7 +1044,7 @@ def fill_announcement_slides(
         fonts = _fit_announcement_sizes(announcements, boxes)
     for i, (item, font) in enumerate(zip(announcements, fonts)):
         set_announcement_slide(key_path, start_index + i, item, font)
-    return target
+    return fonts
 
 
 def hymn_image_block(key_path: str, start_index: int, max_scan: int = 20) -> tuple[int, int]:
@@ -1098,7 +1098,9 @@ def fill_hymn_slides(key_path: str, section_start: int, image_paths: list[str]) 
     return target
 
 
-def build(data: ServiceData, template_key: str, out_key: str) -> str:
+def build(
+    data: ServiceData, template_key: str, out_key: str
+) -> tuple[str, dict[str, float], list[dict]]:
     """Build the weekly draft deck from the template and the reviewed run store (#29).
 
     Saves a copy of the template, then fills each section's native text from `data`'s top-level
@@ -1117,12 +1119,15 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     once at the end. `_ensure_keynote_ready` guarantees zero open docs first, so `front document`
     is unambiguously the draft.
 
-    Returns the draft .key path.
+    Returns (draft .key path, step timings, the 교회소식 items auto-fit shrank below the
+    template size as {item, pt, floor} — `floor` marks the 60pt minimum, where the operator
+    should shorten the item instead; the review page lists them after the build).
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or a Keynote script fails.
     """
     steps: dict[str, float] = {}
+    shrunk: list[dict] = []
 
     def _t(name: str, fn, *args, **kwargs):  # type: ignore[no-untyped-def]
         t = time.monotonic()
@@ -1206,7 +1211,7 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
         _t("sermon_recap", set_sermon_ref_slide, out_key, a.sermon_ref, data.sermon_ref)
 
     if data.announcements:
-        _t(
+        fonts = _t(
             "announcement",
             fill_announcement_slides,
             out_key,
@@ -1214,6 +1219,10 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
             data.announcements,
             existing_count=a.announcements_count,
         )
+        shrunk = [
+            {"item": i, "pt": f, "floor": f == _MIN_FONT_ANNOUNCE}
+            for i, f in enumerate(fonts, start=1) if f
+        ]
 
     # 봉헌 offering-hymn images: replace last week's pages (detected after the section's
     # title/intro slides) with this week's. An empty list (failed/absent download) keeps
@@ -1285,7 +1294,7 @@ def build(data: ServiceData, template_key: str, out_key: str) -> str:
     # Persist every in-place edit with a single save (#117): save_draft opened the deck once and
     # the section fills mutated the open front document; this is the one save that writes them.
     _t("finalize", finalize_draft, out_key)
-    return out_key, steps
+    return out_key, steps, shrunk
 
 
 def export_pdf(out_pdf: str) -> str:
