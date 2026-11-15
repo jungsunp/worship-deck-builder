@@ -32,6 +32,7 @@ from . import pb  # noqa: F401 -- side effect: puts pb/ on sys.path for the bare
 import slide_pb2
 
 # isort: on
+from worship_deck import photos as photo_layout
 from worship_deck.bible import layout
 
 from . import announce, content, rtf
@@ -44,6 +45,7 @@ STYLE_KEYS = (
     "song_banner",              # keyed lower-third song title (worship medley)
     "verse_fullscreen",         # bilingual scripture body (개역한글 + ESV)
     "announcement",             # 교회 소식 notice (title + 날짜/장소/문의 라벨 레일)
+    "photo_collage",            # 교회 소식 photos uploaded in review, whole, in justified rows
     "section_divider",          # section heading (예배의 부름 / 봉헌 / 교회 소식 …)
     "verse_divider",            # the 말씀 reference plate — the divider at reference scale (#250)
     "sermon_title",             # the week's sermon title — the divider at sentence scale (#250)
@@ -1345,12 +1347,29 @@ def image(path: str) -> slide_pb2.Slide:
     return slide
 
 
+def photo_collage(photos: list[dict]) -> slide_pb2.Slide:
+    """교회 소식 photos (#263) — whole photos in ``photos.collage_layout``'s justified rows.
+
+    The Keynote build lays these on a copy of an announcement plate; here it is the same
+    backdrop without the frame, whose outline would only show in the gaps between photos. Each
+    box already has its photo's aspect, so ``fill_frame=False`` never letterboxes visibly — it
+    just guarantees a photo is never cropped.
+    """
+    slide = _slide(background=NAVY)
+    _framed(slide, frame=False)
+    boxes = photo_layout.collage_layout([(p["w"], p["h"]) for p in photos], *CANVAS)
+    for p, (x, y, w, h) in zip(photos, boxes):
+        el.image(slide, (float(x), float(y), float(w), float(h)), p["path"], fill_frame=False)
+    return _front_to_back(slide)
+
+
 BUILDERS = {
     "worship_lyric_ko": worship_lyric_ko,
     "worship_lyric_bilingual": worship_lyric_bilingual,
     "song_banner": song_banner,
     "verse_fullscreen": verse_fullscreen,
     "announcement": announcement,
+    "photo_collage": photo_collage,
     "section_divider": section_divider,
     "verse_divider": verse_divider,
     "sermon_title": sermon_title,

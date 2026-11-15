@@ -47,6 +47,7 @@ import uuid_pb2
 import url_pb2
 
 # isort: on
+from worship_deck import photos as photo_layout
 from worship_deck.bible import layout
 from worship_deck.bible.ref import korean_ref
 from worship_deck.bible.verses import Verse, english_ref, verse_labels
@@ -122,7 +123,10 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
     )
     _t("welcome", fill_divider, pres, labels["welcome"])
     if data.announcements:
-        _t("announcements", fill_announcements, pres, data.announcements)
+        _t(
+            "announcements", fill_announcements, pres, data.announcements,
+            data.announcement_photos, data.announcement_photos_after,
+        )
     _t("united_prayer", fill_divider, pres, labels["united_prayer"])
     if data.sermon_title or data.sermon_passage:
         _t(
@@ -270,13 +274,26 @@ def fill_worship_songs(pres: presentation_pb2.Presentation, songs: list[dict]) -
     deck is a section name, so three bare song titles in a row read as three unrelated sections
     with nothing tying them to 찬양. The cue names and the ``song_banner`` text stay bare — the
     prefix is for the group list, and the congregation never sees a group name.
+
+    An **untitled** song after the first is a continuation page of the one before it (a sheet
+    split across two images), as in ``keynote.build.fill_worship_songs`` (#260): its lyrics join
+    the previous song's group with no banner of their own and no blank between the two.
     """
-    for i, song in enumerate(songs):
-        fill_song(
+    units: list[list[dict]] = []
+    for song in songs:
+        if units and not song["title"].strip():
+            units[-1].append(song)
+        else:
+            units.append([song])
+    for i, (first, *rest) in enumerate(units):
+        cue_uuids = _song_cues(pres, Song(**first), blank=not rest)
+        for k, part in enumerate(rest):
+            cue_uuids += _song_cues(pres, Song(**part), banner=False, blank=k == len(rest) - 1)
+        add_group(
             pres,
-            song,
+            f"{content.DIVIDER_LABELS['worship_songs']} - {first['title']}",
             styles.SONG_COLORS[i % len(styles.SONG_COLORS)],
-            name=f"{content.DIVIDER_LABELS['worship_songs']} - {song['title']}",
+            cue_uuids,
         )
 
 
@@ -315,17 +332,23 @@ def fill_song(
     )
 
 
-def _song_cues(pres: presentation_pb2.Presentation, parsed: Song) -> list[str]:
+def _song_cues(
+    pres: presentation_pb2.Presentation, parsed: Song, *, banner: bool = True, blank: bool = True
+) -> list[str]:
     """The cues of one song — banner, lyrics, trailing blank — without the group around them.
 
-    Split out so 고백의 찬양 can fold them into its own group instead of opening a second one.
+    Split out so 고백의 찬양 can fold them into its own group instead of opening a second one,
+    and so a medley continuation page can drop its banner and the blank before it.
     """
-    cue_uuids = [add_cue(pres, new_slide("song_banner", parsed.title), parsed.title)]
+    cue_uuids = []
+    if banner:
+        cue_uuids.append(add_cue(pres, new_slide("song_banner", parsed.title), parsed.title))
     for label, lines in _chunks(parsed):
         cue_uuids.append(
             add_cue(pres, new_slide("worship_lyric_ko", lines), label, styles.section_color(label))
         )
-    cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
+    if blank:
+        cue_uuids.append(add_cue(pres, new_slide("blank_green"), ""))
     return cue_uuids
 
 
@@ -514,7 +537,12 @@ def fill_sermon(
     _group(pres, label, cue_uuids)
 
 
-def fill_announcements(pres: presentation_pb2.Presentation, items: list[str]) -> None:
+def fill_announcements(
+    pres: presentation_pb2.Presentation,
+    items: list[str],
+    photos: list[dict] | None = None,
+    photos_after: int = 0,
+) -> None:
     """교회 소식 — the divider, the 표어/환영 card, then the week's notices.
 
     Each item arrives from the bulletin parser (and then the review editor) as
@@ -522,7 +550,14 @@ def fill_announcements(pres: presentation_pb2.Presentation, items: list[str]) ->
     into the plate's rail, and ``styles.split_announcement`` cuts anything too long for one plate
     across two rather than shrinking the type under it (#233) — so a notice can own more than one
     cue, and the continuations are labelled as such in the operator's cue list.
+
+    ``photos`` uploaded in review (#263) become collage cues right after item ``photos_after``
+    (1-based, 0 = the last item, clamped like ``keynote.build``), spread over slides by
+    ``photos.chunk_photos``. A photo whose file is gone is skipped rather than shipped blank.
     """
+    present = [p for p in photos or [] if Path(p["path"]).expanduser().is_file()]
+    chunks = photo_layout.chunk_photos(present)
+    after = min(max(photos_after or len(items), 1), len(items))
     label = content.DIVIDER_LABELS["announcements"]
     cue_uuids = [
         add_cue(pres, new_slide("section_divider", label), label),
@@ -536,6 +571,10 @@ def fill_announcements(pres: presentation_pb2.Presentation, items: list[str]) ->
                 new_slide("announcement", label, part, number, len(items)),
                 item.title if not part_index else f"{item.title} (계속)",
             ))
+        if number == after:
+            for i, chunk in enumerate(chunks, start=1):
+                name = "사진" if len(chunks) == 1 else f"사진 {i}/{len(chunks)}"
+                cue_uuids.append(add_cue(pres, new_slide("photo_collage", chunk), name))
     _group(pres, label, cue_uuids)
 
 
