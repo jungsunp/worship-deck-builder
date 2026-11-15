@@ -101,14 +101,15 @@
 
 <div class="card slotcard empty" id="slot-sermonsong" onclick="pickSlot(event)">
   <div class="slothead"><span class="mark">⬜</span><span>설교후 찬양</span></div>
-  <div class="hint">대부분 주는 생략 · 설교 후 찬양이 있는 주에만 — 악보 이미지나 가사 입력</div>
+  <div class="hint">대부분 주는 생략 · 설교 후 찬양이 있는 주에만 — 악보 이미지나 가사 입력 ·
+    여러 곡이면 악보를 모두 올리기 (파일명 순서 = 곡 순서)</div>
   <div class="tap-hint">탭하여 악보 이미지 업로드</div>
   <div class="files" id="files-sermonsong"></div>
   <div class="sloterr" id="err-sermonsong" hidden></div>
-  <button type="button" class="repick when-filled" onclick="pickHere(event)">교체</button>
-  <input type="file" accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'sermonsong')">
+  <button type="button" class="repick when-filled" onclick="pickHere(event)">＋ 추가</button>
+  <input type="file" multiple accept=".png,.jpg,.jpeg" hidden onchange="uploadSlot(this, 'sermonsong')">
   <textarea id="sermonsongText" oninput="sermonsongChanged()" onblur="flushSermonsong()"
-    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사"></textarea>
+    placeholder="또는 가사 직접 입력 — 제목 / 작곡 줄 / 가사 (여러 곡이면 --- 줄로 구분)"></textarea>
   <div class="hint" id="sermonsongStatus"></div>
 </div>
 

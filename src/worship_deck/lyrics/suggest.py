@@ -15,15 +15,16 @@ module does everything else, so Claude never types slide text:
 The result goes to a sidecar ``data/runs/<date>.suggest.json`` — never the run file, which every
 review save replaces wholesale (``PUT /runs``). Review shows a "Claude 제안" block per song with
 an apply button; nothing is applied silently. Top-level keys are per review section
-(``worship_songs`` here, ``announcements`` from ``worship_deck.announce_suggest``), and each
-step replaces only its own (``save_section``).
+(``worship_songs`` and ``worship_after_sermon`` — the 설교후 찬양 sheets, read the same way — here,
+``announcements`` from ``worship_deck.announce_suggest``), and each step replaces only its own
+(``save_section``).
 
 No API key, no network beyond gasazip: weeks without a Claude session simply have no sidecar.
 
 CLI (what the skill runs)::
 
     python -m worship_deck.lyrics.suggest show DATE
-    python -m worship_deck.lyrics.suggest search DATE REF "제목"
+    python -m worship_deck.lyrics.suggest search DATE REF "제목"   # REF: 0, 1, … or s0, s1, … (설교후)
     python -m worship_deck.lyrics.suggest lines SONG_ID
     python -m worship_deck.lyrics.suggest apply DATE SPEC.json
 """
@@ -241,30 +242,53 @@ def build_song(spec: dict, run_song: dict) -> dict:
     return out
 
 
+# Spec/sidecar key → what the run calls it, for messages. Both hold Song-dict lists read from sheets.
+_SONG_SECTIONS = {"worship_songs": "찬양", "worship_after_sermon": "설교후 찬양"}
+
+
 def apply_spec(service_date: str, spec: dict) -> dict:
-    """Build every song in ``spec`` against the stored run and write the sidecar."""
+    """Build every song in ``spec`` (찬양 medley and 설교후 찬양) against the stored run and write
+    the sidecar. Each section's ``ref`` indexes that section's run songs."""
     run = store.load(service_date)
-    songs = []
-    for s in spec.get("worship_songs", []):
-        ref = int(s["ref"])
-        if not 0 <= ref < len(run.worship_songs):
-            raise ValueError(f"ref {ref}: run has {len(run.worship_songs)} worship songs")
-        songs.append(build_song(s, run.worship_songs[ref]))
-    return save_section(service_date, "worship_songs", songs)
+    doc: dict = {}
+    for key, name in _SONG_SECTIONS.items():
+        run_songs = getattr(run, key)
+        songs = []
+        for s in spec.get(key, []):
+            ref = int(s["ref"])
+            if not 0 <= ref < len(run_songs):
+                raise ValueError(f"{key} ref {ref}: run has {len(run_songs)} {name} songs")
+            songs.append(build_song(s, run_songs[ref]))
+        doc = save_section(service_date, key, songs)
+    return doc
+
+
+def _run_songs(service_date: str, ref: str) -> tuple[list[dict], int]:
+    """CLI ref → (that section's run songs, index): ``2`` is 찬양 #2, ``s0`` is 설교후 찬양 #0."""
+    run = store.load(service_date)
+    if ref.startswith("s"):
+        return run.worship_after_sermon, int(ref[1:])
+    return run.worship_songs, int(ref)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 
 def _show(service_date: str) -> None:
-    print("sheets (assemble's order):")
-    for p in sorted(Path("data/inbox").glob("sheet-*")):
-        print(f"  {p}")
     run = store.load(service_date)
-    print("run worship_songs:")
-    for i, s in enumerate(run.worship_songs):
+    for key, glob, prefix in (("worship_songs", "sheet-*", ""), ("worship_after_sermon", "sermonsong*", "s")):
+        _show_section(key, sorted(Path("data/inbox").glob(glob)), getattr(run, key), prefix)
+
+
+def _show_section(key: str, sheets: list[Path], songs: list[dict], prefix: str) -> None:
+    print(f"{key} sheets (assemble's order):")
+    for p in sheets:
+        if p.suffix.lower() in (".png", ".jpg", ".jpeg"):
+            print(f"  {p}")
+    print(f"run {key}:")
+    for i, s in enumerate(songs):
         prov = s.get("provenance") or {}
-        print(f"  ref {i}: {s.get('title')!r} source={prov.get('source')} "
+        print(f"  ref {prefix}{i}: {s.get('title')!r} source={prov.get('source')} "
               f"song_id={prov.get('song_id', '')} slug={prov.get('slug', '')} merged_sheets={prov.get('merged_sheets', 1)} "
               f"cand_cov={prov.get('cand_cov', 0):.2f}")
         print(f"    sections={[c['label'] for c in s.get('sections', [])]} "
@@ -273,9 +297,9 @@ def _show(service_date: str) -> None:
             print(f"    candidate {c['song_id']} {c['title']!r} / {c['artist']} cov={c['cand_cov']:.2f}")
 
 
-def _search(service_date: str, ref: int, title: str) -> None:
-    run = store.load(service_date)
-    fragments = run.worship_songs[ref].get("fragments", []) if ref < len(run.worship_songs) else []
+def _search(service_date: str, ref: str, title: str) -> None:
+    songs, i = _run_songs(service_date, ref)
+    fragments = songs[i].get("fragments", []) if i < len(songs) else []
     for c in online.search_scored(title, fragments):
         prev = " / ".join([ln for ln in c.lines if ln.strip()][:2])
         print(f"{c.song_id} {c.title!r} / {c.artist} cov={c.cand_cov:.2f}/{c.ocr_cov:.2f} | {prev}")
@@ -295,22 +319,23 @@ def main(argv: list[str]) -> int:
     if cmd == "show" and len(args) == 1:
         _show(args[0])
     elif cmd == "search" and len(args) == 3:
-        _search(args[0], int(args[1]), args[2])
+        _search(args[0], args[1], args[2])
     elif cmd == "lines" and len(args) == 1:
         _lines(args[0])
     elif cmd == "apply" and len(args) == 2:
         doc = apply_spec(args[0], json.loads(Path(args[1]).read_text(encoding="utf-8")))
         print(f"wrote {sidecar_path(args[0])}")
-        for s in doc["worship_songs"]:
-            print(f"ref {s['ref']}: {s.get('title') or s['run_title']!r}")
-            if "continuation_of" in s or "sections" not in s:
-                print(f"  (note only) {s.get('note', '')}")
-                continue
-            for c in s["sections"]:
-                print(f"  {c['label']}: {' / '.join(ln for ln in c['lines'] if ln.strip())}")
-            print(f"  arrangement: {s['arrangement']}")
-            for w in s["warnings"]:
-                print(f"  ⚠ {w}")
+        for key, prefix in (("worship_songs", ""), ("worship_after_sermon", "s")):
+            for s in doc[key]:
+                print(f"ref {prefix}{s['ref']}: {s.get('title') or s['run_title']!r}")
+                if "continuation_of" in s or "sections" not in s:
+                    print(f"  (note only) {s.get('note', '')}")
+                    continue
+                for c in s["sections"]:
+                    print(f"  {c['label']}: {' / '.join(ln for ln in c['lines'] if ln.strip())}")
+                print(f"  arrangement: {s['arrangement']}")
+                for w in s["warnings"]:
+                    print(f"  ⚠ {w}")
     else:
         print(__doc__.split("CLI (what the skill runs)::")[1], file=sys.stderr)
         return 2

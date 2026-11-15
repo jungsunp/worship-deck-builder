@@ -131,8 +131,8 @@ def build(data: ServiceData, out_pro: str) -> tuple[str, dict[str, float]]:
         )
     if data.sermon_extra_refs:
         _t("sermon_extra", fill_sermon_extra, pres, data.sermon_extra_refs, data.sermon_extra_passages)
-    if data.worship_after_sermon:
-        _t("worship_after_sermon", fill_song, pres, data.worship_after_sermon)
+    for song in data.worship_after_sermon:
+        _t("worship_after_sermon", fill_song, pres, song)
     _t("sending", fill_sending, pres)
     _t("benediction", fill_divider, pres, labels["benediction"])
     _t("lords_prayer", fill_liturgy, pres, labels["lords_prayer"], content.LORDS_PRAYER)

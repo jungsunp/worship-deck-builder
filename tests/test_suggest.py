@@ -172,6 +172,24 @@ def test_apply_spec_writes_sidecar_and_leaves_run_alone(tmp_path, monkeypatch) -
     assert cont == {"ref": 1, "run_title": "", "continuation_of": 0, "note": "intro strip only"}
 
 
+def test_apply_spec_covers_sermonsongs(tmp_path, monkeypatch) -> None:
+    """설교후 찬양 sheets are read like the medley; their refs index worship_after_sermon."""
+    monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(S, "canonical_lines", lambda *a: ["가", "나", "", "다"])
+    store.save("2026-11-15", ServiceData(worship_after_sermon=[
+        {"title": "첫 곡", "provenance": {}}, {"title": "둘째 곡", "provenance": {}},
+    ]))
+    doc = S.apply_spec("2026-11-15", {"worship_after_sermon": [
+        {"ref": 1, "song_id": "7", "title": "둘째 곡",
+         "sections": [{"label": "V", "at": 0}, {"label": "C", "at": 3}], "arrangement": "V Cx2"},
+    ]})
+    assert doc["worship_songs"] == []
+    (rec,) = doc["worship_after_sermon"]
+    assert rec["ref"] == 1 and rec["run_title"] == "둘째 곡" and rec["arrangement"] == "V C C"
+    with pytest.raises(ValueError):
+        S.apply_spec("2026-11-15", {"worship_after_sermon": [{"ref": 2, "song_id": "7"}]})
+
+
 def test_missing_title_warns(monkeypatch) -> None:
     """Without the sheet's title, review would keep OCR's misread one — say so."""
     monkeypatch.setattr(S, "canonical_lines", lambda *a: ["가", "나"])

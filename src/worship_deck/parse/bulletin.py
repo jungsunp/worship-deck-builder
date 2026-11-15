@@ -83,9 +83,10 @@ class ServiceData:
     choir_song: dict = field(default_factory=dict)
     # 고백의 찬양 (Song-as-dict); transcribed from the uploaded sheet image at assemble (#109).
     confession_song: dict = field(default_factory=dict)
-    # 설교후 찬양 — optional worship song after the sermon (Song-as-dict). Not in the bulletin; the
-    # operator uploads a sheet image or types lyrics, transcribed/parsed at assemble. {} until set.
-    worship_after_sermon: dict = field(default_factory=dict)
+    # 설교후 찬양 — optional worship songs after the sermon (Song-as-dicts, in play order; usually
+    # none, sometimes 2). Not in the bulletin; the operator uploads sheet images or types lyrics,
+    # transcribed/parsed at assemble. [] until set.
+    worship_after_sermon: list[dict] = field(default_factory=list)
     # 예배의 부름 / 말씀 verse passages — one Verse-as-dict each (개역한글 + ESV), looked up at assemble.
     call_to_worship_passage: list[dict] = field(default_factory=list)
     sermon_passage: list[dict] = field(default_factory=list)
@@ -113,6 +114,11 @@ class ServiceData:
     # Names of parsed/transcribed fields the operator has hand-edited in review; a re-assemble
     # preserves these instead of overwriting them (#105). Set by PUT /runs.
     edited_fields: list[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # Runs saved before 설교후 찬양 held several songs stored one Song-dict ({} for none).
+        if isinstance(self.worship_after_sermon, dict):
+            self.worship_after_sermon = [self.worship_after_sermon] if self.worship_after_sermon else []
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────

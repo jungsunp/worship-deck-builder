@@ -133,7 +133,7 @@ def backfill_worship(runs_dir: Path, write: bool = False) -> list[tuple[str, str
     """Collect worship songs from past reviewed runs into the worship library (#204).
 
     Walks ``runs_dir/*.json`` oldest first so a song sung in several weeks ends up with its
-    newest text. Takes every 찬양 medley song and the 설교후 찬양 that has a title and lyrics
+    newest text. Takes every 찬양 medley and 설교후 찬양 song that has a title and lyrics
     **and** whose provenance says the text is canonical (``gasazip`` or ``library``): runs from
     before provenance existed (May–July 2026) hold OCR-era text with typos and placeholder
     titles, which would poison later matches — those songs enter by being saved in review.
@@ -145,7 +145,8 @@ def backfill_worship(runs_dir: Path, write: bool = False) -> list[tuple[str, str
             run = json.loads(f.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             continue
-        songs = list(run.get("worship_songs") or []) + [run.get("worship_after_sermon") or {}]
+        after = run.get("worship_after_sermon") or []  # one dict in runs before multi-song
+        songs = list(run.get("worship_songs") or []) + (after if isinstance(after, list) else [after])
         for song in songs:
             canonical = (song.get("provenance") or {}).get("source") in ("gasazip", "library")
             if canonical and (song.get("title") or "").strip() and any(
