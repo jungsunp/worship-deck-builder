@@ -66,7 +66,7 @@ $PY lines <song_id>
 
 ```json
 {"worship_songs": [
-  {"ref": 0, "song_id": "3018234", "sheets": ["003", "004"],
+  {"ref": 0, "song_id": "3018234", "title": "주의 자녀로 산다는 것은", "sheets": ["003", "004"],
    "sections": [
      {"label": "V1", "at": "주의 자녀로 산다는 것은 불 가운데로"},
      {"label": "V2", "at": "주의 자녀로 산다는 것은 바다 위로"},
@@ -93,6 +93,9 @@ Rules:
   song in the run, give it `{"ref": i, "continuation_of": j, "note": …}`; review tells the
   operator to delete it. Already-merged pages (`merged_sheets` > 1) need nothing extra: list
   both sheets and join the pages' play orders in sequence.
+- **`title`**: the song's title as printed at the top of the sheet (without a "FIA -" style
+  arranger prefix or "찬 490장" subtitle). Always give it for a `song_id` entry: the run's
+  title is OCR's guess, and review keeps it unless the suggestion carries a real one.
 - **`sections`**, in canonical-text order. `at` is either the anchor text from the sheet or a
   line number from `lines`; optional `end` is the section's last line (inclusive). A section
   runs until the next entry starts, so where the canonical text repeats a section (the chorus
