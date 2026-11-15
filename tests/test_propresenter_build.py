@@ -337,6 +337,23 @@ def test_medley_group_names_mark_the_section_while_cue_names_stay_bare():
     assert rtf.escape("왕이신 나의 하나님") in _rtf_text(_slide_of(pres, 0))
 
 
+def test_an_untitled_medley_song_continues_the_one_before_it():
+    """A sheet split across two images arrives as a second, untitled song. Keynote drops its
+    separator and empty title bar (#260); here its lyrics join the previous song's group."""
+    pres = build.new_presentation("demo")
+    build.fill_worship_songs(pres, [
+        {"title": "첫째", "lines": ["가"]},
+        {"title": "", "lines": ["나"]},
+        {"title": "둘째", "lines": ["다"]},
+    ])
+
+    assert [g.group.name for g in pres.cue_groups] == ["찬양 - 첫째", "찬양 - 둘째"]
+    first = _cues_of(pres, "찬양 - 첫째")
+    assert len(first) == 4  # banner + 가 + 나 + one trailing blank, nothing between the pages
+    assert rtf.escape("나") in _rtf_text(_slide_of_cue(first[2]))
+    assert not _slide_of_cue(first[3]).elements
+
+
 def test_fill_confession_is_one_group_headed_by_its_divider():
     """고백의 찬양 and the song it announces are a single section to the operator, so they share
     one group bar — the medley is the only place a song opens a bar of its own (#178 review)."""
@@ -1424,3 +1441,50 @@ def test_the_bake_strengths_and_the_shipped_tint_agree():
     assert all(
         Path(b.image).stem.endswith(f"-{make_backdrop.SHIPPED}") for b in styles.BACKDROPS.values()
     )
+
+
+# ── 교회 소식 photos (#263) ─────────────────────────────────────────────────────
+
+def _photo(tmp_path, name: str, w: int = 400, h: int = 300) -> dict:
+    path = tmp_path / name
+    Image.new("RGB", (w, h), "gray").save(path)
+    return {"path": str(path), "w": w, "h": h}
+
+
+def test_announcement_photos_follow_the_item_the_operator_picked(tmp_path):
+    photos = [_photo(tmp_path, f"p{i}.jpg") for i in range(3)]
+    data = _service_data(
+        announcements=["1. 첫째\n\n안내", "2. 둘째\n\n안내", "3. 셋째\n\n안내"],
+        announcement_photos=photos,
+        announcement_photos_after=1,
+    )
+    pres = build.load(build.build(data, str(tmp_path / "week.pro"))[0])
+    names = [c.name for c in _cues_of(pres, "교회 소식")]
+
+    assert names[names.index("첫째") + 1] == "사진"
+    collage = _slide_of_cue(_cues_of(pres, "교회 소식")[names.index("사진")])
+    assert sorted(n for n in _images_of(collage) if n.startswith("p")) == ["p0", "p1", "p2"]
+    # Whole photos only: a fitted box never crops, and no photo leaves the canvas.
+    for e in collage.elements:
+        if e.element.name.startswith("p"):
+            b = e.element.bounds
+            assert e.element.fill.media.image.drawing.scale_behavior == (
+                graphicsData_pb2.Media.SCALE_BEHAVIOR_FIT
+            )
+            assert b.origin.x >= 0 and b.origin.x + b.size.width <= styles.CANVAS[0]
+            assert b.origin.y >= 0 and b.origin.y + b.size.height <= styles.CANVAS[1]
+
+
+def test_announcement_photos_default_to_the_last_item_and_skip_missing_files(tmp_path):
+    photos = [_photo(tmp_path, f"p{i}.jpg", 300, 400) for i in range(6)]
+    photos.append({"path": str(tmp_path / "gone.jpg"), "w": 400, "h": 300})
+    data = _service_data(
+        announcements=["1. 첫째\n\n안내", "2. 둘째\n\n안내"], announcement_photos=photos
+    )
+    pres = build.load(build.build(data, str(tmp_path / "week.pro"))[0])
+    names = [c.name for c in _cues_of(pres, "교회 소식")]
+
+    # Six portraits are too small on one slide, so photos.chunk_photos spreads them over two.
+    assert names[-3:] == ["둘째", "사진 1/2", "사진 2/2"]
+    shown = [n for c in _cues_of(pres, "교회 소식")[-2:] for n in _images_of(_slide_of_cue(c))]
+    assert "gone" not in shown
