@@ -15,7 +15,8 @@ module does everything else, so Claude never types slide text:
 The result goes to a sidecar ``data/runs/<date>.suggest.json`` — never the run file, which every
 review save replaces wholesale (``PUT /runs``). Review shows a "Claude 제안" block per song with
 an apply button; nothing is applied silently. Top-level keys are per review section
-(``worship_songs`` today) so other sections can join later.
+(``worship_songs`` here, ``announcements`` from ``worship_deck.announce_suggest``), and each
+step replaces only its own (``save_section``).
 
 No API key, no network beyond gasazip: weeks without a Claude session simply have no sidecar.
 
@@ -51,6 +52,22 @@ def sidecar_path(service_date: str) -> Path:
 def load_sidecar(service_date: str) -> dict | None:
     p = sidecar_path(service_date)
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+
+
+def save_section(service_date: str, key: str, value: list) -> dict:
+    """Store one review section's suggestions in the sidecar, keeping the other sections'
+    (the lyric and 교회소식 steps each write their own key). Returns the whole sidecar."""
+    doc = load_sidecar(service_date) or {}
+    doc.update({
+        "version": 1,
+        "date": service_date,
+        "created": datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
+        key: value,
+    })
+    p = sidecar_path(service_date)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
+    return doc
 
 
 # Hymn pages mark verses and refrains inline ("1.죄에서 …", "{후렴}내가 믿고 …") — page
@@ -233,16 +250,7 @@ def apply_spec(service_date: str, spec: dict) -> dict:
         if not 0 <= ref < len(run.worship_songs):
             raise ValueError(f"ref {ref}: run has {len(run.worship_songs)} worship songs")
         songs.append(build_song(s, run.worship_songs[ref]))
-    doc = {
-        "version": 1,
-        "date": service_date,
-        "created": datetime.now(UTC).astimezone().isoformat(timespec="seconds"),
-        "worship_songs": songs,
-    }
-    p = sidecar_path(service_date)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(doc, ensure_ascii=False, indent=2), encoding="utf-8")
-    return doc
+    return save_section(service_date, "worship_songs", songs)
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────

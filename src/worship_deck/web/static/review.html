@@ -99,6 +99,25 @@
                      color: #fff; cursor: pointer; flex: none; }
   .sugg .suggline { margin-top: 0.3rem; font-size: 0.85rem; white-space: pre-wrap; }
   .sugg .suggwarn { margin-top: 0.3rem; font-size: 0.85rem; color: var(--amber); }
+  .sugg .suggapply:disabled { background: var(--gray-200); color: var(--gray-600); cursor: default; }
+  /* 교회소식 edits: one row per edit, its character diff in context and its own 적용. */
+  .sugg .annitem { margin-top: 0.7rem; font-weight: 600; font-size: 0.9rem; }
+  .sugg .annitem .suggmeta { font-weight: 400; }
+  .sugg .annedit { display: flex; gap: 0.5rem; align-items: flex-start; margin-top: 0.35rem;
+                   font-size: 0.85rem; }
+  .sugg .anntag { flex: none; border-radius: 999px; padding: 0.05rem 0.45rem; font-size: 0.75rem;
+                  background: #ede9fe; color: var(--purple); }
+  .sugg .anntag.style { background: var(--gray-100); color: var(--gray-600); }
+  .sugg .anndiff { flex: 1; white-space: pre-wrap; word-break: break-all; }
+  .sugg .anndiff .ctx, .sugg .anndiff .why { color: var(--gray-600); }
+  .sugg .anndiff .why { display: block; }
+  .sugg .anndiff del { color: var(--red); background: #fee2e2; }
+  /* 교회소식: one tab per item; its suggestion bubble sits right above its editor. */
+  .annpanel { margin-top: 0.5rem; }
+  .annpanel .annsugg { margin: 0 0 0.4rem; }
+  .tab.hassugg::after { content: ' ●'; color: var(--purple); }
+  .tab.active.hassugg::after { color: #fff; }
+  .sugg .anndiff ins { color: #166534; background: #dcfce7; text-decoration: none; }
   .arr { margin-top: 0.8rem; }
   .arrhint { color: var(--gray-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
   .arrhint b { color: var(--gray-700); }
@@ -235,6 +254,7 @@ async function load() {
   run = await r.json();
   try { customLabels = (await (await fetch('/api/labels')).json()).labels || []; } catch (e) { /* offline: dropdown still has the defaults */ }
   try { suggestions = await (await fetch('/runs/' + date + '/suggest')).json(); } catch (e) { /* no sidecar shown */ }
+  if ((suggestions.announcements || []).length) collapsed.announce = false;  // show 교회소식 suggestions
   render();
 }
 
@@ -1051,13 +1071,135 @@ function toggleHymn(path) {
   renderHymnGrid();
 }
 
+// 교회소식: one tab per bulletin item (like the 찬양 medley), each with its own editor (first
+// line=title) and Claude's suggestions for that item. All panels stay in the DOM (hidden) so
+// save sees every item. A `---` line inside an editor still splits it into two items on save.
+let annTab = 0;
 function renderAnnounce(div) {
-  const ta = document.createElement('textarea');
-  ta.id = 'announcements'; ta.dataset.kind = 'ann';
-  ta.placeholder = '항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)';
-  ta.value = (run.announcements || []).join('\n---\n');
-  div.appendChild(ta);
+  const texts = (run.announcements || []).length ? run.announcements : [''];
+  const tabs = annMk('div', 'tabs');
+  const items = texts.map((t, i) => {
+    const tab = annMk('button', 'tab', (i + 1) + '번');
+    tab.type = 'button';
+    const p = annMk('div', 'annpanel');
+    const ta = document.createElement('textarea');
+    ta.dataset.kind = 'ann';
+    ta.placeholder = '첫 줄=제목, 나머지=내용 (--- 줄로 항목 나누기)';
+    ta.value = t;
+    p.appendChild(ta);
+    tab.onclick = () => { annTab = i; showAnnTab(); };
+    tabs.appendChild(tab);
+    return {tab, p, ta};
+  });
+  const showAnnTab = () => {
+    if (annTab >= items.length) annTab = 0;
+    items.forEach((x, i) => {
+      x.tab.classList.toggle('active', i === annTab);
+      x.p.hidden = i !== annTab;
+    });
+    autogrow(items[annTab].ta);  // scrollHeight was 0 while hidden
+  };
+  renderAnnSuggestions(div, items);
+  div.append(tabs, ...items.map(x => x.p));
+  showAnnTab();
   renderAnnouncePhotos(div);
+}
+
+// /prep-week 교회소식 suggestions (#209): small find/replace edits per item, each put into that
+// item's editor on tap; the operator still saves. 모두 적용 skips `style`, the operator's own
+// formatting choice. An edit whose text is no longer in any item (fixed by hand, or applied
+// before a re-render) can't be applied and says so.
+const ANN_KIND = {typo: '맞춤법', break: '줄바꿈', shorten: '줄이기', style: '선택'};
+const annDone = new Set();  // "item:edit" keys applied this visit
+function annMk(tag, cls, txt) {
+  const d = document.createElement(tag);
+  if (cls) d.className = cls;
+  if (txt !== undefined) d.textContent = txt;
+  return d;
+}
+
+// Edit `e` of item `n`: in that item while it still holds `old`, else in the one item that does.
+// Returns the editor it changed, or null.
+function applyAnnEdit(tas, n, e) {
+  let ta = tas[n - 1];
+  if (!ta || !ta.value.includes(e.old)) {
+    const hits = tas.filter(t => t.value.includes(e.old));
+    if (hits.length !== 1) return null;
+    ta = hits[0];
+  }
+  ta.value = ta.value.replace(e.old, () => e.new);  // a function: "$20" in `new` stays literal
+  return ta;
+}
+
+function renderAnnSuggestions(div, items) {
+  const recs = suggestions.announcements || [];
+  if (!recs.length) return;
+  const tas = items.map(x => x.ta);
+  const shown = s => /^\s+$/.test(s) ? s.replace(/ /g, '␣').replace(/\n/g, '⏎') : s.replace(/\n/g, '⏎');
+  // Summary bar: how many edits, on which items, and 모두 적용.
+  const bar = annMk('div', 'sugg');
+  const hd = annMk('div', 'sugghd');
+  const all = annMk('button', 'suggapply', '모두 적용'); all.type = 'button';
+  const nEdits = recs.reduce((k, r) => k + r.edits.length, 0);
+  hd.append(annMk('span', 'suggtitle', 'Claude 제안'),
+            annMk('span', 'suggmeta', nEdits + '개 · ' + recs.map(r => r.item + '번').join(', ')
+              + ' · 「선택」은 모두 적용에서 빠짐'), all);
+  bar.appendChild(hd);
+  div.appendChild(bar);
+  const rows = [];
+  recs.forEach(r => {
+    const host = items[r.item - 1];
+    const box = annMk('div', 'sugg annsugg');
+    const head = annMk('div', 'sugghd');
+    head.append(annMk('span', 'suggtitle', 'Claude 제안'));
+    if (!host) head.append(annMk('span', 'suggmeta', r.title));  // item gone: say which one it was
+    if (r.pt < 80) {
+      head.append(annMk('span', 'suggmeta', '빌드 시 ' + r.pt + 'pt' +
+        (r.pt_after > r.pt ? ' → 제안 적용 시 ' + r.pt_after + 'pt' : '')));
+    }
+    box.appendChild(head);
+    r.edits.forEach((e, k) => {
+      const key = r.item + ':' + k;
+      const row = annMk('div', 'annedit');
+      const d = annMk('span', 'anndiff');
+      d.append(annMk('span', 'ctx', shown(e.ctx[0])));
+      e.diff.forEach(([op, s]) => d.append(op === '=' ? shown(s) : annMk(op === '-' ? 'del' : 'ins', '', shown(s))));
+      d.append(annMk('span', 'ctx', shown(e.ctx[1])));
+      if (e.why) d.append(annMk('span', 'why', e.why));
+      const b = annMk('button', 'suggapply', '적용'); b.type = 'button';
+      const x = {e, b, host, sync: () => {
+        const done = annDone.has(key);
+        b.disabled = done || !tas.some(t => t.value.includes(e.old));
+        b.textContent = done ? '적용됨' : b.disabled ? '이미 바뀜' : '적용';
+      }, apply: () => {
+        const ta = applyAnnEdit(tas, r.item, e);
+        if (!ta) { showStatus('이미 바뀐 내용이라 적용할 수 없어요', true); return false; }
+        annDone.add(key);
+        markEdited('announce');
+        autogrow(ta);
+        syncAll();
+        return true;
+      }};
+      b.onclick = x.apply;
+      rows.push(x);
+      row.append(annMk('span', 'anntag' + (e.kind === 'style' ? ' style' : ''), ANN_KIND[e.kind] || e.kind), d, b);
+      box.appendChild(row);
+    });
+    if (host) host.p.insertBefore(box, host.ta); else bar.appendChild(box);
+  });
+  const open = () => rows.filter(x => x.e.kind !== 'style' && !x.b.disabled);
+  // A tab carries a dot while its item still has an applicable suggestion.
+  const syncAll = () => {
+    rows.forEach(x => x.sync());
+    all.disabled = !open().length;
+    items.forEach(it => it.tab.classList.toggle('hassugg', rows.some(x => x.host === it && !x.b.disabled)));
+  };
+  all.onclick = () => {
+    const n = open().filter(x => !x.b.disabled && x.apply()).length;  // an earlier edit may consume a later one's text
+    showStatus('교회소식 제안 ' + n + '개 적용됨 — 확인 후 저장하세요');
+  };
+  tas.forEach(t => t.addEventListener('input', syncAll));
+  syncAll();
 }
 
 // 교회소식 photos (collage slides): files upload one request each, are shrunk server-side and
@@ -1232,8 +1374,10 @@ function syncFromDom() {
     const co = document.querySelector('#order input[data-kind="' + k + '-composer"]');
     if (co) s.composer = co.value.trim();
   });
-  const annTa = document.querySelector('#order textarea[data-kind="ann"]');
-  if (annTa) run.announcements = annTa.value.split(/\n-{3,}\n/).map(s => s.trim()).filter(Boolean);
+  const annTas = [...document.querySelectorAll('#order textarea[data-kind="ann"]')];
+  if (annTas.length) {
+    run.announcements = annTas.flatMap(t => t.value.split(/\n-{3,}\n/)).map(s => s.trim()).filter(Boolean);
+  }
   const photoAfter = document.getElementById('photoAfter');
   if (photoAfter) run.announcement_photos_after = +photoAfter.value;
   const hn = document.getElementById('hymnNumber');
