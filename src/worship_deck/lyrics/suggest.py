@@ -210,6 +210,8 @@ def build_song(spec: dict, run_song: dict) -> dict:
     lines = canonical_lines(str(spec["song_id"]), title, artist)
     cards, warnings = map_sections(lines, spec.get("sections", []))
     arrangement, arr_warn = expand_arrangement(spec.get("arrangement", ""), cards)
+    if not spec.get("title"):  # the run's title is OCR's guess; review keeps it unless we replace it
+        arr_warn.append("제목 없음 — spec에 악보의 곡 제목(title)을 넣으세요")
     out.update(
         song_id=str(spec["song_id"]),
         title=title,

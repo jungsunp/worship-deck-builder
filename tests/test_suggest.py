@@ -148,7 +148,7 @@ def test_sheet_repeats_expand_and_unknown_labels_warn() -> None:
 def test_apply_spec_writes_sidecar_and_leaves_run_alone(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr(store, "RUNS_DIR", tmp_path / "runs")
     run = ServiceData(worship_songs=[
-        {"title": "주의 자녀로 산다는 것은", "lines": [],
+        {"title": "주의 자녀 로", "lines": [],  # OCR's guess at the title
          "provenance": {"source": "gasazip", "song_id": "100", "artist": "GIFTED"}},
         {"title": "", "lines": [], "provenance": {"source": "ocr"}},
     ])
@@ -156,7 +156,7 @@ def test_apply_spec_writes_sidecar_and_leaves_run_alone(tmp_path, monkeypatch) -
     before = store.path_for("2026-11-08").read_text(encoding="utf-8")
     opener = "주의 자녀로 산다는 것은"
     doc = S.apply_spec("2026-11-08", {"worship_songs": [
-        {"ref": 0, "song_id": "100", "sheets": ["003", "004"],
+        {"ref": 0, "song_id": "100", "title": "주의 자녀로 산다는 것은", "sheets": ["003", "004"],
          "sections": [{"label": "V1", "at": opener}, {"label": "V2", "at": opener},
                       {"label": "C", "at": "때론 불 가운데", "end": "가장 가까이에"}],
          "arrangement": "V1 V2 Cx2", "marks": "V1 - V2 - Cx2"},
@@ -168,8 +168,16 @@ def test_apply_spec_writes_sidecar_and_leaves_run_alone(tmp_path, monkeypatch) -
     song, cont = doc["worship_songs"]
     assert song["title"] == "주의 자녀로 산다는 것은" and song["artist"] == "GIFTED"
     assert song["arrangement"] == "V1 V2 C C" and song["warnings"] == []
-    assert song["lines"][4] == "" and song["run_title"] == "주의 자녀로 산다는 것은"
+    assert song["lines"][4] == "" and song["run_title"] == "주의 자녀 로"
     assert cont == {"ref": 1, "run_title": "", "continuation_of": 0, "note": "intro strip only"}
+
+
+def test_missing_title_warns(monkeypatch) -> None:
+    """Without the sheet's title, review would keep OCR's misread one — say so."""
+    monkeypatch.setattr(S, "canonical_lines", lambda *a: ["가", "나"])
+    rec = S.build_song({"ref": 0, "song_id": "100", "sections": [{"label": "V1", "at": 0}],
+                        "arrangement": "V1"}, {"title": "괴 난 밤", "provenance": {}})
+    assert rec["title"] == "" and rec["warnings"] == ["제목 없음 — spec에 악보의 곡 제목(title)을 넣으세요"]
 
 
 def test_apply_spec_rejects_bad_ref(tmp_path, monkeypatch) -> None:
