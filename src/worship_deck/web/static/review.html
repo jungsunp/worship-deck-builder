@@ -99,6 +99,20 @@
                      color: #fff; cursor: pointer; flex: none; }
   .sugg .suggline { margin-top: 0.3rem; font-size: 0.85rem; white-space: pre-wrap; }
   .sugg .suggwarn { margin-top: 0.3rem; font-size: 0.85rem; color: var(--amber); }
+  .sugg .suggapply:disabled { background: var(--gray-200); color: var(--gray-600); cursor: default; }
+  /* 교회소식 edits: one row per edit, its character diff in context and its own 적용. */
+  .sugg .annitem { margin-top: 0.7rem; font-weight: 600; font-size: 0.9rem; }
+  .sugg .annitem .suggmeta { font-weight: 400; }
+  .sugg .annedit { display: flex; gap: 0.5rem; align-items: flex-start; margin-top: 0.35rem;
+                   font-size: 0.85rem; }
+  .sugg .anntag { flex: none; border-radius: 999px; padding: 0.05rem 0.45rem; font-size: 0.75rem;
+                  background: #ede9fe; color: var(--purple); }
+  .sugg .anntag.style { background: var(--gray-100); color: var(--gray-600); }
+  .sugg .anndiff { flex: 1; white-space: pre-wrap; word-break: break-all; }
+  .sugg .anndiff .ctx, .sugg .anndiff .why { color: var(--gray-600); }
+  .sugg .anndiff .why { display: block; }
+  .sugg .anndiff del { color: var(--red); background: #fee2e2; }
+  .sugg .anndiff ins { color: #166534; background: #dcfce7; text-decoration: none; }
   .arr { margin-top: 0.8rem; }
   .arrhint { color: var(--gray-600); font-size: 0.85rem; margin-bottom: 0.4rem; }
   .arrhint b { color: var(--gray-700); }
@@ -235,6 +249,7 @@ async function load() {
   run = await r.json();
   try { customLabels = (await (await fetch('/api/labels')).json()).labels || []; } catch (e) { /* offline: dropdown still has the defaults */ }
   try { suggestions = await (await fetch('/runs/' + date + '/suggest')).json(); } catch (e) { /* no sidecar shown */ }
+  if ((suggestions.announcements || []).length) collapsed.announce = false;  // show 교회소식 suggestions
   render();
 }
 
@@ -1054,8 +1069,93 @@ function renderAnnounce(div) {
   ta.id = 'announcements'; ta.dataset.kind = 'ann';
   ta.placeholder = '항목별 --- 로 구분 (첫 줄=제목, 나머지=내용)';
   ta.value = (run.announcements || []).join('\n---\n');
+  renderAnnSuggestions(div, ta);
   div.appendChild(ta);
   renderAnnouncePhotos(div);
+}
+
+// /prep-week 교회소식 suggestions (#209): small find/replace edits per item, each put into the
+// textarea on tap; the operator still saves. 모두 적용 skips `style`, the operator's own
+// formatting choice. An edit whose text is no longer in any item (fixed by hand, or applied
+// before a re-render) can't be applied and says so.
+const ANN_KIND = {typo: '맞춤법', break: '줄바꿈', shorten: '줄이기', style: '선택'};
+const annDone = new Set();  // "item:edit" keys applied this visit
+const annItems = ta => ta.value.split(/\n-{3,}\n/);
+
+// Edit `e` of item `n`: in that item while it still holds `old`, else in the one item that does.
+function applyAnnEdit(ta, n, e) {
+  const items = annItems(ta);
+  let i = n - 1;
+  if (!(items[i] || '').includes(e.old)) {
+    const hits = items.flatMap((t, k) => t.includes(e.old) ? [k] : []);
+    if (hits.length !== 1) return false;
+    i = hits[0];
+  }
+  items[i] = items[i].replace(e.old, () => e.new);  // a function: "$20" in `new` stays literal
+  ta.value = items.join('\n---\n');
+  return true;
+}
+
+function renderAnnSuggestions(div, ta) {
+  const recs = suggestions.announcements || [];
+  if (!recs.length) return;
+  const mk = (tag, cls, txt) => {
+    const d = document.createElement(tag);
+    if (cls) d.className = cls;
+    if (txt !== undefined) d.textContent = txt;
+    return d;
+  };
+  const shown = s => /^\s+$/.test(s) ? s.replace(/ /g, '␣').replace(/\n/g, '⏎') : s.replace(/\n/g, '⏎');
+  const box = mk('div', 'sugg');
+  const hd = mk('div', 'sugghd');
+  const all = mk('button', 'suggapply', '모두 적용'); all.type = 'button';
+  hd.append(mk('span', 'suggtitle', 'Claude 제안'),
+            mk('span', 'suggmeta', '항목 ' + recs.length + '개 · 선택 표시는 모두 적용에서 빠짐'), all);
+  box.appendChild(hd);
+  const rows = [];
+  recs.forEach(r => {
+    const item = mk('div', 'annitem', r.title);
+    if (r.pt < 80) {
+      item.append(' ', mk('span', 'suggmeta', '빌드 시 ' + r.pt + 'pt' +
+        (r.pt_after > r.pt ? ' → 제안 적용 시 ' + r.pt_after + 'pt' : '')));
+    }
+    box.appendChild(item);
+    r.edits.forEach((e, k) => {
+      const key = r.item + ':' + k;
+      const row = mk('div', 'annedit');
+      const d = mk('span', 'anndiff');
+      d.append(mk('span', 'ctx', shown(e.ctx[0])));
+      e.diff.forEach(([op, s]) => d.append(op === '=' ? shown(s) : mk(op === '-' ? 'del' : 'ins', '', shown(s))));
+      d.append(mk('span', 'ctx', shown(e.ctx[1])));
+      if (e.why) d.append(mk('span', 'why', e.why));
+      const b = mk('button', 'suggapply', '적용'); b.type = 'button';
+      const x = {e, b, sync: () => {
+        const done = annDone.has(key);
+        b.disabled = done || !annItems(ta).some(t => t.includes(e.old));
+        b.textContent = done ? '적용됨' : b.disabled ? '이미 바뀜' : '적용';
+      }, apply: () => {
+        if (!applyAnnEdit(ta, r.item, e)) { showStatus('이미 바뀐 내용이라 적용할 수 없어요', true); return false; }
+        annDone.add(key);
+        markEdited('announce');
+        autogrow(ta);
+        syncAll();
+        return true;
+      }};
+      b.onclick = x.apply;
+      rows.push(x);
+      row.append(mk('span', 'anntag' + (e.kind === 'style' ? ' style' : ''), ANN_KIND[e.kind] || e.kind), d, b);
+      box.appendChild(row);
+    });
+  });
+  const open = () => rows.filter(x => x.e.kind !== 'style' && !x.b.disabled);
+  const syncAll = () => { rows.forEach(x => x.sync()); all.disabled = !open().length; };
+  all.onclick = () => {
+    const n = open().filter(x => !x.b.disabled && x.apply()).length;  // an earlier edit may consume a later one's text
+    showStatus('교회소식 제안 ' + n + '개 적용됨 — 확인 후 저장하세요');
+  };
+  ta.addEventListener('input', syncAll);
+  syncAll();
+  div.appendChild(box);
 }
 
 // 교회소식 photos (collage slides): files upload one request each, are shrunk server-side and

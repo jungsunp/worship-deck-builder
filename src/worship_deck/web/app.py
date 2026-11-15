@@ -898,7 +898,7 @@ def apply_research(service_date: str, body: dict = Body(...)) -> dict:
 
 @app.get("/runs/{service_date}/suggest")
 def get_suggestions(service_date: str) -> dict:
-    """The ``/prep-week`` sidecar (#209): Claude's per-song lyric suggestions, or ``{}``.
+    """The ``/prep-week`` sidecar (#209): Claude's per-song lyric and 교회소식 suggestions, or ``{}``.
 
     Read-only — review offers each one behind an apply button; applying edits the in-page run
     and the operator saves as usual. Kept out of the run file because every PUT replaces it.
