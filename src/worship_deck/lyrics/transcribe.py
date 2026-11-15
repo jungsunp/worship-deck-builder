@@ -10,9 +10,12 @@ The band runs the arrangement live from the physical sheets, so the deck only ne
 2. Sheet-title candidates — the tallest Hangul lines near the top of the page, tallest
    first — are detected deterministically from the OCR heights (the bulletin names the
    band, not the songs, so the sheet title is the only song identity; #110, #202).
-3. Canonical lyrics are looked up on gasazip.com by each title candidate (expanded into
-   query variants, ``online.query_variants``) and ranked against the OCR fragments. The
-   first confident match wins: clean text, no note-split syllables, no key-change repeats.
+3. The worship library (``library.match_worship``, #204) is checked first: a song the
+   operator already confirmed in an earlier week comes back with its saved lines and section
+   labels, no network. Otherwise canonical lyrics are looked up on gasazip.com by each
+   title candidate (expanded into query variants, ``online.query_variants``) and ranked
+   against the OCR fragments. The first confident match wins: clean text, no note-split
+   syllables, no key-change repeats.
 4. On a miss the song comes back **empty**, carrying the candidates the lookup already
    scored, and the operator picks the right one in review (#213). There is no local-model
    reassembly: its output was discarded every week and cost ~25s per sheet.
@@ -31,6 +34,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from worship_deck import library
 from worship_deck.lyrics import linebreak, online, sections
 
 # ── Data model ────────────────────────────────────────────────────────────────
@@ -266,6 +270,27 @@ def transcribe(
                 provenance={"source": "ocr", "continuation": True},
             )
         ]
+
+    hit = library.match_worship(titles, fragments)
+    if hit:
+        saved, cand_cov, ocr_cov = hit
+        song = Song(title=saved["title"], composer=saved.get("composer", ""),
+                    fragments=fragments, arrangement_hint=detect_arrangement_hint(ocr_lines))
+        song.sections = [{"label": sec["label"], "lines": list(sec["lines"])}
+                         for sec in saved.get("sections") or []]
+        # The saved play order is deliberately NOT reused (it changes weekly): `arrangement`
+        # stays empty (each section once, in order) until the operator or /prep-week sets it.
+        if song.sections:
+            song.lines = sections.flatten(song.sections)
+        else:  # saved without structure (typed/legacy): same auto-suggestion as a fresh gasazip song
+            song.lines = list(saved["lines"])
+            suggestion = sections.suggest(song.lines)
+            if suggestion:
+                song.sections, song.arrangement = suggestion
+                song.lines = sections.flatten(song.sections)
+        song.provenance = {"source": "library", "slug": saved["slug"],
+                           "cand_cov": cand_cov, "ocr_cov": ocr_cov}
+        return [song]
 
     # Each title candidate expands into search variants (note-split titles need their
     # syllables rejoined before gasazip finds anything); one budgeted lookup covers them all.

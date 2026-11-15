@@ -421,3 +421,46 @@ def test_transcribe_attaches_arrangement_hint_online(
     (song,) = transcribe("whatever.png")
     assert song.arrangement_hint == "V-C-V-Cx2-B-Cx3"
     assert song.arrangement == ""  # hint is never auto-applied
+
+
+# ---------------------------------------------------------------------------
+# worship library (#204) — consulted before gasazip
+# ---------------------------------------------------------------------------
+
+
+def test_transcribe_reuses_library_song_without_gasazip(monkeypatch: pytest.MonkeyPatch) -> None:
+    from worship_deck import library
+    from worship_deck.lyrics import online
+
+    library.save_song(
+        {"title": "내 주를 가까이", "composer": "작곡",
+         "lines": ["내 주를 가까이 하게 함은", "", "주님 품에 안기게 하소서"],
+         "sections": [{"label": "V1", "lines": ["내 주를 가까이 하게 함은"]},
+                      {"label": "C", "lines": ["주님 품에 안기게 하소서"]}],
+         "arrangement": "V1 C C C"},  # last week's order — must not carry over
+        library.WORSHIP_DIR,
+    )
+    ocr = [(0.05, "내 주를 가까이"), (0.03, "내 주를 가까이 하게 함 은"), (0.03, "주님 품에 안기게 하소서")]
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: ocr)
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: pytest.fail("library hit must skip gasazip"))
+    (song,) = transcribe("whatever.png")
+
+    assert song.title == "내 주를 가까이" and song.composer == "작곡"
+    assert [s["label"] for s in song.sections] == ["V1", "C"]
+    assert song.lines == ["내 주를 가까이 하게 함은", "", "주님 품에 안기게 하소서"]
+    assert song.arrangement == ""  # the play order changes weekly (#204)
+    assert song.provenance["source"] == "library" and song.provenance["slug"] == "내-주를-가까이"
+    assert song.provenance["cand_cov"] >= 0.5
+    assert song.fragments  # kept for review re-search (#203) in case it's the wrong song
+
+
+def test_transcribe_library_miss_falls_through_to_gasazip(monkeypatch: pytest.MonkeyPatch) -> None:
+    from worship_deck import library
+    from worship_deck.lyrics import online
+
+    library.save_song({"title": "전혀 다른 곡", "lines": ["아무도 모르는 노래 가사"]}, library.WORSHIP_DIR)
+    monkeypatch.setattr(T, "_vision_ocr", lambda p: _OCR_LINES)
+    monkeypatch.setattr(online, "lookup", lambda *a, **kw: (
+        online.Candidate(song_id="1", title="내 주를 가까이", artist="x", lines=["내 주를 가까이 하게 함은"]), []))
+    (song,) = transcribe("whatever.png")
+    assert song.provenance["source"] == "gasazip"

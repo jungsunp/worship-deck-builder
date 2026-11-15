@@ -29,7 +29,7 @@ $PY show <date>
 ```
 
 This lists the inbox sheets (assemble's order) and the run's worship songs, by `ref`. For each
-song it shows the gasazip `song_id`, `merged_sheets` (continuation pages assemble already
+song it shows its `source` (`gasazip`, `library`, or `ocr` for an unresolved song), the gasazip `song_id`, `merged_sheets` (continuation pages assemble already
 folded in), its current sections and arrangement, and the candidates for an unresolved song.
 
 ## 2. Read each sheet once (Read tool on the image)
@@ -46,6 +46,10 @@ For each sheet, note:
 
 ## 3. Get the canonical lyrics
 
+- **`source=library`** (#204): assemble reused lyrics and section labels the operator confirmed
+  in an earlier week, so there is nothing to look up or anchor. Check only that the sheet's
+  title agrees with the song (if it doesn't, treat it like an unresolved song below), then
+  skip to step 4 and give just the play order.
 - If assemble matched the right song (title agrees with the sheet), use its `song_id`.
 - Otherwise search with the sheet's real title, then take the best candidate whose lyrics
   agree with the sheet:
@@ -63,7 +67,7 @@ $PY lines <song_id>
 
 ```json
 {"worship_songs": [
-  {"ref": 0, "song_id": "3018234", "sheets": ["003", "004"],
+  {"ref": 0, "song_id": "3018234", "title": "주의 자녀로 산다는 것은", "sheets": ["003", "004"],
    "sections": [
      {"label": "V1", "at": "주의 자녀로 산다는 것은 불 가운데로"},
      {"label": "V2", "at": "주의 자녀로 산다는 것은 바다 위로"},
@@ -78,11 +82,21 @@ $PY lines <song_id>
   {"ref": 1, "continuation_of": 0, "sheets": ["004"], "note": "곡 1의 2쪽"}
 ]}```
 
+A **library** song needs only its play order, no `song_id` or `sections` (the run's own cards
+are used, so labels in `arrangement` must be the ones `show` lists):
+
+```json
+  {"ref": 2, "sheets": ["005"], "arrangement": "V1 Cx2 V2 C", "marks": "V1 - Cx2 - V2 - C"}
+```
+
 Rules:
 - **One entry per run song (`ref`).** If a continuation page or intro strip became its own
   song in the run, give it `{"ref": i, "continuation_of": j, "note": …}`; review tells the
   operator to delete it. Already-merged pages (`merged_sheets` > 1) need nothing extra: list
   both sheets and join the pages' play orders in sequence.
+- **`title`**: the song's title as printed at the top of the sheet (without a "FIA -" style
+  arranger prefix or "찬 490장" subtitle). Always give it for a `song_id` entry: the run's
+  title is OCR's guess, and review keeps it unless the suggestion carries a real one.
 - **`sections`**, in canonical-text order. `at` is either the anchor text from the sheet or a
   line number from `lines`; optional `end` is the section's last line (inclusive). A section
   runs until the next entry starts, so where the canonical text repeats a section (the chorus

@@ -316,6 +316,22 @@ def save_confession_library(body: dict = Body(...)) -> dict:
     return {"slug": slug, "title": body.get("title", "")}
 
 
+@app.get("/library/worship")
+def list_worship_library() -> dict:
+    """Saved 찬양 / 설교후 찬양 songs (#204): {slug, title, composer}. Matched at assemble."""
+    return {"songs": library.list_songs(library.WORSHIP_DIR)}
+
+
+@app.post("/library/worship")
+def save_worship_library(body: dict = Body(...)) -> dict:
+    """Save an operator-confirmed worship song so later assembles reuse it before gasazip (#204)."""
+    try:
+        slug = library.save_song(body, library.WORSHIP_DIR)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"slug": slug, "title": body.get("title", "")}
+
+
 @app.post("/inbox/confession-pick")
 def pick_confession(body: dict = Body(...)) -> dict:
     """Pick a saved library song as this week's 고백의 찬양 input (alternative to an image).
