@@ -1,6 +1,6 @@
 ---
 name: prep-week
-description: Read this week's band lead sheets with Claude's own vision and pre-fill the review page's worship-song lyrics — the right gasazip song, section labels (V1/C/B/Ending…) and the play order from the red marks (V/C/B, ×N, X-outs, segues) — then suggest 교회소식 fixes (bulletin typos and spacing, line breaks, shorter wording for items the build would shrink). Writes data/runs/<date>.suggest.json for review to offer behind apply buttons. Use when the user runs /prep-week <date>, or asks to read/prep the week's sheets or announcements after assemble and before review.
+description: Read this week's band lead sheets (찬양 medley and any 설교후 찬양 sheets) with Claude's own vision and pre-fill the review page's worship-song lyrics — the right gasazip song, section labels (V1/C/B/Ending…) and the play order from the red marks (V/C/B, ×N, X-outs, segues) — then suggest 교회소식 fixes (bulletin typos and spacing, line breaks, shorter wording for items the build would shrink). Writes data/runs/<date>.suggest.json for review to offer behind apply buttons. Use when the user runs /prep-week <date>, or asks to read/prep the week's sheets or announcements after assemble and before review.
 ---
 
 # /prep-week <date> — sheet marks → review suggestions (#209)
@@ -28,7 +28,10 @@ out in each command, shell variables don't persist between calls).
 $PY show <date>
 ```
 
-This lists the inbox sheets (assemble's order) and the run's worship songs, by `ref`. For each
+This lists the inbox sheets (assemble's order) and the run's songs, by `ref`, for two sections:
+the 찬양 medley (`worship_songs`, refs `0`, `1`, …) and the optional 설교후 찬양
+(`worship_after_sermon`, refs `s0`, `s1`, … — most weeks it is empty; some weeks it has one or
+two songs from `sermonsong-*` sheets). Both sections are read exactly the same way in steps 2–5. For each
 song it shows its `source` (`gasazip`, `library`, or `ocr` for an unresolved song), the gasazip `song_id`, `merged_sheets` (continuation pages assemble already
 folded in), its current sections and arrangement, and the candidates for an unresolved song.
 
@@ -54,7 +57,7 @@ For each sheet, note:
 - Otherwise search with the sheet's real title, then take the best candidate whose lyrics
   agree with the sheet:
   ```bash
-  $PY search <date> <ref> "<title>"
+  $PY search <date> <ref> "<title>"     # ref: 0, 1, … for 찬양; s0, s1, … for 설교후 찬양
   ```
 
 Then print the numbered canonical lines (`──` marks a blank stanza break):
@@ -88,6 +91,21 @@ are used, so labels in `arrangement` must be the ones `show` lists):
 ```json
   {"ref": 2, "sheets": ["005"], "arrangement": "V1 Cx2 V2 C", "marks": "V1 - Cx2 - V2 - C"}
 ```
+
+**설교후 찬양** songs go in a second top-level list, `worship_after_sermon`, with the same entry
+shape. Its `ref` is the plain index into that section (`s1` in `show` → `"ref": 1`):
+
+```json
+{"worship_songs": [ … ],
+ "worship_after_sermon": [
+   {"ref": 0, "song_id": "…", "title": "…", "sheets": ["sermonsong-1"], "sections": [ … ],
+    "arrangement": "V1 C V2 Cx2", "marks": "V1 - C - V2 - Cx2"},
+   {"ref": 1, "song_id": "…", "title": "…", "sheets": ["sermonsong-2"], "sections": [ … ],
+    "arrangement": "V C C", "marks": "V - Cx2"}]}
+```
+
+Leave `worship_after_sermon` out (or `[]`) when the run has no 설교후 찬양. A 설교후 찬양 that was
+typed rather than uploaded (no `sermonsong-*` sheet, no badge source) has no sheet to read: skip it.
 
 Rules:
 - **One entry per run song (`ref`).** If a continuation page or intro strip became its own
@@ -193,7 +211,7 @@ Re-running replaces only the 교회소식 suggestions; the lyric ones stay.
 
 ## 7. Hand off
 
-Tell the operator, per song: the suggested song (and whether it differs from assemble's pick),
+Tell the operator, per song (찬양, then 설교후 찬양): the suggested song (and whether it differs from assemble's pick),
 the play order, and anything uncertain. For 교회소식, one line per item: what would change and
 why. Then: open review, tap **적용** on each "Claude 제안" block, check, and **저장**. In
 교회소식, **모두 적용** takes every edit except the 선택 (style) ones, which each need their own

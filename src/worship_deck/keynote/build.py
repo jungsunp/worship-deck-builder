@@ -1199,15 +1199,16 @@ def build(
     if a.special_count:
         _t("delete_special", delete_slides, out_key, a.special_start, a.special_count)
 
-    # 설교후 찬양 (optional): clone a 찬양 song unit into the emptied post-sermon region. Runs before
-    # the extra-verse fill so those verses land between the sermon and this song. Inserts only after
-    # the sermon title, leaving the back-to-front anchors below untouched.
-    if data.worship_after_sermon:
+    # 설교후 찬양 (optional): clone a 찬양 song unit per song into the emptied post-sermon region.
+    # Each inserts right after the sermon title, so the songs go in last-first to end up in play
+    # order. Runs before the extra-verse fill so those verses land between the sermon and these
+    # songs. Inserts only after the sermon title, leaving the back-to-front anchors below untouched.
+    for song in reversed(data.worship_after_sermon):
         _t(
             "worship_after_sermon",
             fill_worship_after_sermon,
             out_key,
-            Song(**data.worship_after_sermon),
+            Song(**song),
             worship_seed=a.worship_start,
             sermon_title=a.sermon_title,
         )

@@ -57,6 +57,16 @@ def test_unknown_keys_ignored() -> None:
     assert loaded.date == "2026년 5월 31일"
 
 
+def test_single_sermonsong_run_migrates_to_list() -> None:
+    """Runs saved before 설교후 찬양 held several songs stored one dict ({} for none)."""
+    path = store.path_for("2026-05-31")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text('{"worship_after_sermon": {"title": "곡", "lines": ["a"]}}', encoding="utf-8")
+    assert store.load("2026-05-31").worship_after_sermon == [{"title": "곡", "lines": ["a"]}]
+    path.write_text('{"worship_after_sermon": {}}', encoding="utf-8")
+    assert store.load("2026-05-31").worship_after_sermon == []
+
+
 def test_missing_run() -> None:
     assert store.exists("2026-05-31") is False
     with pytest.raises(FileNotFoundError):

@@ -101,9 +101,9 @@ def _kept_on_reassemble(existing: ServiceData) -> list[str]:
     ):
         kept.append("고백의 찬양 lyrics")
     if (
-        existing.worship_after_sermon.get("title")
+        existing.worship_after_sermon
         and "worship_after_sermon" not in existing.edited_fields
-        and _sermon_song_path() is None
+        and not _sermon_song_paths()
         and _sermon_song_text() is None
     ):
         kept.append("설교후 찬양 lyrics")
@@ -181,13 +181,13 @@ def index() -> FileResponse:
 
 
 # Each required source has a dedicated upload slot (#109); slot identity is the reserved
-# inbox filename: bulletin.pdf, confession.<ext>, sermonsong.<ext>, sheet-<origname>, choir.txt.
+# inbox filename: bulletin.pdf, confession.<ext>, sermonsong-<origname>, sheet-<origname>, choir.txt.
 def _kind(name: str) -> str:
     if name == "bulletin.pdf":
         return "bulletin"
     if name.startswith("confession."):
         return "confession"
-    if name.startswith("sermonsong."):
+    if name.startswith(("sermonsong-", "sermonsong.")):  # "sermonsong.<ext>": pre-multi-song uploads
         return "sermonsong"
     if name.startswith("sheet-"):
         return "sheet"
@@ -198,15 +198,16 @@ def _kind(name: str) -> str:
 def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
     """Save uploads into the slot's reserved inbox name (#109).
 
-    Single-file slots (bulletin, confession) replace the existing file; medley sheets keep
-    their original (sanitized) names behind a constant prefix so filename order is preserved.
+    Single-file slots (bulletin, confession) replace the existing file; medley and 설교후 찬양
+    sheets keep their original (sanitized) names behind a constant prefix so filename order is
+    preserved.
     Called by the home page's fetch-on-select JS, so it returns JSON, not a page.
     """
     if kind not in ("bulletin", "sheets", "confession", "sermonsong"):
         raise HTTPException(status_code=400, detail="unknown upload slot")
     INBOX_DIR.mkdir(parents=True, exist_ok=True)
     saved: list[str] = []
-    for f in files[: None if kind == "sheets" else 1]:
+    for f in files[: None if kind in ("sheets", "sermonsong") else 1]:
         name = Path(f.filename or "").name  # strip any path components (e.g. ../)
         if not name:
             continue
@@ -225,9 +226,8 @@ def upload(kind: str, files: list[UploadFile] = File(...)) -> dict:
         elif kind == "sermonsong":
             if suffix not in _IMAGE_SUFFIXES:
                 raise HTTPException(status_code=400, detail="설교후 찬양 sheet must be an image")
-            for old in INBOX_DIR.glob("sermonsong.*"):  # replace image + text (exclusive inputs)
-                old.unlink()
-            name = f"sermonsong{suffix}"
+            (INBOX_DIR / "sermonsong.txt").unlink(missing_ok=True)  # images and text are exclusive
+            name = f"sermonsong-{name}"
         else:
             if suffix not in _IMAGE_SUFFIXES:
                 raise HTTPException(status_code=400, detail="sheets must be images")
@@ -377,16 +377,15 @@ def save_sermonsong_text(body: dict = Body(...)) -> dict:
     """Write typed 설교후 찬양 lyrics into the inbox sermonsong.txt — the text-input alternative
     to an uploaded sheet image (same title/composer/lyrics format as 성가대).
 
-    Non-empty text clears a competing uploaded image so the two inputs stay mutually exclusive;
-    blank text clears the slot.
+    Non-empty text clears competing uploaded images so the two inputs stay mutually exclusive;
+    blank text clears the slot. Several songs are separated by a ``---`` line.
     """
     text = body.get("text", "")
     target = INBOX_DIR / "sermonsong.txt"
     if text.strip():
         INBOX_DIR.mkdir(parents=True, exist_ok=True)
-        for old in INBOX_DIR.glob("sermonsong.*"):  # drop a competing uploaded image
-            if old.suffix.lower() in _IMAGE_SUFFIXES:
-                old.unlink()
+        for old in _sermon_song_paths():  # drop competing uploaded images
+            old.unlink()
         target.write_text(text, encoding="utf-8")
         return {"saved": True}
     if target.is_file():
@@ -453,10 +452,32 @@ def _confession_text() -> str | None:
     return text if text.strip() else None
 
 
-def _sermon_song_path() -> Path | None:
-    """The 설교후 찬양 sheet image in the inbox, or None if none uploaded."""
-    imgs = sorted(p for p in INBOX_DIR.glob("sermonsong.*") if p.suffix.lower() in _IMAGE_SUFFIXES)
-    return imgs[0] if imgs else None
+def _sermon_song_paths() -> list[Path]:
+    """설교후 찬양 sheet images in the inbox, in filename order (song order)."""
+    return sorted(p for p in INBOX_DIR.glob("sermonsong*") if p.suffix.lower() in _IMAGE_SUFFIXES)
+
+
+def _transcribe_sheets(paths: list[Path], steps: dict[str, float], tag: str) -> list:
+    """Transcribe lead-sheet images in order into Songs, timing each under ``<step>_<tag>_<i>``."""
+    songs: list = []
+    for i, img in enumerate(paths):
+        sheet_steps: dict[str, float] = {}
+        result = lyrics_transcribe.transcribe(
+            str(img), steps=sheet_steps, previous_lines=songs[-1].lines if songs else None
+        )
+        for song in result:
+            # Page 2 of the previous song (#213), recognised by its lyrics already being in that
+            # song's canonical text. Canonical lyrics hold every verse, so only the fragments are
+            # kept — they sharpen that song's re-search scoring.
+            if song.provenance.get("continuation") and songs:
+                songs[-1].fragments += song.fragments
+                merged = songs[-1].provenance.get("merged_sheets", 1)
+                songs[-1].provenance["merged_sheets"] = merged + 1
+                continue
+            songs.append(song)
+        for k, v in sheet_steps.items():
+            steps[f"{k}_{tag}_{i}"] = v
+    return songs
 
 
 def _sermon_song_text() -> str | None:
@@ -496,24 +517,7 @@ def _assemble_async(service_date: str) -> None:
         if "worship_songs" not in data.edited_fields:
             if not _sheet_paths():
                 warnings.append("no 찬양 sheet images in inbox — medley not transcribed")
-            songs = []
-            for i, img in enumerate(_sheet_paths()):
-                sheet_steps: dict[str, float] = {}
-                result = lyrics_transcribe.transcribe(
-                    str(img), steps=sheet_steps, previous_lines=songs[-1].lines if songs else None
-                )
-                for song in result:
-                    # Page 2 of the previous song (#213), recognised by its lyrics already being
-                    # in that song's canonical text. Canonical lyrics hold every verse, so only
-                    # the fragments are kept — they sharpen that song's re-search scoring.
-                    if song.provenance.get("continuation") and songs:
-                        songs[-1].fragments += song.fragments
-                        merged = songs[-1].provenance.get("merged_sheets", 1)
-                        songs[-1].provenance["merged_sheets"] = merged + 1
-                        continue
-                    songs.append(song)
-                for k, v in sheet_steps.items():
-                    steps[f"{k}_sheet_{i}"] = v
+            songs = _transcribe_sheets(_sheet_paths(), steps, "sheet")
             data.worship_songs = [asdict(s) for s in songs]
 
         # 고백의 찬양 (#109): one of three inputs — a library-picked song (snapshotted in the
@@ -545,22 +549,22 @@ def _assemble_async(service_date: str) -> None:
                     logger.exception("고백의 찬양 transcription failed for %s", service_date)
                     warnings.append("고백의 찬양 transcription failed — edit it in review")
 
-        # 설교후 찬양: optional worship song after the sermon — typed lyrics (parsed like 성가대,
-        # no OCR) or a dedicated sheet image. Absent input just leaves the section empty (the whole
-        # section is optional), so no warning. Best-effort like the confession above.
+        # 설교후 찬양: optional worship songs after the sermon — typed lyrics (parsed like 성가대,
+        # no OCR; songs split on a `---` line) or sheet images, transcribed like the medley (one
+        # song per sheet, a song's page 2 folds into it). Absent input just leaves the section
+        # empty (the whole section is optional), so no warning. Best-effort like the confession.
         if "worship_after_sermon" not in data.edited_fields:
             text = _sermon_song_text()
-            img = _sermon_song_path()
+            imgs = _sermon_song_paths()
             if text is not None:
-                data.worship_after_sermon = asdict(parse_choir_text(text))
-            elif img is not None:
+                data.worship_after_sermon = [
+                    asdict(parse_choir_text(t)) for t in re.split(r"\n-{3,}\n", text) if t.strip()
+                ]
+            elif imgs:
                 try:
-                    sermonsong_steps: dict[str, float] = {}
-                    result = lyrics_transcribe.transcribe(str(img), steps=sermonsong_steps)
-                    for k, v in sermonsong_steps.items():
-                        steps[f"{k}_sermonsong"] = v
+                    result = _transcribe_sheets(imgs, steps, "sermonsong")
                     if result:
-                        data.worship_after_sermon = asdict(result[0])
+                        data.worship_after_sermon = [asdict(s) for s in result]
                     else:
                         warnings.append("설교후 찬양 transcription found no lyrics")
                 except Exception:  # best-effort, surface as a warning
@@ -791,10 +795,12 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
     data.announcement_photos_after = max(0, int(data.announcement_photos_after or 0))
     # The single-song sections seed an empty V1 card in review; an untouched section must read as
     # "no content" (title-less, no lyrics) so it isn't built and isn't flagged as an edit (#105).
-    for f in ("worship_after_sermon", "confession_song"):
-        song = getattr(data, f)
-        if not song.get("title") and not any((ln or "").strip() for ln in song.get("lines", [])):
-            setattr(data, f, {})
+    def _blank(song: dict) -> bool:
+        return not song.get("title") and not any((ln or "").strip() for ln in song.get("lines", []))
+
+    if _blank(data.confession_song):
+        data.confession_song = {}
+    data.worship_after_sermon = [s for s in data.worship_after_sermon if not _blank(s)]
     # Extra sermon refs (#114) are looked up on save, not at build: a typo'd ref fails here
     # with a visible warning instead of a minute into the Keynote build, and the review page
     # can preview the verses. Only changed refs hit the network; a failed lookup stores an
@@ -838,15 +844,16 @@ def put_run(service_date: str, body: dict = Body(...)) -> dict:
 def _song_by_ref(data: ServiceData, ref: str) -> dict | None:
     """Resolve a review song reference to its stored dict — mirrors review.html's songByRef.
 
-    ``ref`` is a numeric string index into the 찬양 medley, or "confession"/"sermonsong" for the
-    single-song sections. Returns None when the ref doesn't resolve to a present song.
+    ``ref`` is a numeric string index into the 찬양 medley, "confession", or "sermonsong:<i>" for
+    the i-th 설교후 찬양. Returns None when the ref doesn't resolve to a present song.
     """
     if ref == "confession":
         return data.confession_song or None
-    if ref == "sermonsong":
-        return data.worship_after_sermon or None
+    songs, i = data.worship_songs, ref
+    if ref.startswith("sermonsong:"):
+        songs, i = data.worship_after_sermon, ref.removeprefix("sermonsong:")
     try:
-        return data.worship_songs[int(ref)]
+        return songs[int(i)] or None
     except (ValueError, IndexError):
         return None
 
@@ -1089,7 +1096,7 @@ def draft_pdf(service_date: str) -> FileResponse:
 
 def _songs_missing_lyrics(data: ServiceData) -> list[str]:
     """Names of unresolved songs left with no lyric lines (a lookup miss, or a ＋ 곡 left blank)."""
-    songs = [*data.worship_songs, data.confession_song, data.worship_after_sermon]
+    songs = [*data.worship_songs, data.confession_song, *data.worship_after_sermon]
     return [
         s.get("title") or "(제목 없음)"
         for s in songs

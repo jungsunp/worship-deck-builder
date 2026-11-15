@@ -102,12 +102,13 @@ sections:
       render: manual
 
   worship_after_sermon:       # 설교후 찬양 (optional)
-    # Not in the bulletin worship_order — an optional worship song after the sermon. The operator
-    # uploads a sheet image or types lyrics on the home page (transcribed/parsed at assemble) and
-    # labels V1/C sections in review, like 찬양. At build a single 찬양 song unit (blank + title +
-    # lyric slides) is cloned into the emptied post-sermon region, landing after any extra sermon
-    # verses and before the 파송의 노래 closing. Absent input builds nothing.
-    source: worship_after_sermon (inbox sermonsong.<ext> image or sermonsong.txt)
+    # Not in the bulletin worship_order — optional worship songs after the sermon (usually none,
+    # sometimes 2). The operator uploads sheet images or types lyrics on the home page
+    # (transcribed/parsed at assemble) and labels V1/C sections in review, like 찬양. At build one
+    # 찬양 song unit (blank + title + lyric slides) per song is cloned into the emptied post-sermon
+    # region, landing after any extra sermon verses and before the 파송의 노래 closing. Absent
+    # input builds nothing.
+    source: worship_after_sermon (inbox sermonsong-<name> images or sermonsong.txt, songs split on ---)
     render: native_text
 
   ending_date:

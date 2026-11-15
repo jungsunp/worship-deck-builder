@@ -123,12 +123,17 @@ def test_save_confession_text_writes_and_clears(tmp_path, monkeypatch) -> None:
     assert not (tmp_path / "confession.txt").exists()
 
 
-def test_upload_sermonsong_replaces_across_extensions(tmp_path, monkeypatch) -> None:
+def test_upload_sermonsong_keeps_every_sheet(tmp_path, monkeypatch) -> None:
+    """설교후 찬양 can be several songs: uploads add sheets (in one go or one by one), like 찬양."""
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
-    client.post("/upload/sermonsong", files={"files": ("a.png", b"old", "image/png")})
-    client.post("/upload/sermonsong", files={"files": ("b.jpg", b"new", "image/jpeg")})
-    assert not (tmp_path / "sermonsong.png").exists()
-    assert (tmp_path / "sermonsong.jpg").read_bytes() == b"new"
+    client.post("/upload/sermonsong", files=[
+        ("files", ("1.png", b"one", "image/png")), ("files", ("2.jpg", b"two", "image/jpeg")),
+    ])
+    client.post("/upload/sermonsong", files={"files": ("3.png", b"three", "image/png")})
+    assert [p.name for p in app_module._sermon_song_paths()] == [
+        "sermonsong-1.png", "sermonsong-2.jpg", "sermonsong-3.png",
+    ]
+    assert {f["kind"] for f in client.get("/inbox").json()["files"]} == {"sermonsong"}
 
 
 def test_upload_sermonsong_rejects_non_image(tmp_path, monkeypatch) -> None:
@@ -152,13 +157,14 @@ def test_sermonsong_image_and_text_are_mutually_exclusive(tmp_path, monkeypatch)
     monkeypatch.setattr(app_module, "INBOX_DIR", tmp_path)
     # typing lyrics drops a competing uploaded image ...
     client.post("/upload/sermonsong", files={"files": ("a.png", b"img", "image/png")})
+    (tmp_path / "sermonsong.png").write_bytes(b"img")  # a pre-multi-song upload name
     client.post("/inbox/sermonsong-text", json={"text": "설교후곡\n가사"})
-    assert not (tmp_path / "sermonsong.png").exists()
+    assert app_module._sermon_song_paths() == []
     assert (tmp_path / "sermonsong.txt").exists()
     # ... and uploading an image drops the typed text.
     client.post("/upload/sermonsong", files={"files": ("b.png", b"img", "image/png")})
     assert not (tmp_path / "sermonsong.txt").exists()
-    assert (tmp_path / "sermonsong.png").exists()
+    assert (tmp_path / "sermonsong-b.png").exists()
 
 
 # ── /inbox ───────────────────────────────────────────────────────────────────────
@@ -609,22 +615,38 @@ def test_assemble_parses_sermonsong_text_without_transcribing(_assemble_env, mon
         app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
     )
     date = client.post("/assemble").json()["service_date"]
-    assert store.load(date).worship_after_sermon == {
+    assert store.load(date).worship_after_sermon == [{
         "title": "설교후곡", "composer": "작곡자 작곡", "lines": ["한 줄"],
         "sections": [], "arrangement": "", "arrangement_hint": "", "provenance": {},
         "fragments": [], "candidates": [],
-    }
+    }]
 
 
-def test_assemble_transcribes_sermonsong_image(_assemble_env, monkeypatch, tmp_path) -> None:
-    (tmp_path / "sermonsong.png").write_bytes(b"img")
+def test_assemble_splits_typed_sermonsongs_on_dashes(_assemble_env, monkeypatch) -> None:
+    client.post("/inbox/sermonsong-text", json={"text": "첫 곡\n작곡\n가사 1\n---\n둘째 곡\n작곡\n가사 2"})
     monkeypatch.setattr(
-        app_module.lyrics_transcribe, "transcribe",
-        lambda p, **kw: [Song(title="설교후곡" if Path(p).name.startswith("sermonsong") else "찬양곡", lines=["x"])],
+        app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
     )
     date = client.post("/assemble").json()["service_date"]
+    assert [s["title"] for s in store.load(date).worship_after_sermon] == ["첫 곡", "둘째 곡"]
+
+
+def test_assemble_transcribes_sermonsong_images(_assemble_env, monkeypatch, tmp_path) -> None:
+    """One 설교후 찬양 song per sheet, in filename order; a song's page 2 folds into it."""
+    for name in ("sermonsong-1.png", "sermonsong-2.png", "sermonsong-3.png"):
+        (tmp_path / name).write_bytes(b"img")
+
+    def fake(p, **kw):
+        name = Path(p).name
+        if name == "sermonsong-3.png":  # page 2 of song 2
+            return [Song(title="", lines=["x"], provenance={"continuation": True}, fragments=["p2"])]
+        return [Song(title=f"설교후곡 {name[11]}" if name.startswith("sermonsong") else "찬양곡", lines=["x"])]
+
+    monkeypatch.setattr(app_module.lyrics_transcribe, "transcribe", fake)
+    date = client.post("/assemble").json()["service_date"]
     data = store.load(date)
-    assert data.worship_after_sermon["title"] == "설교후곡"
+    assert [s["title"] for s in data.worship_after_sermon] == ["설교후곡 1", "설교후곡 2"]
+    assert data.worship_after_sermon[1]["provenance"]["merged_sheets"] == 2
     assert [s["title"] for s in data.worship_songs] == ["찬양곡"]  # medley untouched by the slot
 
 
@@ -634,7 +656,7 @@ def test_assemble_without_sermonsong_leaves_it_empty(_assemble_env, monkeypatch)
         app_module.lyrics_transcribe, "transcribe", lambda _p, **kw: [Song(title="찬양곡", lines=["x"])]
     )
     date = client.post("/assemble").json()["service_date"]
-    assert store.load(date).worship_after_sermon == {}
+    assert store.load(date).worship_after_sermon == []
     assert "설교후" not in (client.get(f"/assemble/{date}/status").json().get("warning") or "")
 
 
@@ -1036,27 +1058,27 @@ def test_put_run_tracks_choir_and_confession_edits(_runs) -> None:
 
 def test_put_run_tracks_sermonsong_edits(_runs) -> None:
     store.save(_runs, replace(
-        _fake_run(), worship_after_sermon={"title": "설교후", "lines": ["a"], "composer": ""},
+        _fake_run(), worship_after_sermon=[{"title": "설교후", "lines": ["a"], "composer": ""}],
     ))
     run = client.get(f"/runs/{_runs}").json()
-    run["worship_after_sermon"]["lines"] = ["a fixed"]
+    run["worship_after_sermon"][0]["lines"] = ["a fixed"]
     client.put(f"/runs/{_runs}", json=run)
     assert store.load(_runs).edited_fields == ["worship_after_sermon"]
 
 
 def test_put_run_normalizes_untouched_optional_song(_runs) -> None:
-    """The review UI seeds an empty V1 card; an untouched 설교후 찬양 must normalize back to {} so
+    """The review UI seeds an empty V1 card; an untouched 설교후 찬양 must normalize back to [] so
     it isn't flagged as an edit (and so the build skips it)."""
-    store.save(_runs, _fake_run())  # worship_after_sermon defaults to {}
+    store.save(_runs, _fake_run())  # worship_after_sermon defaults to []
     run = client.get(f"/runs/{_runs}").json()
     # what the seeded-but-untouched editor round-trips: an empty V1 card, blank title/composer
-    run["worship_after_sermon"] = {
+    run["worship_after_sermon"] = [{
         "title": "", "composer": "", "lines": [],
         "sections": [{"label": "V1", "lines": []}], "arrangement": "", "arrangement_hint": "",
-    }
+    }]
     client.put(f"/runs/{_runs}", json=run)
     saved = store.load(_runs)
-    assert saved.worship_after_sermon == {}
+    assert saved.worship_after_sermon == []
     assert "worship_after_sermon" not in saved.edited_fields
 
 

@@ -291,7 +291,7 @@ const SECTIONS = [
   // 설교후 찬양 isn't a bulletin worship-order row — match() never fires; render() injects it
   // manually right after the 말씀 card (its slides land after the sermon in the deck).
   {key: 'sermonsong', chip: '설교후', match: () => false, render: renderSermonSong, open: false,
-   missing: () => !(run.worship_after_sermon && run.worship_after_sermon.title)},
+   missing: () => !(run.worship_after_sermon || []).some(s => s.title)},
 ];
 const SERMONSONG_SEC = SECTIONS.find(s => s.key === 'sermonsong');
 const edited = {};     // key → operator touched the section this visit (✎ badge)
@@ -318,7 +318,7 @@ function render() {
     // Fallback: the bulletin has no post-sermon 찬양 row, but the operator added a 설교후 찬양 anyway —
     // show it right after the 말씀 card. Most weeks there's no song, so nothing renders here.
     if (sec && sec.key === 'sermon' && postSermonSongIdx < 0
-        && run.worship_after_sermon && run.worship_after_sermon.title) {
+        && (run.worship_after_sermon || []).some(s => s.title)) {
       order.appendChild(sectionCard(SERMONSONG_SEC, {part: '설교후 찬양'}));
     }
   });
@@ -478,16 +478,17 @@ function renderMedley(div) {
 const LABEL_OPTS = ['V1', 'V2', 'V3', 'V4', 'PC', 'C', 'B', 'Intro', '간주', 'Tag', 'Ending'];
 let customLabels = [];  // labels typed via 직접입력, persisted server-side and reused across weeks
 
-// The section-card editor is shared by three single-or-medley song sections. `ref` selects the
-// target song: a numeric index into the 찬양 medley, or a string key for the single-song sections
-// (고백의 찬양 / 설교후 찬양). The .cards[data-i] selectors work for both (string or numeric).
+// The section-card editor is shared by three song sections. `ref` selects the target song: a
+// numeric index into the 찬양 medley, 'confession' (고백의 찬양), or 'sermonsong:<i>' for the i-th
+// 설교후 찬양. The .cards[data-i] selectors work for all (string or numeric).
+const isSermonRef = ref => String(ref).startsWith('sermonsong:');
 function songByRef(ref) {
   if (ref === 'confession') return run.confession_song;
-  if (ref === 'sermonsong') return run.worship_after_sermon || (run.worship_after_sermon = {});
+  if (isSermonRef(ref)) return run.worship_after_sermon[+ref.split(':')[1]];
   return run.worship_songs[ref];
 }
 const editKeyOf = ref => (ref === 'confession' ? 'confession'
-                        : ref === 'sermonsong' ? 'sermonsong' : 'opening');
+                        : isSermonRef(ref) ? 'sermonsong' : 'opening');
 
 // Provenance badge (#200): where a song's lyrics came from, so the operator knows what to trust.
 // gasazip match → green pill linking to the source, with both coverage %s (low on either = worth
@@ -579,11 +580,14 @@ function appendProvRow(sd, song, ref) {
   }
 }
 
-// The /prep-week suggestion for medley song `s` (#209): the sidecar record whose ref is this index
-// and whose title (as assembled, or as suggested) still matches, else any record matching by title
-// — songs may have been reordered or deleted since the skill ran.
-function suggestionFor(song, s) {
-  const list = suggestions.worship_songs || [];
+// The /prep-week suggestion for song `ref` (#209) — a medley index, or 'sermonsong:<i>' (looked up
+// in the sidecar's worship_after_sermon list): the record whose ref is this index and whose title
+// (as assembled, or as suggested) still matches, else any record matching by title — songs may
+// have been reordered or deleted since the skill ran.
+function suggestionFor(song, ref) {
+  const sermon = isSermonRef(ref);
+  const list = (sermon ? suggestions.worship_after_sermon : suggestions.worship_songs) || [];
+  const s = sermon ? +ref.split(':')[1] : ref;
   const hit = g => [g.run_title, g.title].includes(song.title || '');
   return list.find(g => g.ref === s && hit(g)) || (song.title && list.find(hit)) || null;
 }
@@ -620,7 +624,7 @@ function appendSuggestion(sd, song, s) {
 
 function applySuggestion(s, g) {
   syncFromDom();  // keep unsaved edits to other songs
-  const song = run.worship_songs[s];
+  const song = songByRef(s);
   const prov = song.provenance || {};
   song.title = g.title || song.title;
   song.sections = g.sections.map(c => ({label: c.label, lines: c.lines.slice()}));
@@ -631,14 +635,14 @@ function applySuggestion(s, g) {
                        ...(prov.merged_sheets ? {merged_sheets: prov.merged_sheets} : {})};
   }
   song.candidates = [];
-  edited.opening = true;
+  edited[editKeyOf(s)] = true;
   render();
   showStatus('Claude 제안 적용됨 — 확인 후 저장하세요');
 }
 
 // The title <input> backing a song ref — the operator's corrected title is read from the DOM.
 function titleInput(ref) {
-  return ref === 'confession' || ref === 'sermonsong'
+  return ref === 'confession' || isSermonRef(ref)
     ? document.querySelector('#order input[data-kind="' + ref + '-title"]')
     : document.querySelector('#order input[data-kind="worship-title"][data-i="' + ref + '"]');
 }
@@ -935,7 +939,7 @@ function renderSong(div, song, kind, hint) {
   div.appendChild(sd);
 }
 
-// A "라이브러리에 저장" button for song `ref` (medley index or 'confession'/'sermonsong'); `url`
+// A "라이브러리에 저장" button for song `ref` (medley index, 'confession' or 'sermonsong:<i>'); `url`
 // picks the library: /library/confession (home picker) or /library/worship (matched at assemble, #204).
 function libSaveButton(ref, url) {
   const lib = document.createElement('button');
@@ -966,7 +970,7 @@ function renderChoir(div) {
   renderSong(div, run.choir_song, 'choir', '성가대 가사 없음 — 홈 화면에서 가사를 입력하고 다시 Assemble');
 }
 
-// 고백의 찬양 / 설교후 찬양: a single song the operator can group into V1/C sections in review —
+// 고백의 찬양 / each 설교후 찬양 song: a song the operator can group into V1/C sections in review —
 // the same section-card + arrangement editor as the 찬양 medley, minus only the medley tabs.
 function renderLabeledSong(div, ref, libUrl) {
   const song = songByRef(ref);
@@ -977,6 +981,7 @@ function renderLabeledSong(div, ref, libUrl) {
   co.dataset.kind = ref + '-composer'; co.placeholder = '작곡/편곡'; co.value = song.composer || '';
   sd.append(ti, co);
   appendProvRow(sd, song, ref);  // lyric origin badge (#200) + 재검색 (#203)
+  if (isSermonRef(ref)) appendSuggestion(sd, song, ref);  // Claude 제안 from /prep-week (#209)
   // Seed unlabeled lyrics as one V1 card so the operator always has something to split/label.
   if (!song.sections || !song.sections.length) {
     song.sections = [{label: 'V1', lines: (song.lines || []).slice()}];
@@ -997,7 +1002,12 @@ function renderLabeledSong(div, ref, libUrl) {
 }
 
 function renderConfession(div) { renderLabeledSong(div, 'confession', '/library/confession'); }
-function renderSermonSong(div) { renderLabeledSong(div, 'sermonsong', '/library/worship'); }
+// 설교후 찬양: one stacked editor per song, in play order. With none yet, one blank editor so a song
+// can still be typed in review (PUT drops it again if left untouched).
+function renderSermonSong(div) {
+  if (!(run.worship_after_sermon || []).length) run.worship_after_sermon = [{}];
+  run.worship_after_sermon.forEach((_, i) => renderLabeledSong(div, 'sermonsong:' + i, '/library/worship'));
+}
 
 function mkInput(id, ph, val) {
   const i = document.createElement('input'); i.id = id; i.placeholder = ph; i.value = val || '';
@@ -1367,7 +1377,8 @@ function syncFromDom() {
   if (choirCo && run.choir_song) run.choir_song.composer = choirCo.value.trim();
   // confession/sermonsong lyrics come from their label cards (the .cards loop above); only the
   // title/composer inputs need reading back here.
-  [['confession', run.confession_song], ['sermonsong', run.worship_after_sermon]].forEach(([k, s]) => {
+  [['confession', run.confession_song],
+   ...(run.worship_after_sermon || []).map((s, i) => ['sermonsong:' + i, s])].forEach(([k, s]) => {
     if (!s) return;
     const ti = document.querySelector('#order input[data-kind="' + k + '-title"]');
     if (ti) s.title = ti.value.trim();
