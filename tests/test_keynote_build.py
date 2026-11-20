@@ -408,9 +408,9 @@ def test_fill_sermon_extra_slides_inserts_reversed_at_fixed_anchors(
 
     assert calls == [
         ("dup", 129, 1, 134, 1),
-        ("fill", 135, "[롬 8:1-4, 개역한글]", "[Romans 8:1-4, ESV]", [1, 2], 1),
+        ("fill", 135, "롬 8:1-4, 개역한글", "Romans 8:1-4, ESV", [1, 2], 1),
         ("dup", 129, 1, 134, 1),
-        ("fill", 135, "[요 3:16, 개역한글]", "[John 3:16, ESV]", [16], 1),
+        ("fill", 135, "요 3:16, 개역한글", "John 3:16, ESV", [16], 1),
     ]
 
 
@@ -446,7 +446,7 @@ def test_set_sermon_title_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(B, "read_title_box", lambda *a: (758, 326, 130))
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = set_sermon_title_slide("draft.key", 134, "참된 예배", "[히 12:1-2]")
+    result = set_sermon_title_slide("draft.key", 134, "참된 예배", "히 12:1-2")
 
     assert result == "ok"
     # short title fits one line at the box's base font, so text is unwrapped and font is 130
@@ -456,7 +456,7 @@ def test_set_sermon_title_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> 
         "draft.key",
         "134",
         "참된 예배",
-        "[히 12:1-2]",
+        "히 12:1-2",
         "130",
     ]
 
@@ -498,7 +498,7 @@ def test_set_call_to_worship_ref_passes_args(monkeypatch: pytest.MonkeyPatch) ->
         str(B._SET_CTW_REF),
         "draft.key",
         "47",
-        "[ 눅 15:19-23 ]",  # spaced brackets, matching the deck
+        "눅 15:19-23",  # bare, no brackets
     ]
 
 
@@ -520,7 +520,7 @@ def test_set_sermon_ref_slide_passes_args(monkeypatch: pytest.MonkeyPatch) -> No
         "draft.key",
         "127",
         "삼상 5:1-12",          # bare Korean ref box
-        "[1 Samuel 5:1-12]",    # bracketed English ref box (ESV book name)
+        "1 Samuel 5:1-12",    # bare English ref box (ESV book name)
     ]
 
 
@@ -1388,11 +1388,11 @@ def test_set_sermon_title_slide_live_sets_title_and_ref(
     draft = tmp_path / "draft.key"
     save_draft(str(real_template_key), str(draft))
 
-    assert set_sermon_title_slide(str(draft), 134, "믿음의 경주", "[히 12:1-2]") == "ok"
+    assert set_sermon_title_slide(str(draft), 134, "믿음의 경주", "히 12:1-2") == "ok"
 
     text = _on_canvas_text(str(draft), 134)
     assert "믿음의 경주" in text  # title box set
-    assert "[히 12:1-2]" in text  # ref box set
+    assert "히 12:1-2" in text  # ref box set
     assert "[눅" not in text  # last week's reference is gone, not left in the gold box
 
 
@@ -1764,9 +1764,9 @@ def test_build_dispatches_sections_back_to_front(monkeypatch: pytest.MonkeyPatch
     # the ad-hoc 말씀 special block: 18 slides dropped at the template anchor 135 (#97).
     assert by_name["delete_slides"][1] == ("out.key", 135, 18)
     # date slide takes the top-level sermon title + bracketed ref.
-    assert by_name["set_date_slides"][1] == ("out.key", "2026년 6월 7일", "믿음의 경주", "[히 12:1-2]")
+    assert by_name["set_date_slides"][1] == ("out.key", "2026년 6월 7일", "믿음의 경주", "히 12:1-2")
     # standalone 말씀 title slide (134) gets the same sermon title + bracketed ref.
-    assert by_name["set_sermon_title_slide"][1] == ("out.key", 134, "믿음의 경주", "[히 12:1-2]")
+    assert by_name["set_sermon_title_slide"][1] == ("out.key", 134, "믿음의 경주", "히 12:1-2")
 
     sermon_call, ctw_call = (c for c in calls if c[0] == "fill_verse_slides")
     assert sermon_call[1][0:2] == ("out.key", 129)

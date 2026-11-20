@@ -265,7 +265,7 @@ def set_date_slides(key_path: str, date: str, title: str, ref: str) -> int:
     Detects date slides generically (any on-canvas text item bearing 년/월); off-canvas
     leftover items are ignored. Intro slides get date + title + ref (title and ref are the
     two paragraphs of one text item); ending slides keep their closing wording and take only
-    the new date. `ref` includes brackets, e.g. "[창 1:1-5]"; `date` is pre-formatted Korean,
+    the new date. `ref` is bare (no brackets), e.g. "창 1:1-5"; `date` is pre-formatted Korean,
     e.g. "2026년 6월 7일". Returns the number of date slides updated.
 
     Raises:
@@ -591,7 +591,7 @@ def set_sermon_title_slide(key_path: str, slide_index: int, title: str, ref: str
     box (plus off-canvas {0,0} leftovers). Unlike a worship title slide, the two boxes hold
     DIFFERENT text, so set_slide_text (which sets every box to one string) would duplicate the
     title across both. Boxes are classified by content — the bracketed one (e.g. "[눅 22:14-24]")
-    is the reference — never by index. `ref` includes brackets, e.g. "[히 12:1-2]"; pass "" to
+    is the reference — never by index. `ref` is bare, e.g. "히 12:1-2"; pass "" to
     blank the reference box.
 
     The title box does not word-wrap or autoshrink, so a long title overflows it (#106 follow-up):
@@ -616,14 +616,14 @@ def set_call_to_worship_ref(key_path: str, slide_index: int, ref: str) -> str:
     The 예배의 부름 section has a ref-display slide whose single box holds two paragraphs — a static
     "예배의 부름" heading and the bracketed passage citation — separate from the verse-body slide that
     `fill_verse_slides` fills. `build()` never touched it, so its citation kept last week's reference.
-    This rewrites paragraph 2 to "[ <ref> ]" (matching the deck's spaced brackets), preserving the
+    This rewrites paragraph 2 to the bare "<ref>" (no brackets), preserving the
     heading and paragraph styles. `ref` is the bare reference, e.g. "눅 15:19-23". Returns "ok".
 
     Raises:
         RuntimeError: if `osascript` is missing (not macOS) or the Keynote script fails.
     """
     key = str(Path(key_path).expanduser())
-    return _run_osascript(_SET_CTW_REF, key, str(slide_index), f"[ {ref} ]").strip()
+    return _run_osascript(_SET_CTW_REF, key, str(slide_index), ref).strip()
 
 
 def set_sermon_ref_slide(key_path: str, slide_index: int, ref: str) -> str:
@@ -641,7 +641,7 @@ def set_sermon_ref_slide(key_path: str, slide_index: int, ref: str) -> str:
     """
     key = str(Path(key_path).expanduser())
     return _run_osascript(
-        _SET_SERMON_REF, key, str(slide_index), ref, f"[{english_ref(ref)}]"
+        _SET_SERMON_REF, key, str(slide_index), ref, english_ref(ref)
     ).strip()
 
 
@@ -1187,7 +1187,7 @@ def build(
     # silently editing the wrong slides. Reference positions live in config/slide_map.yaml.
     a = _t("anchor_detect", lambda: detect_anchors(dump_slide_texts(out_key)))
 
-    sermon_bracket = f"[{data.sermon_ref}]" if data.sermon_ref else ""
+    sermon_bracket = data.sermon_ref or ""
     _t("date_slides", set_date_slides, out_key, data.date, data.sermon_title, sermon_bracket)
 
     # 말씀 ad-hoc special block: last week's pastor-requested slides (extra songs, message/poem

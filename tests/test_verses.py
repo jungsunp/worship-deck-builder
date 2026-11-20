@@ -67,5 +67,5 @@ def test_lookup_verses_aligns_kr_and_esv(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_verse_labels_builds_both_languages() -> None:
     kr, en = verse_labels("시 133:1-3")
-    assert kr == "[시 133:1-3, 개역한글]"
-    assert en == "[Psalms 133:1-3, ESV]"
+    assert kr == "시 133:1-3, 개역한글"
+    assert en == "Psalms 133:1-3, ESV"

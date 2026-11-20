@@ -86,11 +86,11 @@ def lookup_verses(reference: str) -> list[Verse]:
 def verse_labels(reference: str) -> tuple[str, str]:
     """Build the (개역한글, ESV) header labels shown on a verse slide.
 
-    e.g. "시 133:1-3" -> ("[시 133:1-3, 개역한글]", "[Psalms 133:1-3, ESV]").
+    e.g. "시 133:1-3" -> ("시 133:1-3, 개역한글", "Psalms 133:1-3, ESV").
     The Korean label keeps the raw reference; the English label uses the ESV book name.
     """
-    kr_label = f"[{reference}, 개역한글]"
-    en_label = f"[{_ref_to_query(parse_ref(reference))}, ESV]"
+    kr_label = f"{reference}, 개역한글"
+    en_label = f"{_ref_to_query(parse_ref(reference))}, ESV"
     return kr_label, en_label
 
 
