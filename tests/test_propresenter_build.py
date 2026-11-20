@@ -482,8 +482,8 @@ def test_verse_plate_carries_both_translations_and_the_citation_labels():
     )
     text = _rtf_text(_slide_of(pres, 1))
 
-    assert rtf.escape("[시 133:1-3, 개역한글]") in text
-    assert "[Psalms 133:1-3, ESV]" in text
+    assert rtf.escape("시 133:1-3, 개역한글") in text
+    assert "Psalms 133:1-3, ESV" in text
     assert rtf.escape("형제가 연합하여 동거함이") in text
     assert "Behold, how good" in text
 
@@ -783,15 +783,13 @@ def test_dividers_spell_the_book_out_while_the_verse_plates_abbreviate(tmp_path)
 
     # The verse plates in between keep the bulletin's abbreviation.
     verses = _rtf_text(_slide_of_cue(sermon[1]))
-    assert rtf.escape("[눅 22:14-24, 개역한글]") in verses
+    assert rtf.escape("눅 22:14-24, 개역한글") in verses
     assert rtf.escape("누가복음") not in verses
 
-    # And the reference plate's English subtitle is bare, like every other divider subtitle —
-    # the brackets belong to the labels that sit inside a body (#178 round 3, extended in #250).
+    # The reference plate's English subtitle and the body labels are all bare (no brackets).
     reference_plate = _rtf_text(_slide_of_cue(sermon[0]))
     assert "Luke 22:14-24, ESV" in reference_plate
-    assert "[Luke 22:14-24, ESV]" not in reference_plate
-    assert "[Luke 22:14-24, ESV]" in verses
+    assert "Luke 22:14-24, ESV" in verses
 
 
 def test_the_opening_section_ends_on_a_green_park(tmp_path):

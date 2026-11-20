@@ -23,7 +23,7 @@ from dataclasses import dataclass
 # Landmark text recurring in every weekly deck. Exact-line matches (the slides carry the
 # heading as its own text box); substring matches only where noted.
 _PRE_WORSHIP = "기도로 예배 준비해"  # substring: pre-service instruction slide right before 찬양
-_CALL_TO_WORSHIP = "예배의 부름"      # + a bracketed ref line, distinguishing it from the banners
+_CALL_TO_WORSHIP = "예배의 부름"      # + a scripture-ref line, distinguishing it from the banners
 _CONFESSION = "고백의 찬양"
 _CREED = "사도신경"                   # first slide after the confession song's lyric block
 _CHOIR = "성가대 찬양"
@@ -31,8 +31,12 @@ _OFFERING = "봉 헌"                   # spaced heading; the hymn-page slides c
 _ANNOUNCE_BANNER = "교회 소식"        # banner slides carry ONLY this line
 _CLOSING = ("파송의 노래", "축도", "주기도문")  # substring: first one after 말씀 ends the ad-hoc block
 
-_VERSE_LABEL_RE = re.compile(r"^\[.+,\s*개역한글\]$")  # KO label box on every verse-body slide
-_BRACKET_RE = re.compile(r"^\[.+\]$")                  # bare bracketed scripture-ref line
+# Brackets are optional: master.key still has "[눅 3:21-23, 개역한글]" but builds write the bare
+# "눅 3:21-23, 개역한글", and an operator may re-save a build as the next template.
+_VERSE_LABEL_RE = re.compile(r"^\[?.+,\s*개역한글\]?$")  # KO label box on every verse-body slide
+_REF_RE = re.compile(  # scripture-ref line, bracketed or bare: "[눅 22:14-24]", "삼상 5:1-12", "1 Samuel 5:1"
+    r"^\[.+\]$|^(?:\d\s?)?[가-힣A-Za-z]+(?:\s[가-힣A-Za-z]+)*\s*\d+:\d+(?:\s*[-–~,]\s*\d+(?::\d+)?)*$"
+)
 _NUMBERED_RE = re.compile(r"^\d+\.")                   # announcement items: "1. <title>"
 
 
@@ -108,7 +112,7 @@ def detect_anchors(slide_texts: list[list[str]]) -> TemplateAnchors:
         [
             i
             for i, lines in enumerate(slide_texts, 1)
-            if _CALL_TO_WORSHIP in lines and any(ln.startswith("[") for ln in lines)
+            if _CALL_TO_WORSHIP in lines and any(_REF_RE.match(ln) for ln in lines)
         ],
     )
     worship_len = call_ref - worship_start
@@ -159,7 +163,7 @@ def detect_anchors(slide_texts: list[list[str]]) -> TemplateAnchors:
             i
             for i, lines in enumerate(slide_texts, 1)
             if announcements_start + announcements_count <= i < sermon_verse_start
-            and any(_BRACKET_RE.match(ln) for ln in lines)
+            and any(_REF_RE.match(ln) for ln in lines)
         ],
     )
 
@@ -170,12 +174,12 @@ def detect_anchors(slide_texts: list[list[str]]) -> TemplateAnchors:
             for i, lines in enumerate(slide_texts, 1)
             if i > verse_end
             and not _is_verse_slide(lines)
-            and any(_BRACKET_RE.match(ln) for ln in lines)
+            and any(_REF_RE.match(ln) for ln in lines)
         ),
         0,
     )
     if not sermon_title:
-        raise _fail("말씀 (title slide)", f"no bracketed-ref title slide after slide {verse_end}")
+        raise _fail("말씀 (title slide)", f"no scripture-ref title slide after slide {verse_end}")
 
     closing = next(
         (

@@ -95,3 +95,20 @@ def test_ambiguous_landmark_fails_loud(slide_texts: list[list[str]]) -> None:
 
     with pytest.raises(RuntimeError, match="봉헌"):
         detect_anchors(dup)
+
+
+def _unbracket(line: str) -> str:
+    """"[ 눅 3:21-22 ]" -> "눅 3:21-22" for scripture lines only; titles like "[ 다른 찬양 ]" stay."""
+    import re
+
+    m = re.fullmatch(r"\[\s*([^\[\]]*\d+:\d+[^\[\]]*?)\s*\]", line)
+    return m.group(1) if m else line
+
+
+def test_bare_refs_detect_identically(slide_texts: list[list[str]]) -> None:
+    """Builds write refs with no brackets; a re-saved build used as the template must still
+    detect to the same anchors as the bracketed master."""
+    bare = [[_unbracket(ln) for ln in lines] for lines in slide_texts]
+
+    assert bare != slide_texts  # the conversion actually changed something
+    assert detect_anchors(bare) == EXPECTED
